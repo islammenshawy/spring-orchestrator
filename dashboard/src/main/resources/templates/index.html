@@ -1082,6 +1082,105 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Kafka Rebalancing Deep Dive -->
+            <div style="margin-top:20px">
+                <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Kafka Rebalancing: Multi-Container Deployment</div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+                    <div style="padding:14px;background:var(--surface2);border-radius:8px;border-left:3px solid var(--danger)">
+                        <div style="font-size:12px;font-weight:600;color:var(--danger);margin-bottom:8px">Default RangeAssignor (stop-the-world)</div>
+                        <div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8">
+                            <div>Container C joins group</div>
+                            <div style="color:var(--danger);font-weight:700">&darr; ALL consumers STOP &darr;</div>
+                            <div>A: [P0,P1,P2] &rarr; <span style="color:var(--danger)">[] revoke ALL</span></div>
+                            <div>B: [P3,P4,P5] &rarr; <span style="color:var(--danger)">[] revoke ALL</span></div>
+                            <div style="color:var(--text-dim)">&darr; wait ~30s &darr;</div>
+                            <div>Reassign: A:[P0,P1] B:[P3,P4] C:[P2,P5]</div>
+                        </div>
+                        <div style="font-size:10px;color:var(--danger);margin-top:6px">30s of ZERO processing. P0,P1,P3,P4 didn't need to move but were revoked.</div>
+                    </div>
+
+                    <div style="padding:14px;background:var(--surface2);border-radius:8px;border-left:3px solid var(--success)">
+                        <div style="font-size:12px;font-weight:600;color:var(--success);margin-bottom:8px">CooperativeStickyAssignor (incremental) &#10003;</div>
+                        <div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8">
+                            <div>Container C joins group</div>
+                            <div style="color:var(--success)">&darr; only move what needs to move &darr;</div>
+                            <div>A: [P0,P1,<span style="color:var(--warning)">P2</span>] &rarr; revoke P2 &rarr; <span style="color:var(--success)">[P0,P1] keep running!</span></div>
+                            <div>B: [P3,P4,<span style="color:var(--warning)">P5</span>] &rarr; revoke P5 &rarr; <span style="color:var(--success)">[P3,P4] keep running!</span></div>
+                            <div>C: gets [P2,P5]</div>
+                        </div>
+                        <div style="font-size:10px;color:var(--success);margin-top:6px">Only P2,P5 paused briefly. P0,P1,P3,P4 never stopped.</div>
+                    </div>
+                </div>
+
+                <!-- Crash + recovery via outbox -->
+                <div style="padding:14px;background:var(--surface2);border-radius:8px;margin-bottom:16px">
+                    <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px">Container Crash During Flow: Outbox as Primary Recovery</div>
+                    <div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:2">
+                        <div>Pod A: step UPLOAD_ATTACHMENT for flow-123</div>
+                        <div>&nbsp;&nbsp;1. API call &rarr; attachmentId saved to MongoDB <span style="color:var(--success)">&#10003;</span></div>
+                        <div>&nbsp;&nbsp;2. Outbox event written (same DB) <span style="color:var(--success)">&#10003;</span></div>
+                        <div style="color:var(--danger);font-weight:700">&nbsp;&nbsp;&nbsp;&nbsp;&larr; POD CRASHES &rarr;</div>
+                        <div>&nbsp;&nbsp;3. Kafka offset not committed <span style="color:var(--danger)">&#10007;</span></div>
+                        <div></div>
+                        <div style="color:var(--success)">Recovery path 1 &mdash; Outbox (fast, ~500ms):</div>
+                        <div>&nbsp;&nbsp;OutboxPublisher on any pod &rarr; polls &rarr; sends to Kafka &rarr; next step runs</div>
+                        <div></div>
+                        <div style="color:var(--info)">Recovery path 2 &mdash; Kafka redelivery (30s):</div>
+                        <div>&nbsp;&nbsp;Rebalance &rarr; Pod B gets partition &rarr; message redelivered</div>
+                        <div>&nbsp;&nbsp;Handler: attachmentId set &rarr; <span style="color:var(--success)">skip API</span> &rarr; advance to next step</div>
+                    </div>
+                    <div style="font-size:10px;color:var(--text-dim);margin-top:8px">Outbox is primary (~500ms). Kafka redelivery is the redundant safety net (~30s). Either alone recovers the flow. Together: bulletproof.</div>
+                </div>
+
+                <!-- Step-level guarantees -->
+                <div style="padding:14px;background:var(--surface2);border-radius:8px;margin-bottom:16px">
+                    <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:8px">Step-Level Guarantee: "If It Passed, It Never Triggers Again"</div>
+                    <div style="font-size:11px;color:var(--text-dim);margin-bottom:10px">
+                        Each step handler implements <code>isAlreadyCompleted(flow)</code> which checks if the vendor API result is already stored in MongoDB.
+                        Even if Kafka redelivers the message 10 times, the API is called <strong>at most once</strong>.
+                    </div>
+                    <div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8">
+                        <div><span style="color:var(--success)">Retryable step</span> (e.g., vendor returns 500):</div>
+                        <div>&nbsp;&nbsp;Attempt 1: API call &rarr; 500 &rarr; throw RetryableStepException</div>
+                        <div>&nbsp;&nbsp;&rarr; Kafka retry-0 (2s) &rarr; retry-1 (4s) &rarr; retry-2 (8s) &rarr; DLT</div>
+                        <div>&nbsp;&nbsp;isAlreadyCompleted() = false on each retry (no result yet)</div>
+                        <div></div>
+                        <div><span style="color:var(--info)">Succeeded step</span> (redelivered after crash/rebalance):</div>
+                        <div>&nbsp;&nbsp;Attempt 1: API call &rarr; success &rarr; result saved to MongoDB</div>
+                        <div>&nbsp;&nbsp;&larr; crash/rebalance &rarr;</div>
+                        <div>&nbsp;&nbsp;Redelivery: isAlreadyCompleted() = <span style="color:var(--success)">true</span> &rarr; <strong>skip API call entirely</strong></div>
+                        <div>&nbsp;&nbsp;Advance to next step &rarr; no duplicate work</div>
+                        <div></div>
+                        <div><span style="color:var(--danger)">Non-retryable step</span> (e.g., validation failed):</div>
+                        <div>&nbsp;&nbsp;Attempt 1: throw NonRetryableStepException</div>
+                        <div>&nbsp;&nbsp;&rarr; flow.status = FAILED immediately &rarr; no retries, no DLT</div>
+                    </div>
+                </div>
+
+                <!-- Guarantees table -->
+                <table class="flow-table" style="margin-bottom:16px">
+                    <thead><tr><th>Guarantee</th><th>Status</th><th>Mechanism</th></tr></thead>
+                    <tbody>
+                        <tr><td class="text-sm">Completed step never re-executes API</td><td class="text-sm" style="color:var(--success)">&#10003; Guaranteed</td><td class="text-sm text-dim">isAlreadyCompleted() checks result fields in MongoDB</td></tr>
+                        <tr><td class="text-sm">No lost messages</td><td class="text-sm" style="color:var(--success)">&#10003; Guaranteed</td><td class="text-sm text-dim">Kafka redelivers uncommitted offsets</td></tr>
+                        <tr><td class="text-sm">No stuck flows</td><td class="text-sm" style="color:var(--success)">&#10003; Guaranteed</td><td class="text-sm text-dim">Outbox (primary) + recovery service + Kafka redelivery</td></tr>
+                        <tr><td class="text-sm">Flow step ordering</td><td class="text-sm" style="color:var(--success)">&#10003; Guaranteed</td><td class="text-sm text-dim">flowId as Kafka key &rarr; same partition</td></tr>
+                        <tr><td class="text-sm">Retryable vs non-retryable separation</td><td class="text-sm" style="color:var(--success)">&#10003; Guaranteed</td><td class="text-sm text-dim">RetryableStepException &rarr; retry topics. NonRetryableStepException &rarr; FAILED immediately.</td></tr>
+                        <tr><td class="text-sm">Minimal processing pause on rebalance</td><td class="text-sm" style="color:var(--success)">&#10003; Yes</td><td class="text-sm text-dim">CooperativeStickyAssignor: only moving partitions pause</td></tr>
+                        <tr><td class="text-sm">Instant crash detection</td><td class="text-sm" style="color:var(--warning)">~30s</td><td class="text-sm text-dim">session.timeout.ms. But outbox recovers in ~500ms.</td></tr>
+                        <tr><td class="text-sm">Zero rebalances on deploy</td><td class="text-sm" style="color:var(--warning)">StatefulSet only</td><td class="text-sm text-dim">group.instance.id + HOSTNAME. Regular Deployments: brief rebalances (safe, not zero).</td></tr>
+                    </tbody>
+                </table>
+
+                <!-- Config -->
+                <div style="padding:10px 14px;background:rgba(99,102,241,0.05);border:1px solid rgba(99,102,241,0.2);border-radius:6px;font-size:11px;color:var(--text-dim)">
+                    <strong style="color:var(--primary)">All rebalancing config is standard Spring Boot YAML</strong> &mdash; no custom library code.
+                    <code>partition.assignment.strategy</code>, <code>session.timeout.ms</code>, <code>listener.concurrency</code>, <code>ack-mode</code>, <code>group.instance.id</code>, <code>client.rack</code>
+                    &mdash; the library only provides step orchestration, outbox, idempotency, and jittered retry.
+                </div>
+            </div>
         </div>
 
     <!-- Detail Modal -->
