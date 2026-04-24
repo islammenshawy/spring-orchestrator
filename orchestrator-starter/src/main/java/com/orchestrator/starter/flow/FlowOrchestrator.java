@@ -78,6 +78,23 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         } catch (NonRetryableStepException e) {
             handlePermanentFailure(flow, e);
             return;
+        } catch (Exception e) {
+            // Annotation-driven error handling: @RetryOn, @RecoverOn, @FailOn
+            // StepErrorHandler reads annotations from the handler class and
+            // either returns (recovered = treat as success) or throws
+            // RetryableStepException / NonRetryableStepException
+            try {
+                StepErrorHandler.handleError(handler, e);
+                // Returned without throwing = recovered (e.g., HTTP 409 "already created")
+                log.info("[Orchestrator] Step {} recovered for flow {} ({})",
+                        stepName, flowId, e.getMessage());
+            } catch (RetryableStepException re) {
+                handleRetryableFailure(flow, re);
+                throw re;
+            } catch (NonRetryableStepException nre) {
+                handlePermanentFailure(flow, nre);
+                return;
+            }
         }
 
         // Step succeeded — persist result and write outbox event for next step

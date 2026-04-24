@@ -1,6 +1,7 @@
 package com.example.enigio.step;
 
 import com.example.enigio.flow.EnigioFlow;
+import com.orchestrator.starter.annotation.*;
 import com.orchestrator.starter.exception.RetryableStepException;
 import com.orchestrator.starter.flow.StepHandler;
 import lombok.extern.slf4j.Slf4j;
@@ -12,6 +13,9 @@ import java.util.Map;
 
 @Slf4j
 @Component
+@Step(name = "VERIFY_SIGNATURE", order = 4)
+@RetryOn(httpStatus = {500, 502, 503})
+@FailOn(httpStatus = {400, 403})
 public class VerifySignatureStep implements StepHandler<EnigioFlow> {
 
     private final WebClient client;
@@ -20,12 +24,9 @@ public class VerifySignatureStep implements StepHandler<EnigioFlow> {
         this.client = WebClient.create(baseUrl);
     }
 
-    @Override public String getStepName() { return "VERIFY_SIGNATURE"; }
-    @Override public int getOrder() { return 4; }
-
     @Override
     public boolean isAlreadyCompleted(EnigioFlow flow) {
-        return false; // Always check — verification is stateless
+        return false; // Always poll — verification is stateless
     }
 
     @Override
@@ -36,6 +37,7 @@ public class VerifySignatureStep implements StepHandler<EnigioFlow> {
                         flow.getEnigioDocumentId(), flow.getSignatureRequestId())
                 .retrieve().bodyToMono(Map.class).block();
         if (!Boolean.TRUE.equals(response.get("verified"))) {
+            // Manual throw — not an HTTP error, just "not ready yet"
             throw new RetryableStepException("Signature not yet verified");
         }
     }

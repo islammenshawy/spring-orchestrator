@@ -1,18 +1,21 @@
 package com.example.enigio.step;
 
 import com.example.enigio.flow.EnigioFlow;
-import com.orchestrator.starter.exception.RetryableStepException;
+import com.orchestrator.starter.annotation.*;
 import com.orchestrator.starter.flow.StepHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.Map;
 
 @Slf4j
 @Component
+@Step(name = "FINALIZE_DOCUMENT", order = 5)
+@RetryOn(httpStatus = {500, 502, 503, 429})
+@RecoverOn(httpStatus = 409, message = "already finalized", action = RecoverAction.SKIP)
+@FailOn(httpStatus = {400, 403})
 public class FinalizeDocumentStep implements StepHandler<EnigioFlow> {
 
     private final WebClient client;
@@ -20,9 +23,6 @@ public class FinalizeDocumentStep implements StepHandler<EnigioFlow> {
     public FinalizeDocumentStep(@Value("${vendor.base-url}") String baseUrl) {
         this.client = WebClient.create(baseUrl);
     }
-
-    @Override public String getStepName() { return "FINALIZE_DOCUMENT"; }
-    @Override public int getOrder() { return 5; }
 
     @Override
     public boolean isAlreadyCompleted(EnigioFlow flow) {
@@ -32,13 +32,9 @@ public class FinalizeDocumentStep implements StepHandler<EnigioFlow> {
     @Override
     public void execute(EnigioFlow flow) {
         log.info("Finalizing document for flow {}", flow.getId());
-        try {
-            Map response = client.post().uri("/documents/{id}/finalize", flow.getEnigioDocumentId())
-                    .retrieve().bodyToMono(Map.class).block();
-            flow.setFinalDocumentUrl((String) response.get("finalDocumentUrl"));
-            flow.setTraceHash((String) response.get("traceHash"));
-        } catch (WebClientResponseException e) {
-            throw new RetryableStepException("Vendor error: " + e.getStatusCode(), e);
-        }
+        Map response = client.post().uri("/documents/{id}/finalize", flow.getEnigioDocumentId())
+                .retrieve().bodyToMono(Map.class).block();
+        flow.setFinalDocumentUrl((String) response.get("finalDocumentUrl"));
+        flow.setTraceHash((String) response.get("traceHash"));
     }
 }

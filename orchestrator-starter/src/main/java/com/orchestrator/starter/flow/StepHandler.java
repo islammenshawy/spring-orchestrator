@@ -1,60 +1,80 @@
 package com.orchestrator.starter.flow;
 
+import com.orchestrator.starter.annotation.Step;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 
 /**
  * Interface for a single step in a workflow.
- * Implement one per step. The orchestrator calls them in order.
  *
- * Usage:
+ * Two ways to define step metadata:
+ *
+ * Option 1: Override getStepName() and getOrder()
  * <pre>
  * @Component
  * public class CreateDocumentStep implements StepHandler&lt;MyFlow&gt; {
- *
  *     public String getStepName() { return "CREATE_DOCUMENT"; }
  *     public int getOrder() { return 1; }
+ *     ...
+ * }
+ * </pre>
+ *
+ * Option 2: Use @Step annotation (less boilerplate)
+ * <pre>
+ * @Component
+ * @Step(name = "CREATE_DOCUMENT", order = 1)
+ * @RetryOn(httpStatus = {500, 502, 503, 429})
+ * @RecoverOn(httpStatus = 409, action = RecoverAction.SKIP)
+ * @FailOn(httpStatus = {400, 403})
+ * public class CreateDocumentStep implements StepHandler&lt;MyFlow&gt; {
+ *     // no getStepName/getOrder needed — read from annotation
  *
  *     public boolean isAlreadyCompleted(MyFlow flow) {
  *         return flow.getDocumentId() != null;
  *     }
  *
  *     public void execute(MyFlow flow) {
- *         var response = vendorClient.createDocument(...);
- *         flow.setDocumentId(response.getId());
+ *         // no try/catch needed — @RetryOn/@RecoverOn/@FailOn handle it
+ *         var result = vendorClient.createDocument(...);
+ *         flow.setDocumentId(result.getId());
  *     }
  * }
  * </pre>
- *
- * @param <F> the flow entity type (must extend OrchestratorFlow)
  */
 public interface StepHandler<F extends OrchestratorFlow> {
 
     /**
-     * Unique name for this step (e.g., "CREATE_DOCUMENT").
+     * Step name. Default reads from @Step annotation if present.
      */
-    String getStepName();
+    default String getStepName() {
+        Step step = this.getClass().getAnnotation(Step.class);
+        if (step != null) return step.name();
+        throw new IllegalStateException(
+                this.getClass().getSimpleName() + ": override getStepName() or use @Step annotation");
+    }
 
     /**
-     * Execution order. Steps run in ascending order (1, 2, 3, ...).
+     * Execution order. Default reads from @Step annotation if present.
      */
-    int getOrder();
+    default int getOrder() {
+        Step step = this.getClass().getAnnotation(Step.class);
+        if (step != null) return step.order();
+        throw new IllegalStateException(
+                this.getClass().getSimpleName() + ": override getOrder() or use @Step annotation");
+    }
 
     /**
-     * Idempotency guard — return true if this step's result is already
-     * persisted on the flow (e.g., documentId is already set).
-     * If true, execute() will not be called on redelivery.
+     * Idempotency guard — return true if this step already completed
+     * (result field already set on flow). Prevents duplicate API calls.
      */
     boolean isAlreadyCompleted(F flow);
 
     /**
-     * Execute the step. Modify the flow object with results.
-     * The orchestrator persists the flow after this returns.
+     * Execute the step. Set results on the flow object.
      *
-     * @throws com.orchestrator.starter.exception.RetryableStepException
-     *         for transient failures (vendor 500, timeout) — will be retried
-     *         via Kafka retry topics with exponential backoff + jitter
-     * @throws com.orchestrator.starter.exception.NonRetryableStepException
-     *         for permanent failures — flow marked FAILED immediately
+     * Error handling options (choose one):
+     * 1. Annotations: @RetryOn, @RecoverOn, @FailOn on the class — no try/catch needed
+     * 2. Manual: throw RetryableStepException or NonRetryableStepException
+     * 3. Default: any unhandled exception is treated as retryable
      */
     void execute(F flow);
 }
