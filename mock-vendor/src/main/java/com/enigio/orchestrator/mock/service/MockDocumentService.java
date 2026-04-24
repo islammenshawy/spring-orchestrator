@@ -106,10 +106,20 @@ public class MockDocumentService {
                     Thread.currentThread().interrupt();
                 }
             }
-            case HTTP_500 -> throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
-                    "Simulated 500 error for " + endpoint);
+            case HTTP_400 -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Simulated 400 bad request for " + endpoint);
+            case HTTP_403 -> throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Simulated 403 forbidden for " + endpoint);
+            case HTTP_409 -> throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Resource already exists for " + endpoint);
             case HTTP_429 -> throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
                     "Simulated 429 rate limit for " + endpoint);
+            case HTTP_500 -> throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Simulated 500 error for " + endpoint);
+            case HTTP_502 -> throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "Simulated 502 bad gateway for " + endpoint);
+            case HTTP_503 -> throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Simulated 503 unavailable for " + endpoint);
             case FLAKY -> {
                 if (ThreadLocalRandom.current().nextBoolean()) {
                     throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
