@@ -8,27 +8,38 @@ spring:
     mongodb:
       uri: mongodb://localhost:27017/enigio_orchestrator
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: localhost:9092,localhost:9093,localhost:9094
     consumer:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       properties:
         partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+        session.timeout.ms: 30000
+        heartbeat.interval.ms: 10000
+        max.poll.interval.ms: 300000
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
       properties:
         enable.idempotence: true
 
-# Vendor API
 vendor:
   base-url: http://localhost:8081/api/v1
 
-# Orchestrator starter config — this is all you need
 orchestrator:
   kafka:
     command-topic: enigio.sample.commands
+    partition-count: 6              # 6 partitions for command topic
+    retry-partition-count: 3        # fewer for retry/DLT
+    replication-factor: 1           # 1 for local dev (set 3 for prod with 3 brokers)
+    min-insync-replicas: 1          # 1 for local dev (set 2 for prod)
+    create-topics: true             # starter creates topics at startup
+    concurrency: 3                  # consumer threads per instance
+    static-membership: false        # set true for Kubernetes StatefulSet
+    # instance-id-prefix: "enigio-" # prefix + HOSTNAME = group.instance.id
+    # client-rack: "us-east-1a"     # set to AZ for read-from-closest-replica
   retry:
     max-attempts: 4
     initial-interval-ms: 2000
