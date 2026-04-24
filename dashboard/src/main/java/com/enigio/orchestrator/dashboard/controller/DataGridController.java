@@ -1,0 +1,156 @@
+package com.enigio.orchestrator.dashboard.controller;
+
+import lombok.RequiredArgsConstructor;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.admin.ListTopicsResult;
+import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.bson.Document;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.time.Duration;
+import java.util.*;
+import java.util.stream.Collectors;
+
+@RestController
+@RequestMapping("/api/data")
+@RequiredArgsConstructor
+public class DataGridController {
+
+    private final MongoTemplate mongoTemplate;
+
+    @Value("${spring.kafka.bootstrap-servers:localhost:9092}")
+    private String bootstrapServers;
+
+    // ========== MongoDB ==========
+
+    @GetMapping("/mongo/collections")
+    public ResponseEntity<List<String>> getCollections() {
+        Set<String> names = mongoTemplate.getCollectionNames();
+        return ResponseEntity.ok(names.stream().sorted().collect(Collectors.toList()));
+    }
+
+    @GetMapping("/mongo/collections/{name}")
+    public ResponseEntity<Map<String, Object>> getCollectionData(
+            @PathVariable String name,
+            @RequestParam(defaultValue = "0") int skip,
+            @RequestParam(defaultValue = "50") int limit) {
+
+        List<Document> docs = mongoTemplate.getCollection(name)
+                .find()
+                .sort(new Document("_id", -1))
+                .skip(skip)
+                .limit(limit)
+                .into(new ArrayList<>());
+
+        long count = mongoTemplate.getCollection(name).countDocuments();
+
+        return ResponseEntity.ok(Map.of(
+                "collection", name,
+                "total", count,
+                "skip", skip,
+                "limit", limit,
+                "documents", docs
+        ));
+    }
+
+    @GetMapping("/mongo/collections/{name}/count")
+    public ResponseEntity<Map<String, Object>> getCollectionCount(@PathVariable String name) {
+        long count = mongoTemplate.getCollection(name).countDocuments();
+        return ResponseEntity.ok(Map.of("collection", name, "count", count));
+    }
+
+    // ========== Kafka ==========
+
+    @GetMapping("/kafka/topics")
+    public ResponseEntity<List<Map<String, Object>>> getKafkaTopics() {
+        Properties props = new Properties();
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, 5000);
+
+        try (AdminClient admin = AdminClient.create(props)) {
+            ListTopicsResult topics = admin.listTopics();
+            Set<String> topicNames = topics.names().get();
+
+            Map<String, TopicDescription> descriptions = admin.describeTopics(topicNames).all().get();
+
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (Map.Entry<String, TopicDescription> entry : descriptions.entrySet()) {
+                TopicDescription desc = entry.getValue();
+                result.add(Map.of(
+                        "name", entry.getKey(),
+                        "partitions", desc.partitions().size(),
+                        "internal", desc.isInternal()
+                ));
+            }
+            result.sort(Comparator.comparing(m -> (String) m.get("name")));
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            return ResponseEntity.ok(List.of(Map.of("error", e.getMessage())));
+        }
+    }
+
+    @GetMapping("/kafka/topics/{name}/messages")
+    public ResponseEntity<Map<String, Object>> getTopicMessages(
+            @PathVariable String name,
+            @RequestParam(defaultValue = "20") int limit) {
+
+        Properties props = new Properties();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, "dashboard-reader-" + UUID.randomUUID());
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+
+        List<Map<String, Object>> messages = new ArrayList<>();
+
+        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props)) {
+            List<TopicPartition> partitions = consumer.partitionsFor(name).stream()
+                    .map(pi -> new TopicPartition(name, pi.partition()))
+                    .collect(Collectors.toList());
+
+            consumer.assign(partitions);
+
+            // Seek to end and then back by limit
+            consumer.seekToEnd(partitions);
+            for (TopicPartition tp : partitions) {
+                long endOffset = consumer.position(tp);
+                long startOffset = Math.max(0, endOffset - limit);
+                consumer.seek(tp, startOffset);
+            }
+
+            ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(3));
+            for (ConsumerRecord<String, String> record : records) {
+                messages.add(Map.of(
+                        "partition", record.partition(),
+                        "offset", record.offset(),
+                        "key", record.key() != null ? record.key() : "",
+                        "value", record.value() != null ? record.value() : "",
+                        "timestamp", record.timestamp()
+                ));
+            }
+        } catch (Exception e) {
+            return ResponseEntity.ok(Map.of("topic", name, "error", e.getMessage(), "messages", List.of()));
+        }
+
+        // Sort by offset descending (newest first)
+        messages.sort((a, b) -> Long.compare((long) b.get("offset"), (long) a.get("offset")));
+
+        return ResponseEntity.ok(Map.of(
+                "topic", name,
+                "count", messages.size(),
+                "messages", messages
+        ));
+    }
+}

@@ -1,0 +1,40 @@
+server:
+  port: 8085
+
+spring:
+  application:
+    name: enigio-sample
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/enigio_orchestrator
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+
+# Vendor API
+vendor:
+  base-url: http://localhost:8081/api/v1
+
+# Orchestrator starter config — this is all you need
+orchestrator:
+  kafka:
+    command-topic: enigio.sample.commands
+  retry:
+    max-attempts: 4
+    initial-interval-ms: 2000
+    multiplier: 2.0
+    max-interval-ms: 30000
+    jitter-factor: 0.5
+  recovery:
+    scan-interval-ms: 30000
+    stale-threshold-minutes: 5

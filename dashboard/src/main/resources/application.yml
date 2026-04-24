@@ -1,0 +1,17 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: dashboard
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/enigio_orchestrator
+  thymeleaf:
+    cache: false
+  kafka:
+    bootstrap-servers: localhost:9092
+
+enigio:
+  client:
+    base-url: http://localhost:8081/api/v1

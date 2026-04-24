@@ -1,0 +1,69 @@
+server:
+  port: 8082
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,env
+  endpoint:
+    health:
+      show-details: always
+
+spring:
+  application:
+    name: saga-outbox
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/enigio_orchestrator
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: saga-orchestrator
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        # CooperativeStickyAssignor: incremental rebalancing — only revokes
+        # partitions that need to move, so other partitions keep processing.
+        # Critical for multi-instance deployments and rolling restarts.
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+        # Session/heartbeat tuning for container environments
+        session.timeout.ms: 30000
+        heartbeat.interval.ms: 10000
+        max.poll.interval.ms: 300000
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        # Idempotent producer — prevents duplicates on broker-side retries
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+    listener:
+      # Manual ack — commit only after successful processing
+      ack-mode: RECORD
+      concurrency: 3
+
+enigio:
+  client:
+    base-url: http://localhost:8081/api/v1
+    max-retries: 3
+
+outbox:
+  polling-interval-ms: 500
+
+# Kafka retry topic configuration (exponential backoff)
+# Topics created: <topic>-retry-0, -retry-1, ..., -retry-(maxAttempts-2), <topic>-dlt
+kafka:
+  retry:
+    max-attempts: 4                # 1 initial + 3 retries
+    initial-interval-ms: 2000      # first retry after 2s
+    multiplier: 2.0                # exponential: 2s -> 4s -> 8s -> ...
+    max-interval-ms: 30000         # cap backoff at 30s
+    jitter-factor: 0.5            # 0.0=none, 0.5=equal jitter, 1.0=full jitter
+
+recovery:
+  scan-interval-ms: 30000
+  stale-threshold-minutes: 5
+  kafka-topic: enigio.saga.steps

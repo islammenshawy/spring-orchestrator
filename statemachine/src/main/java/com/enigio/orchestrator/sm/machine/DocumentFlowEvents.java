@@ -1,0 +1,17 @@
+package com.enigio.orchestrator.sm.machine;
+
+public enum DocumentFlowEvents {
+    START,
+    DOCUMENT_CREATE_SUCCESS,
+    DOCUMENT_CREATE_FAIL,
+    UPLOAD_SUCCESS,
+    UPLOAD_FAIL,
+    SIGN_REQUEST_SUCCESS,
+    SIGN_REQUEST_FAIL,
+    VERIFY_SUCCESS,
+    VERIFY_PENDING,
+    VERIFY_FAIL,
+    FINALIZE_SUCCESS,
+    FINALIZE_FAIL,
+    RETRY
+}

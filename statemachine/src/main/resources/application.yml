@@ -1,0 +1,56 @@
+server:
+  port: 8083
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,env
+  endpoint:
+    health:
+      show-details: always
+
+spring:
+  application:
+    name: statemachine
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/enigio_orchestrator
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: statemachine-processor
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+        session.timeout.ms: 30000
+        heartbeat.interval.ms: 10000
+        max.poll.interval.ms: 300000
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+    listener:
+      ack-mode: RECORD
+      concurrency: 3
+
+enigio:
+  client:
+    base-url: http://localhost:8081/api/v1
+    max-retries: 3
+
+kafka:
+  retry:
+    max-attempts: 4
+    initial-interval-ms: 2000
+    multiplier: 2.0
+    max-interval-ms: 30000
+    jitter-factor: 0.5
+
+recovery:
+  scan-interval-ms: 30000
+  stale-threshold-minutes: 5
+  kafka-topic: enigio.sm.events

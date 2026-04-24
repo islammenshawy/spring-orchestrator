@@ -1,0 +1,15 @@
+spring:
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/enigio_orchestrator
+
+enigio:
+  client:
+    base-url: http://localhost:8081/api/v1
+    connect-timeout: 5000
+    read-timeout: 10000
+    max-retries: 3
+
+recovery:
+  scan-interval-ms: 30000
+  stale-threshold-minutes: 5

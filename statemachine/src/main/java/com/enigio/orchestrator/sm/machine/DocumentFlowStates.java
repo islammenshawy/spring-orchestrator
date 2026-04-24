@@ -1,0 +1,16 @@
+package com.enigio.orchestrator.sm.machine;
+
+public enum DocumentFlowStates {
+    INITIAL,
+    CREATING_DOCUMENT,
+    DOCUMENT_CREATED,
+    UPLOADING_ATTACHMENT,
+    ATTACHMENT_UPLOADED,
+    REQUESTING_SIGNATURE,
+    SIGNATURE_REQUESTED,
+    VERIFYING_SIGNATURE,
+    SIGNATURE_VERIFIED,
+    FINALIZING,
+    COMPLETED,
+    FAILED
+}
