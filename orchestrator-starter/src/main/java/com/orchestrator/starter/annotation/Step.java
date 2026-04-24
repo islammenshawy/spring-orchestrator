@@ -6,25 +6,48 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a class as a step handler. Alternative to implementing StepHandler interface.
- * The library discovers annotated classes at startup and registers them in the step registry.
+ * Marks a method as a step in a flow. Methods are discovered in the
+ * enclosing @Flow class and executed in order.
+ *
+ * Can also be used at class level for the multi-class approach
+ * (one StepHandler class per step).
  *
  * Usage:
  * <pre>
- * @Component
- * @Step(name = "CREATE_DOCUMENT", order = 1)
- * @RetryOn(httpStatus = {500, 502, 503, 429})
+ * @Step(order = 1, completedWhen = "documentId != null")
  * @RecoverOn(httpStatus = 409, action = RecoverAction.SKIP)
- * public class CreateDocumentStep implements StepHandler&lt;MyFlow&gt; { ... }
+ * public void createDocument(MyFlow flow) {
+ *     var res = vendorClient.createDocument(...);
+ *     flow.setDocumentId(res.getId());
+ * }
+ *
+ * @Step(order = 2, type = StepType.DB_WRITE)
+ * public void saveAuditRecord(MyFlow flow) {
+ *     auditRepo.save(new AuditRecord(flow));
+ * }
  * </pre>
  */
-@Target(ElementType.TYPE)
+@Target({ElementType.METHOD, ElementType.TYPE})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Step {
 
-    /** Step name (e.g., "CREATE_DOCUMENT") */
-    String name();
+    /** Step name. Defaults to method name in UPPER_SNAKE_CASE if not set. */
+    String name() default "";
 
     /** Execution order. Steps run in ascending order. */
     int order();
+
+    /**
+     * SpEL expression evaluated against the flow object.
+     * If true, the step is already completed — skip execution.
+     * Empty = always execute (e.g., for stateless checks like signature verification).
+     *
+     * Examples:
+     *   "documentId != null"
+     *   "status == 'VERIFIED'"
+     */
+    String completedWhen() default "";
+
+    /** Step type — determines what protection the library applies. */
+    StepType type() default StepType.API_CALL;
 }

@@ -16,7 +16,7 @@ import java.lang.annotation.*;
  * @RecoverOn(httpStatus = 422, message = "already signed", action = RecoverAction.SKIP)
  * </pre>
  */
-@Target(ElementType.TYPE)
+@Target({ElementType.TYPE, ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 @Repeatable(RecoverOn.List.class)
 public @interface RecoverOn {
@@ -30,7 +30,7 @@ public @interface RecoverOn {
     /** What to do on recovery */
     RecoverAction action() default RecoverAction.SKIP;
 
-    @Target(ElementType.TYPE)
+    @Target({ElementType.TYPE, ElementType.METHOD})
     @Retention(RetentionPolicy.RUNTIME)
     @interface List {
         RecoverOn[] value();

@@ -18,7 +18,7 @@ import java.lang.annotation.Target;
  * @RetryOn(exceptions = {TimeoutException.class, ConnectException.class})
  * </pre>
  */
-@Target(ElementType.TYPE)
+@Target({ElementType.TYPE, ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface RetryOn {
 

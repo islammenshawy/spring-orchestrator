@@ -1,125 +1,113 @@
 package com.orchestrator.starter.flow;
 
 import com.orchestrator.starter.annotation.FailOn;
-import com.orchestrator.starter.annotation.RecoverAction;
 import com.orchestrator.starter.annotation.RecoverOn;
 import com.orchestrator.starter.annotation.RetryOn;
 import com.orchestrator.starter.exception.NonRetryableStepException;
 import com.orchestrator.starter.exception.RetryableStepException;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.Arrays;
-import java.util.Set;
-import java.util.stream.Collectors;
-
 /**
- * Reads @RetryOn, @RecoverOn, @FailOn annotations from a StepHandler class
- * and maps exceptions to the correct behavior (retry, recover, fail).
+ * Reads @RetryOn, @RecoverOn, @FailOn annotations from a step handler
+ * and maps exceptions to the correct behavior.
  *
- * Called by FlowOrchestrator after a step throws. The user's execute() method
- * doesn't need any try/catch — the annotations declare the error handling.
+ * For MethodStepAdapter: reads from method first, falls back to class level.
+ * For standalone StepHandler: reads from the class directly.
  *
  * Resolution order:
- * 1. RecoverOn — if the error matches, treat as success (skip)
- * 2. FailOn — if the error matches, fail immediately (no retries)
- * 3. RetryOn — if the error matches, route to Kafka retry topics
- * 4. Default — if no annotation matches, treat as retryable
+ * 1. @RecoverOn match → return (treat as success, skip to next step)
+ * 2. @FailOn match → throw NonRetryableStepException
+ * 3. @RetryOn match → throw RetryableStepException
+ * 4. Default → treat as retryable
  */
 @Slf4j
 public class StepErrorHandler {
 
-    /**
-     * Resolves an exception thrown by a step handler into the correct behavior.
-     * Returns null if the step should be treated as recovered (skip to next step).
-     * Throws RetryableStepException or NonRetryableStepException otherwise.
-     */
     public static void handleError(StepHandler<?> handler, Throwable ex) {
-        Class<?> handlerClass = handler.getClass();
         int httpStatus = extractHttpStatus(ex);
         String errorMessage = ex.getMessage() != null ? ex.getMessage() : "";
 
-        // 1. Check @RecoverOn — auto-recover (treat as success)
-        RecoverOn[] recoveries = handlerClass.getAnnotationsByType(RecoverOn.class);
+        // Get annotations — MethodStepAdapter resolves method→class inheritance
+        RecoverOn[] recoveries;
+        FailOn failOn;
+        RetryOn retryOn;
+
+        if (handler instanceof MethodStepAdapter<?> adapter) {
+            recoveries = adapter.getRecoverOns();
+            failOn = adapter.getFailOn();
+            retryOn = adapter.getRetryOn();
+        } else {
+            Class<?> cls = handler.getClass();
+            recoveries = cls.getAnnotationsByType(RecoverOn.class);
+            failOn = cls.getAnnotation(FailOn.class);
+            retryOn = cls.getAnnotation(RetryOn.class);
+        }
+
+        // 1. @RecoverOn — auto-recover
         for (RecoverOn recover : recoveries) {
             if (httpStatus == recover.httpStatus()) {
                 if (recover.message().isEmpty() || errorMessage.contains(recover.message())) {
-                    log.info("[StepErrorHandler] RECOVER on HTTP {} for {} (action={}): {}",
-                            httpStatus, handler.getStepName(), recover.action(), errorMessage);
-                    return; // Null = recovered, treat as success
+                    log.info("[Step:{}] RECOVERED on HTTP {} (action={})",
+                            handler.getStepName(), httpStatus, recover.action());
+                    return;
                 }
             }
         }
 
-        // 2. Check @FailOn — fail immediately
-        FailOn failOn = handlerClass.getAnnotation(FailOn.class);
+        // 2. @FailOn — fail immediately
         if (failOn != null) {
             if (httpStatus > 0 && contains(failOn.httpStatus(), httpStatus)) {
                 throw new NonRetryableStepException(
-                        "HTTP " + httpStatus + " on step " + handler.getStepName() + ": " + errorMessage, ex);
+                        "HTTP " + httpStatus + " on " + handler.getStepName() + ": " + errorMessage, ex);
             }
-            for (Class<? extends Throwable> failType : failOn.exceptions()) {
-                if (failType.isInstance(ex) || (ex.getCause() != null && failType.isInstance(ex.getCause()))) {
+            for (Class<? extends Throwable> t : failOn.exceptions()) {
+                if (t.isInstance(ex) || (ex.getCause() != null && t.isInstance(ex.getCause()))) {
                     throw new NonRetryableStepException(
-                            handler.getStepName() + " failed (non-retryable): " + errorMessage, ex);
+                            handler.getStepName() + " failed: " + errorMessage, ex);
                 }
             }
         }
 
-        // 3. Check @RetryOn — route to retry topics
-        RetryOn retryOn = handlerClass.getAnnotation(RetryOn.class);
+        // 3. @RetryOn — retry via Kafka
         if (retryOn != null) {
             if (httpStatus > 0 && contains(retryOn.httpStatus(), httpStatus)) {
                 throw new RetryableStepException(
-                        "HTTP " + httpStatus + " on step " + handler.getStepName() + ": " + errorMessage, ex);
+                        "HTTP " + httpStatus + " on " + handler.getStepName() + ": " + errorMessage, ex);
             }
-            for (Class<? extends Throwable> retryType : retryOn.exceptions()) {
-                if (retryType.isInstance(ex) || (ex.getCause() != null && retryType.isInstance(ex.getCause()))) {
+            for (Class<? extends Throwable> t : retryOn.exceptions()) {
+                if (t.isInstance(ex) || (ex.getCause() != null && t.isInstance(ex.getCause()))) {
                     throw new RetryableStepException(
-                            handler.getStepName() + " failed (retryable): " + errorMessage, ex);
+                            handler.getStepName() + " failed: " + errorMessage, ex);
                 }
             }
         }
 
-        // 4. Default: if already a RetryableStepException or NonRetryableStepException, propagate
+        // 4. Propagate if already typed
         if (ex instanceof RetryableStepException rse) throw rse;
         if (ex instanceof NonRetryableStepException nrse) throw nrse;
 
-        // 5. Fallback: treat as retryable
-        throw new RetryableStepException(
-                handler.getStepName() + " failed: " + errorMessage, ex);
+        // 5. Default: retryable
+        throw new RetryableStepException(handler.getStepName() + " failed: " + errorMessage, ex);
     }
 
     private static int extractHttpStatus(Throwable ex) {
-        // Walk the cause chain looking for a status code
         Throwable current = ex;
         while (current != null) {
-            // WebClientResponseException (Spring WebFlux)
-            if (current.getClass().getSimpleName().equals("WebClientResponseException")) {
+            String className = current.getClass().getSimpleName();
+            if (className.equals("WebClientResponseException") ||
+                    className.contains("HttpStatusCodeException")) {
                 try {
-                    var method = current.getClass().getMethod("getStatusCode");
-                    var statusCode = method.invoke(current);
-                    var valueMethod = statusCode.getClass().getMethod("value");
-                    return (int) valueMethod.invoke(statusCode);
-                } catch (Exception ignored) {}
-            }
-            // HttpClientErrorException / HttpServerErrorException (Spring RestTemplate)
-            if (current.getClass().getSimpleName().contains("HttpStatusCodeException")) {
-                try {
-                    var method = current.getClass().getMethod("getStatusCode");
-                    var statusCode = method.invoke(current);
-                    var valueMethod = statusCode.getClass().getMethod("value");
-                    return (int) valueMethod.invoke(statusCode);
+                    var statusCode = current.getClass().getMethod("getStatusCode").invoke(current);
+                    return (int) statusCode.getClass().getMethod("value").invoke(statusCode);
                 } catch (Exception ignored) {}
             }
             current = current.getCause();
         }
-        return 0; // No HTTP status found
+        return 0;
     }
 
     private static boolean contains(int[] arr, int value) {
-        for (int v : arr) {
-            if (v == value) return true;
-        }
+        for (int v : arr) if (v == value) return true;
         return false;
     }
 }

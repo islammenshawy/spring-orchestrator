@@ -15,7 +15,7 @@ import java.lang.annotation.Target;
  * @FailOn(exceptions = {IllegalArgumentException.class})
  * </pre>
  */
-@Target(ElementType.TYPE)
+@Target({ElementType.TYPE, ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface FailOn {
 

@@ -2,6 +2,7 @@ package com.orchestrator.starter.autoconfigure;
 
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.exception.RetryableStepException;
+import com.orchestrator.starter.flow.FlowDefinitionScanner;
 import com.orchestrator.starter.flow.FlowOrchestrator;
 import com.orchestrator.starter.flow.StepHandler;
 import com.orchestrator.starter.flow.StepRegistry;
@@ -14,6 +15,7 @@ import com.orchestrator.starter.recovery.StaleFlowRecoveryService;
 import com.orchestrator.starter.retry.JitteredExponentialBackOffPolicy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationContext;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -57,10 +59,24 @@ public class OrchestratorAutoConfiguration {
         return new IdempotencyService(repository);
     }
 
+    /**
+     * Step registry — discovers steps from two sources:
+     * 1. @Flow classes with @Step methods (single-class approach)
+     * 2. Individual StepHandler @Component beans (multi-class approach)
+     * Both can coexist. @Flow steps are discovered first.
+     */
     @Bean
     @ConditionalOnMissingBean
     @SuppressWarnings("rawtypes")
-    public StepRegistry<?> orchestratorStepRegistry(List<StepHandler> handlers) {
+    public StepRegistry<?> orchestratorStepRegistry(
+            ApplicationContext context,
+            List<StepHandler> handlers) {
+        // Scan for @Flow classes with @Step methods
+        List<StepHandler> flowSteps = FlowDefinitionScanner.scan(context);
+        if (!flowSteps.isEmpty()) {
+            return new StepRegistry<>(flowSteps);
+        }
+        // Fallback: individual StepHandler beans
         return new StepRegistry<>(handlers);
     }
 
