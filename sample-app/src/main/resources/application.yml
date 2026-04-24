@@ -14,32 +14,36 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       properties:
+        # Rebalancing: only revoke partitions that need to move (no stop-the-world)
         partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+        # Container health detection
         session.timeout.ms: 30000
         heartbeat.interval.ms: 10000
         max.poll.interval.ms: 300000
+        # Static membership for Kubernetes (uncomment for StatefulSet deployments):
+        # group.instance.id: ${HOSTNAME}
+        # session.timeout.ms: 45000
+        # Rack awareness (uncomment to read from closest replica):
+        # client.rack: ${KAFKA_RACK:rack-1}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
       acks: all
       properties:
         enable.idempotence: true
+    listener:
+      # Consumer threads per instance — set to match partition count
+      concurrency: 3
+      # Commit offset after each message (not batch)
+      ack-mode: RECORD
 
 vendor:
   base-url: http://localhost:8081/api/v1
 
+# Library config — only what the orchestrator starter needs
 orchestrator:
   kafka:
     command-topic: enigio.sample.commands
-    partition-count: 6              # 6 partitions for command topic
-    retry-partition-count: 3        # fewer for retry/DLT
-    replication-factor: 1           # 1 for local dev (set 3 for prod with 3 brokers)
-    min-insync-replicas: 1          # 1 for local dev (set 2 for prod)
-    create-topics: true             # starter creates topics at startup
-    concurrency: 3                  # consumer threads per instance
-    static-membership: false        # set true for Kubernetes StatefulSet
-    # instance-id-prefix: "enigio-" # prefix + HOSTNAME = group.instance.id
-    # client-rack: "us-east-1a"     # set to AZ for read-from-closest-replica
   retry:
     max-attempts: 4
     initial-interval-ms: 2000
@@ -49,3 +53,7 @@ orchestrator:
   recovery:
     scan-interval-ms: 30000
     stale-threshold-minutes: 5
+
+# Topics: create via kafka-topics CLI or IaC before deploying:
+#   kafka-topics --create --topic enigio.sample.commands --partitions 6 --replication-factor 3
+#   (retry/DLT topics are auto-created by Spring Kafka's RetryTopicConfiguration)

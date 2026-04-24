@@ -54,13 +54,6 @@
             <artifactId>spring-retry</artifactId>
         </dependency>
 
-        <!-- Micrometer for metrics (optional — only if actuator present) -->
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-core</artifactId>
-            <optional>true</optional>
-        </dependency>
-
         <!-- Jackson for message serialization (provided by consumer app) -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

@@ -3,6 +3,12 @@ package com.orchestrator.starter.autoconfigure;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+/**
+ * Configuration for the orchestrator library.
+ * Only properties the library needs. Everything else — concurrency,
+ * ack mode, rebalancing, static membership, rack awareness, topic
+ * creation — use standard Spring Kafka properties in application.yml.
+ */
 @Data
 @ConfigurationProperties(prefix = "orchestrator")
 public class OrchestratorProperties {
@@ -13,38 +19,7 @@ public class OrchestratorProperties {
 
     @Data
     public static class KafkaConfig {
-        /** Kafka topic for step commands */
         private String commandTopic = "orchestrator.commands";
-
-        /** Number of partitions for the command topic (match container count) */
-        private int partitionCount = 6;
-
-        /** Number of partitions for retry/DLT topics (lower throughput) */
-        private int retryPartitionCount = 3;
-
-        /** Replication factor: 1 for dev, 3 for prod */
-        private short replicationFactor = 1;
-
-        /** Minimum in-sync replicas: 1 for dev, 2 for prod */
-        private int minInsyncReplicas = 1;
-
-        /** Auto-create topics at startup. Set false if infra team manages topics */
-        private boolean createTopics = true;
-
-        /** Concurrent consumer threads per instance (should be <= partitionCount) */
-        private int concurrency = 3;
-
-        /** Enable static group membership for Kubernetes StatefulSet pods */
-        private boolean staticMembership = false;
-
-        /** Prefix for group.instance.id (appended with HOSTNAME env var) */
-        private String instanceIdPrefix = "orch-";
-
-        /** Session timeout for static membership (must exceed pod restart time) */
-        private int sessionTimeoutMs = 45000;
-
-        /** Client rack for reading from closest replica (set to AZ name in prod) */
-        private String clientRack = "";
     }
 
     @Data
