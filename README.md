@@ -34,16 +34,14 @@ Add the dependency and define your flow:
 ```
 
 ```java
-// Flow entity — just your domain fields (extends AbstractFlow)
+// Flow entity — just your domain fields (everything else inherited)
 @Document(collection = "order_flows")
 public class MyFlow extends AbstractFlow {
     private String orderId;
     private String paymentId;
 }
 
-public interface MyFlowRepo extends OrchestratorFlowRepository<MyFlow> {}
-
-// Flow logic — one class, all steps
+// Flow logic — one class, all steps (no repository needed, auto-generated)
 @Component
 @Flow
 public class MyVendorFlow extends FlowDefinition<MyFlow> {

@@ -156,18 +156,18 @@ public class OrderFlow extends FlowDefinition&lt;OrderEntity&gt; {
     }
 }</code></pre>
 
-<h3>3. Flow entity + repository</h3>
-<p>Extend <code>AbstractFlow</code> &mdash; only your domain fields. All library fields are inherited.</p>
+<h3>3. Flow entity (just your domain fields)</h3>
+<p>Extend <code>AbstractFlow</code> &mdash; all tracking fields (id, status, retryCount, currentStep, version, etc.) are inherited. You only declare your domain fields.</p>
 <pre><code><span class="anno">@Data</span>
 <span class="anno">@EqualsAndHashCode</span>(callSuper = true)
 <span class="anno">@Document</span>(collection = "order_flows")
 public class OrderEntity extends AbstractFlow {
-    // Only YOUR fields &mdash; no boilerplate
+    // Only YOUR fields &mdash; nothing else
     private BigDecimal amount;
     private String paymentId, trackingNumber, address;
-}
-
-public interface OrderRepository extends OrchestratorFlowRepository&lt;OrderEntity&gt; {}</code></pre>
+}</code></pre>
+<p style="font-size:13px;color:var(--dim)">No repository interface needed &mdash; the library auto-generates one.<br>
+No <code>@EnableMongoRepositories</code> &mdash; the library auto-scans its packages.</p>
 
 <h3>4. Configure</h3>
 <pre><code>spring:

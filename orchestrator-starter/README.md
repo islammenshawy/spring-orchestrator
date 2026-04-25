@@ -62,8 +62,8 @@ Your Application                     Library (auto-configured)
                                        └── Compensation Engine (reverse on failure)
 
 Flow Entity          ──────────►     MongoDB
-  implements                           ├── flow collection (your domain)
-  OrchestratorFlow                     ├── orchestrator_outbox
+  extends AbstractFlow                   ├── flow collection (your domain)
+                                       ├── orchestrator_outbox
                                        ├── orchestrator_processed_events
                                        └── orchestrator_step_log
 
@@ -125,24 +125,25 @@ That's the **minimum**. Two annotations (`@Flow`, `@Step`) and your business log
 @FailOn(httpStatus = {400, 403})             // DEFAULT: all 4xx (except 429) fail
 ```
 
-### 3. Flow entity + repository
+### 3. Flow entity (just your domain fields)
 
-Extend `AbstractFlow` — only your domain fields. All library fields (id, status, retryCount, etc.) are inherited.
+Extend `AbstractFlow` — all library tracking fields (id, status, retryCount, currentStep, version, etc.) are inherited. You only declare your domain fields.
 
 ```java
 @Data
 @EqualsAndHashCode(callSuper = true)
 @Document(collection = "order_flows")
 public class OrderEntity extends AbstractFlow {
-    // Only YOUR fields — no boilerplate
+    // Only YOUR fields — nothing else
     private BigDecimal amount;
     private String paymentId;
     private String trackingNumber;
     private String address;
 }
-
-public interface OrderRepository extends OrchestratorFlowRepository<OrderEntity> {}
 ```
+
+No repository interface needed — the library auto-generates one.
+No `@EnableMongoRepositories` — the library auto-scans its packages.
 
 ### 4. Configure
 
@@ -155,7 +156,7 @@ orchestrator:
   kafka.command-topic: orders.commands
 ```
 
-That's it — **3 files** (entity, repository one-liner, flow class) and **4 lines of config**.
+That's it — **2 files** (entity + flow class) and **4 lines of config**.
 
 The library auto-configures:
 - REST endpoints: `POST /flows`, `GET /flows/{id}`, `GET /flows/correlation/{id}`
