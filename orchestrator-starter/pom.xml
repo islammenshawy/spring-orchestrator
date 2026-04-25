@@ -54,6 +54,13 @@
             <artifactId>spring-retry</artifactId>
         </dependency>
 
+        <!-- Web support for auto-exposed flow endpoints (optional) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- Jackson for message serialization (provided by consumer app) -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

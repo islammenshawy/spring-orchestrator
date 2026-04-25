@@ -16,6 +16,7 @@ public class OrchestratorProperties {
     private KafkaConfig kafka = new KafkaConfig();
     private RetryConfig retry = new RetryConfig();
     private RecoveryConfig recovery = new RecoveryConfig();
+    private EndpointsConfig endpoints = new EndpointsConfig();
 
     @Data
     public static class KafkaConfig {
@@ -35,5 +36,13 @@ public class OrchestratorProperties {
     public static class RecoveryConfig {
         private long scanIntervalMs = 30000;
         private int staleThresholdMinutes = 5;
+    }
+
+    @Data
+    public static class EndpointsConfig {
+        /** Auto-expose REST endpoints for flows */
+        private boolean enabled = true;
+        /** Base path for flow endpoints */
+        private String basePath = "/flows";
     }
 }
