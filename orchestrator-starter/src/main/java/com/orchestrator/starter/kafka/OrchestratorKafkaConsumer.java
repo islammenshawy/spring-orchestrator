@@ -38,9 +38,9 @@ public class OrchestratorKafkaConsumer<F extends OrchestratorFlow> {
             throw new RuntimeException("Deserialization failed", e);
         }
 
-        // Layer 1: fast-path skip if already fully processed
-        if (idempotencyService.isProcessed(command.getEventId())) {
-            log.debug("Event {} already processed, skipping", command.getEventId());
+        // Layer 1: single try-insert (1 query instead of 2)
+        // Returns false if already processed → skip
+        if (!idempotencyService.tryProcess(command.getEventId())) {
             return;
         }
 
@@ -49,9 +49,6 @@ public class OrchestratorKafkaConsumer<F extends OrchestratorFlow> {
 
         // Execute — passes step name from message (supports parallel steps)
         orchestrator.executeStep(command.getFlowId(), command.getStepName());
-
-        // Layer 1: mark processed AFTER successful completion
-        idempotencyService.markProcessed(command.getEventId());
     }
 
     /**
@@ -62,7 +59,7 @@ public class OrchestratorKafkaConsumer<F extends OrchestratorFlow> {
         try {
             StepCommandMessage command = objectMapper.readValue(payload, StepCommandMessage.class);
             orchestrator.markDeadLettered(command.getFlowId());
-            idempotencyService.markProcessed(command.getEventId());
+            idempotencyService.tryProcess(command.getEventId());
         } catch (Exception e) {
             log.error("DLT processing failed: {}", e.getMessage());
         }

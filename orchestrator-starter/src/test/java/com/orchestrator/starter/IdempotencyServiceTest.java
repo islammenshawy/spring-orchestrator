@@ -12,22 +12,22 @@ import static org.mockito.Mockito.*;
 class IdempotencyServiceTest {
 
     @Test
-    void markProcessedReturnsTrueOnFirstCall() {
+    void tryProcessReturnsTrueOnFirstCall() {
         var repo = mock(ProcessedEventRepository.class);
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         var service = new IdempotencyService(repo);
-        assertTrue(service.markProcessed("event-1"));
+        assertTrue(service.tryProcess("event-1"));
         verify(repo).save(any(ProcessedEvent.class));
     }
 
     @Test
-    void markProcessedReturnsFalseOnDuplicate() {
+    void tryProcessReturnsFalseOnDuplicate() {
         var repo = mock(ProcessedEventRepository.class);
         when(repo.save(any())).thenThrow(new DuplicateKeyException("dup"));
 
         var service = new IdempotencyService(repo);
-        assertFalse(service.markProcessed("event-1"));
+        assertFalse(service.tryProcess("event-1"));
     }
 
     @Test

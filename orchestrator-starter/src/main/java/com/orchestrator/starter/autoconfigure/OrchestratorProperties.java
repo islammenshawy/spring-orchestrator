@@ -17,6 +17,8 @@ public class OrchestratorProperties {
     private RetryConfig retry = new RetryConfig();
     private RecoveryConfig recovery = new RecoveryConfig();
     private EndpointsConfig endpoints = new EndpointsConfig();
+    private RetentionConfig retention = new RetentionConfig();
+    private AuditConfig audit = new AuditConfig();
 
     @Data
     public static class KafkaConfig {
@@ -40,9 +42,23 @@ public class OrchestratorProperties {
 
     @Data
     public static class EndpointsConfig {
-        /** Auto-expose REST endpoints for flows */
         private boolean enabled = true;
-        /** Base path for flow endpoints */
         private String basePath = "/flows";
+    }
+
+    @Data
+    public static class RetentionConfig {
+        /** Auto-delete published outbox events after N days (TTL index) */
+        private int outboxDays = 7;
+        /** Auto-delete idempotency records after N days (TTL index) */
+        private int processedEventsDays = 30;
+        /** Auto-delete step audit logs after N days (TTL index). 0 = keep forever. */
+        private int stepLogDays = 90;
+    }
+
+    @Data
+    public static class AuditConfig {
+        /** Include full flow state JSON (before/after) in step logs. Disable for performance at scale. */
+        private boolean includeFlowState = false;
     }
 }

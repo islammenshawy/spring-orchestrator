@@ -10,17 +10,27 @@ public class IdempotencyService {
 
     private final ProcessedEventRepository repository;
 
-    public boolean isProcessed(String eventId) {
-        return repository.existsById(eventId);
-    }
-
-    public boolean markProcessed(String eventId) {
+    /**
+     * Single-query idempotency: try to insert. If duplicate → already processed.
+     * Returns true if this is the first time (proceed with execution).
+     * Returns false if already processed (skip).
+     *
+     * One query instead of two (was: existsById + save = 2 queries).
+     */
+    public boolean tryProcess(String eventId) {
         try {
             repository.save(new ProcessedEvent(eventId));
-            return true;
+            return true; // first time — proceed
         } catch (DuplicateKeyException e) {
-            log.debug("Event {} already processed", eventId);
-            return false;
+            log.debug("Event {} already processed, skipping", eventId);
+            return false; // duplicate — skip
         }
+    }
+
+    /**
+     * Check-only (no write). Used for fast-path skip in consumer.
+     */
+    public boolean isProcessed(String eventId) {
+        return repository.existsById(eventId);
     }
 }

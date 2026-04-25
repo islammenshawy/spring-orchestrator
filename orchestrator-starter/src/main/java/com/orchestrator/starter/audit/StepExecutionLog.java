@@ -23,6 +23,7 @@ import java.time.Instant;
 @AllArgsConstructor
 @Document(collection = "orchestrator_step_log")
 @CompoundIndex(name = "flow_step_idx", def = "{'flowId': 1, 'stepName': 1, 'attemptNumber': 1}")
+@CompoundIndex(name = "flow_started_idx", def = "{'flowId': 1, 'startedAt': 1}")
 public class StepExecutionLog {
 
     @Id

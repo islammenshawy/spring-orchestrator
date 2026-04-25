@@ -63,6 +63,14 @@ public class OrchestratorAutoConfiguration {
         return new IdempotencyService(repository);
     }
 
+    @Bean
+    @ConditionalOnMissingBean
+    public IndexInitializer orchestratorIndexInitializer(
+            org.springframework.data.mongodb.core.MongoTemplate mongoTemplate,
+            OrchestratorProperties props) {
+        return new IndexInitializer(mongoTemplate, props);
+    }
+
     /**
      * Auto-generates a repository if the user hasn't defined one.
      * Discovers the entity type from FlowDefinition<F> via reflection.
@@ -137,7 +145,8 @@ public class OrchestratorAutoConfiguration {
 
         return new FlowOrchestrator(
                 flowRepository, stepRegistry, outboxRepository, stepLogRepository,
-                objectMapper, props.getKafka().getCommandTopic(), transactionTemplate);
+                objectMapper, props.getKafka().getCommandTopic(), transactionTemplate,
+                props.getAudit().isIncludeFlowState());
     }
 
     @Bean

@@ -33,7 +33,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private final StepExecutionLogRepository stepLogRepository;
     private final ObjectMapper objectMapper;
     private final String commandTopic;
-    private final TransactionTemplate txTemplate; // null on standalone MongoDB
+    private final TransactionTemplate txTemplate;
+    private final boolean includeFlowStateInLogs;
 
     public FlowOrchestrator(
             OrchestratorFlowRepository<F> flowRepository,
@@ -42,13 +43,15 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             StepExecutionLogRepository stepLogRepository,
             ObjectMapper objectMapper,
             String commandTopic,
-            TransactionTemplate txTemplate) {
+            TransactionTemplate txTemplate,
+            boolean includeFlowStateInLogs) {
         this.flowRepository = flowRepository;
         this.stepRegistry = stepRegistry;
         this.outboxRepository = outboxRepository;
         this.stepLogRepository = stepLogRepository;
         this.objectMapper = objectMapper;
         this.commandTopic = commandTopic;
+        this.includeFlowStateInLogs = includeFlowStateInLogs;
         this.txTemplate = txTemplate;
     }
 
@@ -105,7 +108,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
 
         flow.setStatus(FlowStatus.IN_PROGRESS);
-        String flowBefore = serialize(flow);
+        String flowBefore = includeFlowStateInLogs ? serialize(flow) : null;
         Instant startedAt = Instant.now();
 
         log.info("[Saga] Executing step {} for flow {}", stepName, flowId);
@@ -127,7 +130,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 StepErrorHandler.handleError(handler, e);
                 // Recovered (e.g., HTTP 409)
                 logStep(flowId, stepName, "RECOVERED", flow.getRetryCount() + 1,
-                        flowBefore, serialize(flow), e.getMessage(), startedAt);
+                        flowBefore, includeFlowStateInLogs ? serialize(flow) : null, e.getMessage(), startedAt);
                 log.info("[Saga] Step {} recovered for flow {}", stepName, flowId);
             } catch (RetryableStepException re) {
                 logStep(flowId, stepName, "RETRYING", flow.getRetryCount() + 1,
@@ -151,7 +154,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flowRepository.save(flow);
 
         logStep(flowId, stepName, "COMPLETED", 1,
-                flowBefore, serialize(flow), null, startedAt);
+                flowBefore, includeFlowStateInLogs ? serialize(flow) : null, null, startedAt);
 
         markParallelStepCompleted(flow, stepName, handler);
     }

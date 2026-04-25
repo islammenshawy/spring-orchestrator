@@ -3,6 +3,7 @@ package com.orchestrator.starter.domain;
 import lombok.Data;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.Version;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.Indexed;
 
 import java.time.Instant;
@@ -27,6 +28,7 @@ import java.util.Set;
  * inherited. You never declare them.
  */
 @Data
+@CompoundIndex(name = "status_updated_idx", def = "{'status': 1, 'updatedAt': 1}")
 public abstract class AbstractFlow implements OrchestratorFlow {
 
     @Id
