@@ -30,30 +30,49 @@ Kafka retry topics with jittered exponential backoff. MongoDB persistence. Annot
 
 ## The Pattern
 
-The library implements the **Saga Orchestrator** pattern with a **Transactional Outbox** for reliable message delivery. Each workflow step is a separate Kafka message, executed by a single consumer with crash-resilient retry.
+This library combines three distributed systems patterns into one:
+
+### 1. Saga Orchestrator
+
+A multi-step workflow where each step is an independent operation (API call, DB write). If a step fails permanently, previously completed steps are **compensated** (rolled back) in reverse order. Unlike choreography (where services react to events), the orchestrator **centrally controls** the flow — it decides what step runs next, when to retry, and when to compensate.
+
+### 2. Transactional Outbox
+
+The dual-write problem: after a step completes, the library needs to (a) save the result to MongoDB and (b) publish a Kafka message for the next step. These are two different systems — if the container crashes between them, one write is lost. The outbox pattern solves this by writing both the flow state and the Kafka message intent to the **same MongoDB database**. A background poller reads unpublished outbox events and sends them to Kafka. Both writes go to the same DB, so a crash either loses both (safe — Kafka redelivers) or keeps both (outbox publisher sends later).
+
+### 3. Kafka Non-Blocking Retry
+
+Failed steps don't block the consumer. Spring Kafka routes failed messages to **dedicated retry topics** (`-retry-0`, `-retry-1`, `-retry-2`) with configurable exponential backoff and jitter. After all retries, messages go to a **dead letter topic** (`-dlt`). This is entirely Kafka-managed — retry state survives container crashes because it lives in Kafka, not in memory.
+
+### How they work together
 
 ```
 Your Application                     Library (auto-configured)
 ─────────────                        ─────────────────────────
 
 @Flow class                          FlowOrchestrator
-  @Step methods      ──────────►       ├── Step Registry
-  @Compensate                          ├── Outbox Writer
-  @RetryOn                             ├── Kafka Consumer
-  @RecoverOn                           ├── Retry Topic Config
-  @FailOn                              ├── Idempotency Service
-  @Parallel                            ├── Step Audit Logger
-  @JoinOn                              ├── Stale Flow Recovery
-                                       └── Compensation Engine
+  @Step methods      ──────────►       ├── Step Registry (discovers @Step methods)
+  @Compensate                          ├── Outbox Writer (atomic with flow save)
+  @RecoverOn                           ├── Outbox Publisher (polls → Kafka)
+  @Parallel                            ├── Kafka Consumer (one step per message)
+  @JoinOn                              ├── Retry Topic Config (jittered backoff)
+                                       ├── Idempotency Service (two-layer dedup)
+                                       ├── Step Audit Logger (before/after snapshots)
+                                       ├── Stale Flow Recovery (crash safety net)
+                                       └── Compensation Engine (reverse on failure)
 
-Flow Entity          ──────────►     MongoDB (flow state)
-  implements
-  OrchestratorFlow                   Kafka Topics (auto-created)
-                                       ├── {topic}
-                                       ├── {topic}-retry-0
-                                       ├── {topic}-retry-1
-                                       ├── {topic}-retry-2
-                                       └── {topic}-dlt
+Flow Entity          ──────────►     MongoDB
+  implements                           ├── flow collection (your domain)
+  OrchestratorFlow                     ├── orchestrator_outbox
+                                       ├── orchestrator_processed_events
+                                       └── orchestrator_step_log
+
+                                     Kafka Topics (auto-created)
+                                       ├── {topic}           (step commands)
+                                       ├── {topic}-retry-0   (2s + jitter)
+                                       ├── {topic}-retry-1   (4s + jitter)
+                                       ├── {topic}-retry-2   (8s + jitter)
+                                       └── {topic}-dlt       (dead letter)
 ```
 
 ---
@@ -263,25 +282,60 @@ Resolution order when a step throws:
 
 ## Two-Layer Idempotency
 
-| Layer | Where | Protects against |
-|-------|-------|-----------------|
-| **Layer 1** | `orchestrator_processed_events` | Duplicate Kafka messages after crash/rebalance |
-| **Layer 2** | `completedWhen` SpEL on `@Step` | Crash between API success and processed_events write |
+Kafka guarantees **at-least-once** delivery — messages may be redelivered after a crash or rebalance. Without idempotency, a redelivered message would call the vendor API again, causing a duplicate charge/creation. The library uses two independent layers to prevent this:
+
+| Layer | Where | What it checks | Protects against |
+|-------|-------|---------------|-----------------|
+| **Layer 1: Consumer** | `orchestrator_processed_events` collection | Kafka message `eventId` | Duplicate messages from Kafka redelivery after crash, rebalance, or retry topic routing |
+| **Layer 2: Handler** | `completedWhen` SpEL on `@Step` | Domain result fields (e.g., `paymentId != null`) | Crash between API call succeeding and Layer 1 write completing |
+
+### Resolution flow
 
 ```
-Message → Layer 1: isProcessed? → YES → skip
-                                  NO  → execute step
-                                          │
-                                     API call → save result
-                                          ← CRASH →
-                                     processed_events NOT written
-                                          │
-                                     Redelivery → Layer 1: NO → proceed
-                                               → Layer 2: result in DB → skip API
-                                               → advance → mark processed
+Kafka message arrives
+  │
+  ▼
+Layer 1: isProcessed(eventId)?
+  ├── YES → skip entirely (fast path, no DB lookup)
+  │
+  └── NO → load flow from MongoDB
+            │
+            ▼
+          Layer 2: completedWhen → evaluate SpEL against flow
+            ├── TRUE → result already in DB from a previous attempt
+            │          skip API call, advance to next step
+            │
+            └── FALSE → execute step (call vendor API)
+                          │
+                          ▼
+                     API returns → set result on flow → save to MongoDB
+                          │
+                          ▼
+                     Layer 1: markProcessed(eventId)  ← AFTER completion
 ```
 
-**Key**: Layer 1 marks processed **after** completion, not before.
+### Why Layer 1 marks processed AFTER, not before
+
+```
+WRONG (mark before):                    RIGHT (mark after):
+1. markProcessed ✓                      1. execute step
+2. execute step                         2. save flow
+   ← CRASH →                              ← CRASH →
+3. (never runs)                         3. markProcessed (never runs)
+
+Redelivery:                             Redelivery:
+  isProcessed → YES → SKIP               isProcessed → NO → proceed
+  Step never executes. Flow stuck.        completedWhen → TRUE → skip API
+                                          Advance → markProcessed → done
+```
+
+### The two layers together
+
+Neither layer alone is sufficient:
+- **Layer 1 alone**: if we mark before execution, a crash means the step never runs but is marked "done"
+- **Layer 2 alone**: if the vendor API is called but the result field isn't set yet (crash between API return and `flow.setPaymentId()`), Layer 2 can't detect the previous call
+
+Together: Layer 1 is the **fast path** (skip without even loading the flow). Layer 2 is the **safe path** (even if re-entered, the vendor API is never called twice because the result field is already set from the previous successful call).
 
 ---
 
@@ -367,31 +421,172 @@ Triggers automatically on `NonRetryableStepException` and DLT.
 
 ## Container Crash Recovery
 
-```
-Pod A: step succeeds → flow saved → outbox saved → CRASH
+Three independent recovery mechanisms, from fastest to slowest. Any one alone is sufficient — together they're redundant safety nets.
 
-Path 1 — Outbox (~500ms):    OutboxPublisher polls → sends to Kafka
-Path 2 — Kafka (30s):        Rebalance → redeliver → Layer 2 skips API
-Path 3 — Recovery (5 min):   StaleFlowRecoveryService re-publishes
+### Recovery path 1: Outbox Publisher (~500ms)
+
+The outbox publisher runs on **every pod** in the cluster, polling every 500ms. When Pod A crashes, a surviving pod's publisher picks up the unpublished outbox event within milliseconds. **No scheduler, no waiting, no rebalance needed.**
+
 ```
+Pod A: step succeeds → flow saved to MongoDB → outbox event saved to MongoDB
+       ← POD A CRASHES →
+
+Pod B (or any surviving pod):
+  OutboxPublisher polls every 500ms
+    → finds unpublished event
+    → sends to Kafka
+    → next step executes on any available pod
+    = recovery in ~500ms
+```
+
+This is why the outbox pattern is faster than scheduled recovery — it doesn't wait for a timer. The poller runs continuously on all pods.
+
+### Recovery path 2: Kafka redelivery (~30s)
+
+If the crash happened during step execution (offset not committed), Kafka detects the dead consumer after `session.timeout.ms` (30s), rebalances the partition to another pod, and redelivers the message.
+
+```
+Pod A: executing step → API called → offset NOT committed
+       ← POD A CRASHES →
+
+Kafka:
+  30s later: no heartbeat from Pod A
+    → rebalance → Pod B gets partition
+    → message redelivered
+    → Layer 2: completedWhen → result already set → skip API
+    → advance to next step
+```
+
+### Recovery path 3: Stale flow scanner (5 min)
+
+Safety net for edge cases where both outbox and Kafka redelivery miss (extremely rare — e.g., outbox event wasn't written and offset was committed but step didn't complete).
+
+```
+StaleFlowRecoveryService (runs every 30s):
+  query: flows WHERE status=IN_PROGRESS AND updatedAt < (now - 5 min)
+    → re-publishes step command to Kafka
+    → idempotency prevents duplicate execution
+```
+
+### Kafka long-term retry (hours or days)
+
+Kafka retry topics can hold messages for as long as the topic's retention period (default: 7 days). If a vendor is down for hours, messages sit in the retry topics and are redelivered when the vendor comes back.
+
+```
+orchestrator:
+  retry:
+    max-attempts: 10                  # more retries for longer outages
+    initial-interval-ms: 5000         # 5s → 10s → 20s → 40s → 80s → 160s → 320s → ...
+    multiplier: 2.0
+    max-interval-ms: 3600000          # cap at 1 hour between retries
+    jitter-factor: 0.5
+
+# With these settings:
+#   Attempt 1:  5s
+#   Attempt 2:  10s
+#   Attempt 3:  20s
+#   Attempt 4:  40s
+#   Attempt 5:  80s
+#   Attempt 6:  160s (~3 min)
+#   Attempt 7:  320s (~5 min)
+#   Attempt 8:  640s (~10 min)
+#   Attempt 9:  1200s (~20 min) → capped at 3600s (1 hour)
+#   Attempt 10: 3600s (1 hour)
+#   Total: ~2 hours of retry before DLT
+```
+
+The retry state lives in **Kafka, not in memory**. If all pods restart during an outage, the retry messages are still in the topics — they resume processing when pods come back. No state lost.
+
+After all retries exhaust, the message goes to the DLT topic, `@Compensate` runs in reverse, and the flow is marked FAILED. An operator can then fix the issue and manually re-trigger the flow.
 
 ---
 
 ## Kafka Rebalancing
 
-| Default (RangeAssignor) | This library (CooperativeStickyAssignor) |
-|------------------------|----------------------------------------|
-| ALL consumers stop | Only affected partitions pause |
-| ~30s zero processing | Others keep running |
+When you run multiple containers (pods), Kafka distributes partitions across them. When a container joins, leaves, or crashes, Kafka **rebalances** — reassigns partitions. How this happens determines whether your flows pause or keep processing.
+
+### Default vs CooperativeStickyAssignor
+
+```
+DEFAULT (RangeAssignor) — stop-the-world:
+
+  Pod C joins consumer group
+  ├── ALL consumers STOP processing
+  ├── ALL partitions revoked
+  ├── Wait ~30s for rebalance
+  ├── Partitions reassigned
+  └── Resume
+  = 30s of ZERO processing. P0,P1,P3,P4 didn't need to move but stopped anyway.
+
+THIS LIBRARY (CooperativeStickyAssignor) — incremental:
+
+  Pod C joins consumer group
+  ├── Only partitions that NEED to move are revoked
+  ├── A: [P0,P1,P2] → revoke P2 → [P0,P1] keeps running
+  ├── B: [P3,P4,P5] → revoke P5 → [P3,P4] keeps running
+  └── C: gets [P2,P5]
+  = Only P2,P5 paused briefly. Everything else never stopped.
+```
+
+### What happens to in-flight messages during rebalance
+
+```
+Pod A processing flow-123 step=CHARGE_PAYMENT
+  ├── API call in progress
+  │     ← REBALANCE TRIGGERS →
+  ├── Pod A's partition revoked
+  ├── Offset NOT committed (step still in progress)
+  │
+  ▼ Pod B gets the partition
+  ├── Message redelivered from last committed offset
+  ├── Layer 1: isProcessed? → NO → proceed
+  ├── Layer 2: completedWhen("paymentId != null")
+  │     ├── YES (Pod A finished the API call before losing partition) → skip API
+  │     └── NO (Pod A crashed mid-call) → re-execute step
+  └── Flow continues safely either way
+```
+
+### Guarantees during rebalancing
+
+| Guarantee | Status | How |
+|-----------|--------|-----|
+| No duplicate API calls | ✅ Guaranteed | Layer 2: `completedWhen` checks result fields |
+| No lost messages | ✅ Guaranteed | Kafka redelivers from last committed offset |
+| No stuck flows | ✅ Guaranteed | Outbox (~500ms) + Kafka redeliver (~30s) + recovery service (5 min) |
+| Flow step ordering | ✅ Guaranteed | `flowId` as Kafka key → all steps on same partition |
+| Minimal processing pause | ✅ Yes | Only moving partitions pause |
+| Instant crash detection | ⚠️ ~30s | `session.timeout.ms` (but outbox recovers in ~500ms) |
+
+### Configuration (standard Spring Boot — no custom code)
 
 ```yaml
 spring.kafka.consumer.properties:
-  partition.assignment.strategy: CooperativeStickyAssignor
-  session.timeout.ms: 30000
-  heartbeat.interval.ms: 10000
-  # group.instance.id: ${HOSTNAME}   # Kubernetes StatefulSet
-  # client.rack: ${KAFKA_RACK}       # multi-region
+  partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+  session.timeout.ms: 30000       # detect dead consumer after 30s
+  heartbeat.interval.ms: 10000    # heartbeat every 10s (must be < session/3)
+  max.poll.interval.ms: 300000    # allow 5 min for slow vendor calls
+  # group.instance.id: ${HOSTNAME}   # Kubernetes StatefulSet — skip rebalance on restart
+  # client.rack: ${KAFKA_RACK}       # multi-region — read from closest replica
+
+spring.kafka.listener:
+  concurrency: 3                  # consumer threads per pod (≤ partition count)
+  ack-mode: RECORD                # commit offset per message, not per batch
 ```
+
+### Static membership for Kubernetes
+
+Without `group.instance.id`, every pod restart triggers a rebalance (new random pod name = new consumer). With it:
+
+```
+Pod B restarts (same hostname in StatefulSet):
+  1. B disconnects
+  2. Kafka waits session.timeout.ms (45s) before rebalancing
+  3. B reconnects within 45s with same instance ID
+  4. Kafka: "same consumer, no rebalance needed"
+  = 0 rebalances for a simple restart
+```
+
+Only works with Kubernetes **StatefulSet** (stable hostnames). Regular Deployments get random names — use `CooperativeStickyAssignor` without static membership (brief rebalances are handled safely by idempotency).
 
 ---
 
