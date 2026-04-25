@@ -609,10 +609,113 @@ Only works with Kubernetes **StatefulSet** (stable hostnames). Regular Deploymen
 
 | Collection | Managed by | Purpose |
 |-----------|-----------|---------|
-| Your collection | You | Flow state + domain fields |
+| Your collection (e.g., `order_flows`) | You | Flow state + domain fields |
 | `orchestrator_outbox` | Library | Transactional outbox |
 | `orchestrator_processed_events` | Library | Consumer idempotency |
 | `orchestrator_step_log` | Library | Step audit trail |
+
+### Your flow collection (e.g., `order_flows`)
+
+```json
+{
+  "_id": "682b3f1a2e9c",
+  "correlationId": "a1b2c3d4-e5f6-7890",
+  "currentStep": "FINALIZE_DOCUMENT",
+  "status": "COMPLETED",
+  "retryCount": 0,
+  "backoffSeconds": 0,
+  "nextRetryAt": null,
+  "errorMessage": null,
+  "updatedAt": "2026-04-25T14:00:05Z",
+  "createdAt": "2026-04-25T14:00:00Z",
+  "version": 5,
+  "completedParallelSteps": [],
+
+  "title": "Contract #123",
+  "signerEmail": "john@example.com",
+  "documentId": "doc-456",
+  "signatureRequestId": "sig-789",
+  "finalUrl": "https://enigio.com/docs/doc-456"
+}
+```
+
+The top fields are from `AbstractFlow` (managed by library). The bottom fields are yours.
+
+### `orchestrator_outbox` — transactional outbox
+
+Each entry is a pending Kafka publish. The outbox publisher polls every 500ms and sends unpublished events.
+
+```json
+{
+  "_id": "evt-001",
+  "flowId": "682b3f1a2e9c",
+  "topic": "enigio.commands",
+  "key": "682b3f1a2e9c",
+  "payload": "{\"eventId\":\"x1\",\"flowId\":\"682b3f1a2e9c\",\"stepName\":\"REQUEST_SIGNATURE\"}",
+  "published": true,
+  "publishedAt": "2026-04-25T14:00:02Z",
+  "createdAt": "2026-04-25T14:00:02Z"
+}
+```
+
+- `published: false` → outbox publisher picks it up next poll
+- `published: true` → already sent to Kafka, kept for audit
+
+### `orchestrator_processed_events` — consumer idempotency (Layer 1)
+
+Each entry is a Kafka message that was fully processed. Prevents duplicate step execution on redelivery.
+
+```json
+{
+  "_id": "x1",
+  "processedAt": "2026-04-25T14:00:03Z"
+}
+```
+
+The `_id` is the `eventId` from the Kafka message. If this document exists, the message is skipped.
+
+### `orchestrator_step_log` — step execution audit trail
+
+Every step attempt is logged with before/after flow state snapshots.
+
+```json
+{
+  "_id": "log-001",
+  "flowId": "682b3f1a2e9c",
+  "stepName": "CREATE_DOCUMENT",
+  "status": "COMPLETED",
+  "attemptNumber": 1,
+  "flowStateBefore": "{\"documentId\":null,...}",
+  "flowStateAfter": "{\"documentId\":\"doc-456\",...}",
+  "errorMessage": null,
+  "durationMs": 342,
+  "startedAt": "2026-04-25T14:00:01Z",
+  "completedAt": "2026-04-25T14:00:01.342Z"
+}
+```
+
+Failed/retried steps show the error and attempt number:
+
+```json
+{
+  "stepName": "REQUEST_SIGNATURE",
+  "status": "RETRYING",
+  "attemptNumber": 2,
+  "errorMessage": "HTTP 500 on REQUEST_SIGNATURE: Internal Server Error",
+  "durationMs": 15
+}
+```
+
+Compensation is also logged:
+
+```json
+{
+  "stepName": "CREATE_DOCUMENT",
+  "status": "COMPENSATED",
+  "attemptNumber": 1,
+  "durationMs": 120
+}
+```
 
 ---
 

@@ -569,11 +569,61 @@ C: gets [P2,P5]
 
 <table>
     <tr><th>Collection</th><th>Managed by</th><th>Purpose</th></tr>
-    <tr><td>Your flow collection</td><td>You</td><td>Flow state + domain fields</td></tr>
-    <tr><td><code>orchestrator_outbox</code></td><td>Library</td><td>Pending Kafka publishes (transactional outbox)</td></tr>
+    <tr><td>Your collection (e.g., <code>order_flows</code>)</td><td>You</td><td>Flow state + domain fields</td></tr>
+    <tr><td><code>orchestrator_outbox</code></td><td>Library</td><td>Transactional outbox (pending Kafka publishes)</td></tr>
     <tr><td><code>orchestrator_processed_events</code></td><td>Library</td><td>Consumer idempotency keys (Layer 1)</td></tr>
-    <tr><td><code>orchestrator_step_log</code></td><td>Library</td><td>Step execution audit trail (before/after snapshots)</td></tr>
+    <tr><td><code>orchestrator_step_log</code></td><td>Library</td><td>Step execution audit trail</td></tr>
 </table>
+
+<h3>Your flow collection</h3>
+<pre style="font-size:12px"><code>{
+  "_id": "682b3f1a2e9c",
+  "correlationId": "a1b2c3d4-e5f6-7890",
+  "currentStep": "FINALIZE_DOCUMENT",
+  "status": "COMPLETED",
+  "retryCount": 0,
+  "backoffSeconds": 0,
+  "version": 5,
+  "createdAt": "2026-04-25T14:00:00Z",
+
+  <span style="color:var(--success)">// ↓ your domain fields ↓</span>
+  "title": "Contract #123",
+  "signerEmail": "john@example.com",
+  "documentId": "doc-456",
+  "finalUrl": "https://enigio.com/docs/doc-456"
+}</code></pre>
+
+<h3><code>orchestrator_outbox</code></h3>
+<p style="font-size:13px">Each entry is a pending Kafka publish. Outbox publisher polls every 500ms.</p>
+<pre style="font-size:12px"><code>{
+  "_id": "evt-001",
+  "flowId": "682b3f1a2e9c",
+  "topic": "enigio.commands",
+  "key": "682b3f1a2e9c",
+  "payload": "{\"eventId\":\"x1\",\"flowId\":\"682b3f1a2e9c\",\"stepName\":\"REQUEST_SIGNATURE\"}",
+  "published": true,
+  "publishedAt": "2026-04-25T14:00:02Z"
+}</code></pre>
+
+<h3><code>orchestrator_processed_events</code></h3>
+<p style="font-size:13px">If this document exists for an eventId, the Kafka message is skipped (Layer 1 idempotency).</p>
+<pre style="font-size:12px"><code>{
+  "_id": "x1",
+  "processedAt": "2026-04-25T14:00:03Z"
+}</code></pre>
+
+<h3><code>orchestrator_step_log</code></h3>
+<p style="font-size:13px">Every step attempt logged with before/after flow state, duration, and errors.</p>
+<pre style="font-size:12px"><code>// Successful step
+{ "stepName": "CREATE_DOCUMENT", "status": "COMPLETED", "attemptNumber": 1, "durationMs": 342,
+  "flowStateBefore": "{\"documentId\":null,...}", "flowStateAfter": "{\"documentId\":\"doc-456\",...}" }
+
+// Retrying step
+{ "stepName": "REQUEST_SIGNATURE", "status": "RETRYING", "attemptNumber": 2,
+  "errorMessage": "HTTP 500 on REQUEST_SIGNATURE: Internal Server Error" }
+
+// Compensated step
+{ "stepName": "CREATE_DOCUMENT", "status": "COMPENSATED", "attemptNumber": 1, "durationMs": 120 }</code></pre>
 
 <!-- ============================================================ -->
 <h2 id="deps">Dependencies</h2>
