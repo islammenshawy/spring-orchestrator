@@ -594,14 +594,82 @@ Only works with Kubernetes **StatefulSet** (stable hostnames). Regular Deploymen
 | Property | Default | Description |
 |----------|---------|-------------|
 | `orchestrator.kafka.command-topic` | `orchestrator.commands` | Kafka topic |
-| `orchestrator.retry.max-attempts` | `4` | 1 initial + N-1 retries |
-| `orchestrator.retry.initial-interval-ms` | `2000` | First retry delay |
-| `orchestrator.retry.multiplier` | `2.0` | Exponential multiplier |
-| `orchestrator.retry.max-interval-ms` | `30000` | Max delay cap |
+| `orchestrator.retry.max-attempts` | `4` | 1 initial + N-1 retries. **Determines how many retry topics are created.** |
+| `orchestrator.retry.initial-interval-ms` | `2000` | First retry delay (ms) |
+| `orchestrator.retry.multiplier` | `2.0` | Each retry multiplies the delay |
+| `orchestrator.retry.max-interval-ms` | `30000` | Cap on retry delay (ms) |
 | `orchestrator.retry.jitter-factor` | `0.5` | 0.0=none, 0.5=equal, 1.0=full |
-| `orchestrator.recovery.scan-interval-ms` | `30000` | Stale flow scan |
+| `orchestrator.recovery.scan-interval-ms` | `30000` | Stale flow scan interval |
 | `orchestrator.recovery.stale-threshold-minutes` | `5` | Stale after N min |
-| `orchestrator.mongodb.transactions-enabled` | `false` | Atomic outbox |
+| `orchestrator.retention.outbox-days` | `7` | TTL: auto-delete published outbox events |
+| `orchestrator.retention.processed-events-days` | `30` | TTL: auto-delete idempotency records |
+| `orchestrator.retention.step-log-days` | `90` | TTL: auto-delete step audit logs. 0=keep forever |
+| `orchestrator.audit.include-flow-state` | `false` | Include full flow JSON in step logs (expensive at scale) |
+| `orchestrator.endpoints.enabled` | `true` | Auto-expose REST endpoints |
+| `orchestrator.endpoints.base-path` | `/flows` | Base path for auto REST endpoints |
+| `orchestrator.mongodb.transactions-enabled` | `false` | Atomic outbox on replica set |
+
+### Retry Ladder Examples
+
+`max-attempts` controls how many retry topics are created. Each topic adds one exponential backoff step. The delay doubles each time until it hits `max-interval-ms`.
+
+**Quick retry (default) — fail fast, 3 retries in ~14 seconds:**
+```yaml
+orchestrator.retry:
+  max-attempts: 4           # retry-0, retry-1, retry-2, dlt
+  initial-interval-ms: 2000 # 2s → 4s → 8s
+  multiplier: 2.0
+  max-interval-ms: 30000
+```
+```
+retry-0: 2s    retry-1: 4s    retry-2: 8s    → dlt
+Total: ~14s before dead letter
+```
+
+**Medium retry — handle flaky vendor, 6 retries over ~2 minutes:**
+```yaml
+orchestrator.retry:
+  max-attempts: 7
+  initial-interval-ms: 2000
+  multiplier: 2.0
+  max-interval-ms: 60000
+```
+```
+retry-0: 2s  retry-1: 4s  retry-2: 8s  retry-3: 16s  retry-4: 32s  retry-5: 60s  → dlt
+Total: ~2 min before dead letter
+```
+
+**Long retry — survive vendor outage, 12 retries over ~2 hours:**
+```yaml
+orchestrator.retry:
+  max-attempts: 13
+  initial-interval-ms: 5000
+  multiplier: 2.0
+  max-interval-ms: 3600000  # cap at 1 hour
+```
+```
+retry-0:  5s       retry-6:  320s (~5 min)
+retry-1:  10s      retry-7:  640s (~10 min)
+retry-2:  20s      retry-8:  1280s (~21 min)
+retry-3:  40s      retry-9:  2560s (~42 min)
+retry-4:  80s      retry-10: 3600s (1 hour, capped)
+retry-5:  160s     retry-11: 3600s (1 hour, capped)
+→ dlt
+Total: ~2.5 hours of retry before dead letter
+```
+
+**24-hour retry — never give up easily:**
+```yaml
+orchestrator.retry:
+  max-attempts: 20
+  initial-interval-ms: 10000
+  multiplier: 2.0
+  max-interval-ms: 7200000  # cap at 2 hours
+  jitter-factor: 0.5
+```
+Retries for ~24 hours with increasing intervals, capping at 2-hour gaps.
+
+> Retry state lives in **Kafka topics, not in memory**. If all pods restart during an outage, retry messages are still in Kafka — they resume when pods come back.
 
 ---
 
