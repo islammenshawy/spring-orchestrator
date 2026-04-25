@@ -1,8 +1,60 @@
 # orchestrator-starter
 
-A Spring Boot starter implementing the **Saga + Transactional Outbox** pattern for resilient, multi-step workflow orchestration backed by Kafka and MongoDB.
+Saga + Transactional Outbox pattern as a Spring Boot starter library.
+Kafka retry topics with jittered exponential backoff. MongoDB persistence. Annotation-driven.
 
-Define your entire flow in one annotated class. The library handles Kafka retry topics with jittered exponential backoff, transactional outbox, two-layer idempotency, compensation (rollback), step audit logging, and container crash recovery.
+> For the polished HTML version with dark theme, download and open [docs/index.html](../docs/index.html) locally.
+
+---
+
+## Contents
+
+- [The Pattern](#the-pattern)
+- [Quick Start](#quick-start)
+- [Annotations Reference](#annotations-reference)
+- [Flow Types: Sequential, Parallel, Join](#flow-types)
+- [Retry with Jittered Backoff](#retry-with-jittered-exponential-backoff)
+- [Error Handling](#error-handling)
+- [Two-Layer Idempotency](#two-layer-idempotency)
+- [The Unavoidable Gap: API Call + Crash](#the-unavoidable-gap-api-call--crash)
+- [Transactional Outbox](#transactional-outbox)
+- [Saga Compensation (Rollback)](#saga-compensation-rollback)
+- [Container Crash Recovery](#container-crash-recovery)
+- [Kafka Rebalancing](#kafka-rebalancing)
+- [Configuration Reference](#configuration-reference)
+- [MongoDB Collections](#mongodb-collections)
+- [Dependencies](#dependencies)
+- [Startup Validation](#startup-validation)
+
+---
+
+## The Pattern
+
+The library implements the **Saga Orchestrator** pattern with a **Transactional Outbox** for reliable message delivery. Each workflow step is a separate Kafka message, executed by a single consumer with crash-resilient retry.
+
+```
+Your Application                     Library (auto-configured)
+─────────────                        ─────────────────────────
+
+@Flow class                          FlowOrchestrator
+  @Step methods      ──────────►       ├── Step Registry
+  @Compensate                          ├── Outbox Writer
+  @RetryOn                             ├── Kafka Consumer
+  @RecoverOn                           ├── Retry Topic Config
+  @FailOn                              ├── Idempotency Service
+  @Parallel                            ├── Step Audit Logger
+  @JoinOn                              ├── Stale Flow Recovery
+                                       └── Compensation Engine
+
+Flow Entity          ──────────►     MongoDB (flow state)
+  implements
+  OrchestratorFlow                   Kafka Topics (auto-created)
+                                       ├── {topic}
+                                       ├── {topic}-retry-0
+                                       ├── {topic}-retry-1
+                                       ├── {topic}-retry-2
+                                       └── {topic}-dlt
+```
 
 ---
 
@@ -22,62 +74,51 @@ Define your entire flow in one annotated class. The library handles Kafka retry 
 ```java
 @Component
 @Flow(topic = "orders.commands")
-@RetryOn(httpStatus = {500, 502, 503, 429})       // class-level default
-@FailOn(httpStatus = {400, 403})                   // class-level default
-public class OrderFlow extends FlowDefinition<OrderFlow> {
+@RetryOn(httpStatus = {500, 502, 503, 429})
+@FailOn(httpStatus = {400, 403})
+public class OrderFlow extends FlowDefinition<OrderEntity> {
 
     @Autowired private PaymentClient paymentClient;
-    @Autowired private ShippingClient shippingClient;
 
     @Step(order = 1, completedWhen = "paymentId != null")
     @RecoverOn(httpStatus = 409, message = "already charged", action = RecoverAction.SKIP)
-    public void chargePayment(OrderFlowEntity flow) {
+    public void chargePayment(OrderEntity flow) {
         var result = paymentClient.charge(flow.getAmount());
         flow.setPaymentId(result.getId());
     }
 
     @Compensate(step = "chargePayment")
-    public void refundPayment(OrderFlowEntity flow) {
+    public void refundPayment(OrderEntity flow) {
         paymentClient.refund(flow.getPaymentId());
     }
 
     @Step(order = 2, completedWhen = "trackingNumber != null")
-    public void shipOrder(OrderFlowEntity flow) {
+    public void shipOrder(OrderEntity flow) {
         var result = shippingClient.ship(flow.getAddress());
         flow.setTrackingNumber(result.getTracking());
-    }
-
-    @Compensate(step = "shipOrder")
-    public void cancelShipment(OrderFlowEntity flow) {
-        shippingClient.cancel(flow.getTrackingNumber());
     }
 }
 ```
 
-### 3. Define flow entity + repository
+### 3. Flow entity + repository
 
 ```java
 @Document(collection = "order_flows")
-public class OrderFlowEntity implements OrchestratorFlow {
+public class OrderEntity implements OrchestratorFlow {
     @Id private String id;
-    private String correlationId;
-    private String currentStep;
+    private String correlationId, currentStep, errorMessage;
     private FlowStatus status = FlowStatus.PENDING;
     private int retryCount, backoffSeconds;
     private Instant nextRetryAt, updatedAt;
-    private String errorMessage;
     private Set<String> completedParallelSteps = new HashSet<>();
     @Version private Long version;
 
     // Your domain fields
     private BigDecimal amount;
-    private String paymentId;
-    private String trackingNumber;
-    private String address;
-    // ... getters/setters (or use Lombok)
+    private String paymentId, trackingNumber, address;
 }
 
-public interface OrderFlowRepository extends OrchestratorFlowRepository<OrderFlowEntity> {}
+public interface OrderRepository extends OrchestratorFlowRepository<OrderEntity> {}
 ```
 
 ### 4. Configure
@@ -87,10 +128,10 @@ orchestrator:
   kafka:
     command-topic: orders.commands
   retry:
-    max-attempts: 4           # 1 initial + 3 retries
-    initial-interval-ms: 2000 # 2s → 4s → 8s (exponential)
+    max-attempts: 4
+    initial-interval-ms: 2000
     multiplier: 2.0
-    jitter-factor: 0.5        # equal jitter (prevents thundering herd)
+    jitter-factor: 0.5
 
 spring:
   kafka:
@@ -103,152 +144,119 @@ spring:
       ack-mode: RECORD
 ```
 
----
-
-## How It Works
-
-### Step Execution Flow
-
-```
-POST /orders                          ← your REST controller
-  │
-  ▼
-FlowOrchestrator.startFlow()
-  ├── Save flow to MongoDB (status=IN_PROGRESS)
-  ├── Save outbox event to MongoDB (same DB)
-  │
-  ▼
-OutboxPublisher (polls every 500ms)
-  ├── Reads unpublished events
-  ├── Sends to Kafka topic: orders.commands
-  │
-  ▼
-KafkaConsumer receives message
-  ├── Layer 1: check processed_events (fast skip if duplicate)
-  ├── Load flow from MongoDB
-  ├── Layer 2: completedWhen check (skip API if result exists)
-  ├── Execute step (calls your vendor/service)
-  ├── Save result to flow
-  ├── Save outbox event for next step
-  ├── Mark as processed (Layer 1)
-  │
-  ▼
-Next step... until last step → status=COMPLETED
-```
-
-### Retry with Jittered Exponential Backoff
-
-```
-Step fails (vendor returns HTTP 500)
-  │
-  ├──→ orders.commands              attempt 1 (fail)
-  ├──→ orders.commands-retry-0      2s + jitter (fail)
-  ├──→ orders.commands-retry-1      4s + jitter (fail)
-  ├──→ orders.commands-retry-2      8s + jitter (fail)
-  └──→ orders.commands-dlt          dead letter
-         │
-         ▼
-       DLT Handler
-         ├── Mark flow FAILED
-         └── Run @Compensate methods in reverse order
-               ├── cancelShipment()   ← undo step 2
-               └── refundPayment()    ← undo step 1
-```
-
-**Jitter** prevents the thundering herd — when 100 flows fail simultaneously, retries spread across the backoff window instead of all hitting at the same instant:
-
-```
-jitter-factor=0.0:  2000ms → 4000ms → 8000ms    (all aligned = thundering herd)
-jitter-factor=0.5:  1000-2000ms → 2000-4000ms    (equal jitter, recommended)
-jitter-factor=1.0:  0-2000ms → 0-4000ms          (full jitter, maximum spread)
-```
-
-### Container Crash Recovery
-
-```
-Pod A: step succeeds → flow saved → outbox event saved
-       ← POD CRASHES →
-       Kafka offset not committed
-
-Recovery path 1 — Outbox (fast, ~500ms):
-  OutboxPublisher on any pod → polls → sends to Kafka → flow continues
-
-Recovery path 2 — Kafka redelivery (30s):
-  Rebalance → Pod B gets partition → message redelivered
-  Layer 2: completedWhen → result already set → skip API → advance
-```
+> **That's it.** No orchestrator code, no outbox tables, no Kafka consumer classes, no retry logic.
 
 ---
 
-## Parallel Execution + Join
+## Annotations Reference
 
-Steps at the same order with `@Parallel` execute concurrently. `@JoinOn` waits for all to complete.
+### Class-level (defaults for all steps)
+
+| Annotation | Purpose | Example |
+|-----------|---------|---------|
+| `@Flow(topic)` | Marks class as a flow definition | `@Flow(topic = "orders.commands")` |
+| `@RetryOn(httpStatus, exceptions)` | Which errors trigger Kafka retry | `@RetryOn(httpStatus = {500, 502, 429})` |
+| `@FailOn(httpStatus, exceptions)` | Which errors fail immediately | `@FailOn(httpStatus = {400, 403})` |
+
+### Method-level (override class defaults per step)
+
+| Annotation | Purpose | Example |
+|-----------|---------|---------|
+| `@Step(order, completedWhen)` | Marks method as a step | `@Step(order = 1, completedWhen = "paymentId != null")` |
+| `@RecoverOn(httpStatus, message, action)` | Auto-recover on vendor "already exists" | `@RecoverOn(httpStatus = 409, action = SKIP)` |
+| `@Compensate(step)` | Rollback method for a step | `@Compensate(step = "chargePayment")` |
+| `@Parallel(group)` | Execute concurrently with group | `@Parallel(group = "prep")` |
+| `@JoinOn(group)` | Wait for all parallel steps in group | `@JoinOn(group = "prep")` |
+
+---
+
+## Flow Types
+
+### Sequential (default)
+
+```
+Step 1 ──► Step 2 ──► Step 3 ──► COMPLETED
+```
+
+### Parallel + Join
+
+```
+Step 1
+  │
+  ├──► Step 2a  (@Parallel group="prep")     concurrent Kafka messages
+  ├──► Step 2b  (@Parallel group="prep")
+  │
+  └──► Step 3   (@JoinOn group="prep")       waits for both
+       │
+       ▼
+  COMPLETED
+```
 
 ```java
-@Step(order = 1, completedWhen = "documentId != null")
-public void createDocument(MyFlow flow) { ... }
-
 @Step(order = 2, completedWhen = "attachmentId != null")
 @Parallel(group = "prep")
 public void uploadAttachment(MyFlow flow) { ... }
 
-@Step(order = 2, completedWhen = "signatureRequestId != null")
+@Step(order = 2, completedWhen = "signatureId != null")
 @Parallel(group = "prep")
 public void requestSignature(MyFlow flow) { ... }
 
 @Step(order = 3)
 @JoinOn(group = "prep")
 public void verifyBoth(MyFlow flow) {
-    // Only runs when BOTH parallel steps have completed
+    // only runs when BOTH parallel steps completed
 }
 ```
 
+---
+
+## Retry with Jittered Exponential Backoff
+
 ```
-Step 1: createDocument
-         │
-    ┌────┴────┐
-    ▼         ▼
-Step 2a:   Step 2b:         (concurrent via separate Kafka messages)
-upload     requestSig
-    │         │
-    └────┬────┘
-         ▼
-Step 3: verifyBoth           (@JoinOn waits for both)
+Step fails (HTTP 500 from vendor)
+  │
+  ├──► orders.commands              attempt 1     FAIL
+  │         │
+  │    ┌────▼──────────────────────────────────────────┐
+  │    │  orders.commands-retry-0    2s + jitter   FAIL │
+  │    │  orders.commands-retry-1    4s + jitter   FAIL │
+  │    │  orders.commands-retry-2    8s + jitter   FAIL │
+  │    └────┬──────────────────────────────────────────┘
+  │         │
+  │    ┌────▼────┐
+  │    │  -dlt   │  Dead Letter Topic
+  │    └────┬────┘
+  │         ▼
+  │    DLT Handler:
+  │      ├── flow.status = FAILED
+  │      └── @Compensate in reverse
 ```
 
-Each parallel step has its own retry/idempotency. If one fails and retries, the other keeps its completed state. The join step only executes when all `completedWhen` conditions in the group are satisfied.
+### Jitter prevents thundering herd
+
+| `jitter-factor` | Behavior | 4s base delay becomes |
+|----------------|----------|----------------------|
+| `0.0` | No jitter — all aligned (thundering herd) | always 4000ms |
+| **`0.5`** | **Equal jitter (recommended)** | 2000-4000ms |
+| `1.0` | Full jitter — maximum spread | 0-4000ms |
+
+Formula: `delay = base * (1 - factor) + random(0, base * factor)`
 
 ---
 
-## Annotations Reference
+## Error Handling
 
-### Class-level
+Resolution order when a step throws:
 
-| Annotation | Purpose |
-|-----------|---------|
-| `@Flow(topic = "...")` | Marks class as a flow definition |
-| `@RetryOn(httpStatus = {...})` | Default: which HTTP codes trigger Kafka retry |
-| `@FailOn(httpStatus = {...})` | Default: which HTTP codes fail immediately |
+| Priority | Source | Behavior | Example |
+|----------|--------|----------|---------|
+| 1 | `@RecoverOn` | Treat as success, skip API | HTTP 409 "already created" |
+| 2 | `@FailOn` | FAILED + compensation | HTTP 400 bad request |
+| 3 | `@RetryOn` | Kafka retry topics | HTTP 500 server error |
+| 4 | Manual throw | `RetryableStepException` / `NonRetryableStepException` | "Not yet verified" |
+| 5 | Default | Any unhandled → retryable | NullPointerException |
 
-### Method-level
-
-| Annotation | Purpose |
-|-----------|---------|
-| `@Step(order, completedWhen)` | Marks method as a step. `completedWhen` is SpEL for idempotency. |
-| `@RecoverOn(httpStatus, message, action)` | Auto-recover on vendor "already exists" (e.g., HTTP 409) |
-| `@Compensate(step = "methodName")` | Rollback method, called in reverse on failure |
-| `@Parallel(group = "name")` | Execute concurrently with other steps in same group |
-| `@JoinOn(group = "name")` | Wait for all parallel steps in group to complete |
-
-Method-level annotations override class-level defaults.
-
-### Error handling resolution order
-
-1. `@RecoverOn` match → treat as success (skip to next step)
-2. `@FailOn` match → `NonRetryableStepException` → FAILED + compensation
-3. `@RetryOn` match → `RetryableStepException` → Kafka retry topics
-4. Manual `throw RetryableStepException` / `NonRetryableStepException`
-5. Default: any unhandled exception → retryable
+> **No try/catch needed.** Your method is pure business logic.
 
 ---
 
@@ -256,35 +264,133 @@ Method-level annotations override class-level defaults.
 
 | Layer | Where | Protects against |
 |-------|-------|-----------------|
-| **Layer 1** | `orchestrator_processed_events` | Duplicate Kafka messages (redelivery after crash/rebalance) |
-| **Layer 2** | `completedWhen` SpEL on `@Step` | Crash between API call success and processed_events write |
+| **Layer 1** | `orchestrator_processed_events` | Duplicate Kafka messages after crash/rebalance |
+| **Layer 2** | `completedWhen` SpEL on `@Step` | Crash between API success and processed_events write |
 
-**Key design**: Layer 1 marks processed **after** step completion, not before. A crash mid-step → redelivery → Layer 2 checks result field → skips API call → completes safely.
+```
+Message → Layer 1: isProcessed? → YES → skip
+                                  NO  → execute step
+                                          │
+                                     API call → save result
+                                          ← CRASH →
+                                     processed_events NOT written
+                                          │
+                                     Redelivery → Layer 1: NO → proceed
+                                               → Layer 2: result in DB → skip API
+                                               → advance → mark processed
+```
+
+**Key**: Layer 1 marks processed **after** completion, not before.
 
 ---
 
-## Startup Validation
+## The Unavoidable Gap: API Call + Crash
 
-The library validates at startup (fail-fast, clear error messages):
+No library can make an HTTP call and a database write atomic. There is always a window where the API succeeded but the result isn't saved.
 
-- `@Compensate(step = "X")` must reference an existing `@Step` method
-- `@JoinOn(group = "X")` must reference an existing `@Parallel` group
-- `@Parallel` steps must have `completedWhen` (needed for join verification)
-- No duplicate step orders or names within a `@Flow`
-- `@Step` and `@Compensate` methods must accept exactly one `OrchestratorFlow` parameter
+```
+vendorApi.charge(amount);           // money charged
+     ← CRASH →
+flow.setPaymentId(result.getId());  // never runs
+
+Redelivery → completedWhen = false → API called AGAIN
+```
+
+> **This is not a library bug.** No framework can atomically span HTTP + DB.
+
+### Three strategies
+
+**1. Idempotency Key (best)** — vendor deduplicates by key:
+```java
+vendorApi.charge(amount, idempotencyKey: flow.getCorrelationId() + ":CHARGE");
+```
+
+**2. Pre-check** — query vendor before retrying:
+```java
+var existing = vendorApi.findByRef(flow.getCorrelationId());
+if (existing != null) { flow.setPaymentId(existing.getId()); return; }
+```
+
+**3. Reserve + Confirm** — two steps, reservation is repeatable:
+```java
+@Step(order = 1, completedWhen = "reservationId != null")
+void reserve(Flow f) { f.setReservationId(vendor.reserve(...)); }
+
+@Step(order = 2, completedWhen = "paymentId != null")
+void confirm(Flow f) { f.setPaymentId(vendor.confirm(f.getReservationId())); }
+```
+
+### checkpoint() — narrows the gap
+
+```java
+var result = paymentClient.charge(flow.getAmount());
+flow.setPaymentId(result.getId());
+checkpoint(flow);   // saved to MongoDB NOW — crash after here is safe
+auditRepo.save(...);
+```
 
 ---
 
-## MongoDB Collections
+## Transactional Outbox
 
-| Collection | Purpose | Managed by |
-|-----------|---------|-----------|
-| Your flow collection | Flow state + domain fields | You |
-| `orchestrator_outbox` | Transactional outbox events | Library |
-| `orchestrator_processed_events` | Consumer idempotency keys | Library |
-| `orchestrator_step_log` | Step execution audit trail | Library |
+```
+WITHOUT outbox:                         WITH outbox (this library):
+1. Save flow to MongoDB  ✓             1. Save flow to MongoDB      ✓
+   ← CRASH →                           2. Save outbox event (same DB) ✓
+2. Publish to Kafka       ✗ LOST          ← CRASH →
+→ Flow stuck forever                    3. OutboxPublisher polls → Kafka
+                                        → Flow continues (~500ms)
+```
 
-Enable `orchestrator.mongodb.transactions-enabled=true` on replica sets for full atomicity between flow save + outbox write.
+Enable `orchestrator.mongodb.transactions-enabled=true` on replica sets for fully atomic writes.
+
+---
+
+## Saga Compensation (Rollback)
+
+```
+Step 1: chargePayment     ✓
+Step 2: shipOrder         ✓
+Step 3: generateInvoice   ✗ FAILED
+  │
+  ▼ Compensation in reverse:
+  ├── @Compensate("shipOrder")     → cancelShipment()
+  └── @Compensate("chargePayment") → refundPayment()
+  │
+  ▼ flow.status = FAILED
+```
+
+Triggers automatically on `NonRetryableStepException` and DLT.
+
+---
+
+## Container Crash Recovery
+
+```
+Pod A: step succeeds → flow saved → outbox saved → CRASH
+
+Path 1 — Outbox (~500ms):    OutboxPublisher polls → sends to Kafka
+Path 2 — Kafka (30s):        Rebalance → redeliver → Layer 2 skips API
+Path 3 — Recovery (5 min):   StaleFlowRecoveryService re-publishes
+```
+
+---
+
+## Kafka Rebalancing
+
+| Default (RangeAssignor) | This library (CooperativeStickyAssignor) |
+|------------------------|----------------------------------------|
+| ALL consumers stop | Only affected partitions pause |
+| ~30s zero processing | Others keep running |
+
+```yaml
+spring.kafka.consumer.properties:
+  partition.assignment.strategy: CooperativeStickyAssignor
+  session.timeout.ms: 30000
+  heartbeat.interval.ms: 10000
+  # group.instance.id: ${HOSTNAME}   # Kubernetes StatefulSet
+  # client.rack: ${KAFKA_RACK}       # multi-region
+```
 
 ---
 
@@ -292,32 +398,52 @@ Enable `orchestrator.mongodb.transactions-enabled=true` on replica sets for full
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `orchestrator.kafka.command-topic` | `orchestrator.commands` | Kafka topic for step commands |
+| `orchestrator.kafka.command-topic` | `orchestrator.commands` | Kafka topic |
 | `orchestrator.retry.max-attempts` | `4` | 1 initial + N-1 retries |
 | `orchestrator.retry.initial-interval-ms` | `2000` | First retry delay |
 | `orchestrator.retry.multiplier` | `2.0` | Exponential multiplier |
-| `orchestrator.retry.max-interval-ms` | `30000` | Max retry delay cap |
+| `orchestrator.retry.max-interval-ms` | `30000` | Max delay cap |
 | `orchestrator.retry.jitter-factor` | `0.5` | 0.0=none, 0.5=equal, 1.0=full |
-| `orchestrator.recovery.scan-interval-ms` | `30000` | Stale flow scan interval |
-| `orchestrator.recovery.stale-threshold-minutes` | `5` | Consider stale after N min |
-| `orchestrator.mongodb.transactions-enabled` | `false` | Atomic outbox on replica set |
+| `orchestrator.recovery.scan-interval-ms` | `30000` | Stale flow scan |
+| `orchestrator.recovery.stale-threshold-minutes` | `5` | Stale after N min |
+| `orchestrator.mongodb.transactions-enabled` | `false` | Atomic outbox |
+
+---
+
+## MongoDB Collections
+
+| Collection | Managed by | Purpose |
+|-----------|-----------|---------|
+| Your collection | You | Flow state + domain fields |
+| `orchestrator_outbox` | Library | Transactional outbox |
+| `orchestrator_processed_events` | Library | Consumer idempotency |
+| `orchestrator_step_log` | Library | Step audit trail |
 
 ---
 
 ## Dependencies
 
-| Pulled by library | Not pulled (your app provides) |
-|------------------|-------------------------------|
-| `spring-boot-starter-data-mongodb` | `spring-boot-starter-web` |
-| `spring-kafka` | `spring-boot-starter-webflux` |
-| `spring-retry` | `jackson-databind` (provided scope) |
-| `spring-boot-autoconfigure` | |
+**Pulled:** `spring-boot-starter-data-mongodb`, `spring-kafka`, `spring-retry`, `spring-boot-autoconfigure`
+
+**Not pulled (your app provides):** `spring-boot-starter-web`, `spring-boot-starter-webflux`, `jackson-databind`
 
 ---
 
-## Requirements
+## Startup Validation
 
-- Java 21+
-- Spring Boot 3.2+
-- MongoDB (standalone or replica set)
-- Kafka
+| Rule | Error if violated |
+|------|-------------------|
+| `@Compensate(step="X")` must reference existing `@Step` | Lists available steps |
+| `@JoinOn(group="X")` must reference existing `@Parallel` | Lists available groups |
+| `@Parallel` steps must have `completedWhen` | Needed for join |
+| No duplicate step orders | Lists conflict |
+| No duplicate step names | Lists conflict |
+| Methods must accept one `OrchestratorFlow` param | Lists invalid signature |
+
+> Any `@SpringBootTest` catches these. No misconfiguration reaches production.
+
+---
+
+## License
+
+Apache 2.0
