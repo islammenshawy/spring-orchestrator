@@ -1,14 +1,16 @@
 package com.enigio.orchestrator.dashboard.controller;
 
-import com.enigio.orchestrator.common.domain.DocumentFlow;
-import com.enigio.orchestrator.common.domain.DocumentFlowRepository;
-import com.enigio.orchestrator.common.domain.FlowStatus;
 import lombok.RequiredArgsConstructor;
+import org.bson.Document;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -17,88 +19,75 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DashboardApiController {
 
-    private final DocumentFlowRepository flowRepository;
+    private final MongoTemplate mongoTemplate;
+
+    // ========== Flow queries (reads from any collection via MongoTemplate) ==========
 
     @GetMapping("/flows")
-    public ResponseEntity<List<DocumentFlow>> getAllFlows() {
-        List<DocumentFlow> flows = flowRepository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"));
-        return ResponseEntity.ok(flows);
+    public ResponseEntity<List<Document>> getAllFlows(
+            @RequestParam(defaultValue = "enigio_flows") String collection) {
+        Query query = new Query().with(Sort.by(Sort.Direction.DESC, "createdAt")).limit(100);
+        return ResponseEntity.ok(mongoTemplate.find(query, Document.class, collection));
     }
 
     @GetMapping("/flows/{id}")
-    public ResponseEntity<DocumentFlow> getFlow(@PathVariable String id) {
-        return flowRepository.findById(id)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+    public ResponseEntity<?> getFlow(@PathVariable String id,
+            @RequestParam(defaultValue = "enigio_flows") String collection) {
+        Document doc = mongoTemplate.findById(id, Document.class, collection);
+        return doc != null ? ResponseEntity.ok(doc) : ResponseEntity.notFound().build();
     }
 
     @GetMapping("/flows/status/{status}")
-    public ResponseEntity<List<DocumentFlow>> getFlowsByStatus(@PathVariable String status) {
-        FlowStatus flowStatus = FlowStatus.valueOf(status.toUpperCase());
-        return ResponseEntity.ok(flowRepository.findByStatus(flowStatus));
+    public ResponseEntity<List<Document>> getFlowsByStatus(@PathVariable String status,
+            @RequestParam(defaultValue = "enigio_flows") String collection) {
+        Query query = new Query(Criteria.where("status").is(status));
+        return ResponseEntity.ok(mongoTemplate.find(query, Document.class, collection));
     }
 
-    @PostMapping("/flows/saga")
-    public ResponseEntity<Map<String, Object>> startSagaFlow(@RequestBody Map<String, String> request) {
+    // ========== Start flows (library sample-app on port 8085) ==========
+
+    @PostMapping("/flows/start")
+    public ResponseEntity<Map<String, Object>> startFlow(@RequestBody Map<String, String> request) {
         try {
-            WebClient client = WebClient.create("http://localhost:8082");
+            WebClient client = WebClient.create("http://localhost:8085");
             String response = client.post()
-                    .uri("/saga/flows")
+                    .uri("/flows")
                     .bodyValue(request)
                     .retrieve()
                     .bodyToMono(String.class)
                     .block();
-            return ResponseEntity.ok(Map.of("status", "started", "pattern", "saga", "response", response));
+            return ResponseEntity.ok(Map.of("status", "started", "response", response));
         } catch (Exception e) {
             return ResponseEntity.internalServerError()
                     .body(Map.of("status", "error", "message", e.getMessage()));
         }
+    }
+
+    // ========== Legacy pattern endpoints (demo profile only) ==========
+
+    @PostMapping("/flows/saga")
+    public ResponseEntity<Map<String, Object>> startSagaFlow(@RequestBody Map<String, String> request) {
+        return proxyPost("http://localhost:8082", "/saga/flows", request, "saga");
     }
 
     @PostMapping("/flows/statemachine")
     public ResponseEntity<Map<String, Object>> startSmFlow(@RequestBody Map<String, String> request) {
-        try {
-            WebClient client = WebClient.create("http://localhost:8083");
-            String response = client.post()
-                    .uri("/sm/flows")
-                    .bodyValue(request)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
-            return ResponseEntity.ok(Map.of("status", "started", "pattern", "statemachine", "response", response));
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("status", "error", "message", e.getMessage()));
-        }
+        return proxyPost("http://localhost:8083", "/sm/flows", request, "statemachine");
     }
 
     @PostMapping("/flows/spring-integration")
     public ResponseEntity<Map<String, Object>> startSiFlow(@RequestBody Map<String, String> request) {
-        try {
-            WebClient client = WebClient.create("http://localhost:8084");
-            String response = client.post()
-                    .uri("/si/flows")
-                    .bodyValue(request)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
-            return ResponseEntity.ok(Map.of("status", "started", "pattern", "spring-integration", "response", response));
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError()
-                    .body(Map.of("status", "error", "message", e.getMessage()));
-        }
+        return proxyPost("http://localhost:8084", "/si/flows", request, "spring-integration");
     }
+
+    // ========== Failure simulation ==========
 
     @PostMapping("/failure-config")
     public ResponseEntity<Map<String, Object>> configureFailure(@RequestBody Map<String, String> config) {
         try {
             WebClient client = WebClient.create("http://localhost:8081");
-            String response = client.post()
-                    .uri("/admin/failure-config")
-                    .bodyValue(config)
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
+            String response = client.post().uri("/admin/failure-config")
+                    .bodyValue(config).retrieve().bodyToMono(String.class).block();
             return ResponseEntity.ok(Map.of("status", "configured", "response", response));
         } catch (Exception e) {
             return ResponseEntity.internalServerError()
@@ -109,13 +98,9 @@ public class DashboardApiController {
     @GetMapping("/failure-config")
     public ResponseEntity<String> getFailureConfig() {
         try {
-            WebClient client = WebClient.create("http://localhost:8081");
-            String response = client.get()
-                    .uri("/admin/failure-config")
-                    .retrieve()
-                    .bodyToMono(String.class)
-                    .block();
-            return ResponseEntity.ok(response);
+            return ResponseEntity.ok(WebClient.create("http://localhost:8081")
+                    .get().uri("/admin/failure-config")
+                    .retrieve().bodyToMono(String.class).block());
         } catch (Exception e) {
             return ResponseEntity.ok("{}");
         }
@@ -124,8 +109,8 @@ public class DashboardApiController {
     @PostMapping("/failure-reset")
     public ResponseEntity<Map<String, String>> resetFailures() {
         try {
-            WebClient client = WebClient.create("http://localhost:8081");
-            client.post().uri("/admin/reset").retrieve().bodyToMono(String.class).block();
+            WebClient.create("http://localhost:8081")
+                    .post().uri("/admin/reset").retrieve().bodyToMono(String.class).block();
             return ResponseEntity.ok(Map.of("status", "reset"));
         } catch (Exception e) {
             return ResponseEntity.internalServerError()
@@ -133,61 +118,48 @@ public class DashboardApiController {
         }
     }
 
-    @PostMapping("/flows/{id}/retry")
-    public ResponseEntity<Map<String, String>> retryFlow(@PathVariable String id) {
-        return flowRepository.findById(id).map(flow -> {
-            flow.setStatus(FlowStatus.IN_PROGRESS);
-            flow.setRetryCount(0);
-            flow.setBackoffSeconds(0);
-            flow.setNextRetryAt(null);
-            flow.setErrorMessage(null);
-            flowRepository.save(flow);
-            return ResponseEntity.ok(Map.of("status", "retrying", "flowId", id));
-        }).orElse(ResponseEntity.notFound().build());
-    }
+    // ========== Load test (hits library sample-app async API) ==========
 
     @PostMapping("/flows/loadtest")
     public ResponseEntity<Map<String, Object>> loadTest(@RequestBody Map<String, Object> request) {
-        int count = (int) request.getOrDefault("count", 5);
-        String pattern = (String) request.getOrDefault("pattern", "both");
+        int count = (int) request.getOrDefault("count", 10);
         int started = 0;
 
-        WebClient sagaClient = WebClient.create("http://localhost:8082");
-        WebClient smClient = WebClient.create("http://localhost:8083");
-        WebClient siClient = WebClient.create("http://localhost:8084");
+        WebClient client = WebClient.create("http://localhost:8085");
 
         for (int i = 0; i < count; i++) {
             Map<String, String> flowReq = Map.of(
                     "title", "Load Test #" + (i + 1),
-                    "content", "Auto-generated load test content",
-                    "signerEmail", "loadtest" + i + "@example.com",
-                    "metadata", "{\"loadTest\": true, \"index\": " + i + "}"
+                    "content", "Auto-generated content",
+                    "signerEmail", "loadtest" + i + "@example.com"
             );
             try {
-                if ("saga".equals(pattern) || "all".equals(pattern) || "both".equals(pattern)) {
-                    sagaClient.post().uri("/saga/flows").bodyValue(flowReq)
-                            .retrieve().bodyToMono(String.class).subscribe();
-                    started++;
-                }
-                if ("statemachine".equals(pattern) || "all".equals(pattern) || "both".equals(pattern)) {
-                    smClient.post().uri("/sm/flows").bodyValue(flowReq)
-                            .retrieve().bodyToMono(String.class).subscribe();
-                    started++;
-                }
-                if ("spring-integration".equals(pattern) || "all".equals(pattern)) {
-                    siClient.post().uri("/si/flows").bodyValue(flowReq)
-                            .retrieve().bodyToMono(String.class).subscribe();
-                    started++;
-                }
+                client.post().uri("/flows").bodyValue(flowReq)
+                        .retrieve().bodyToMono(String.class).subscribe();
+                started++;
             } catch (Exception e) {
-                // Continue with remaining flows
+                // Continue
             }
         }
 
         return ResponseEntity.ok(Map.of(
                 "status", "launched",
                 "flowsStarted", started,
-                "pattern", pattern
+                "target", "library (port 8085)"
         ));
+    }
+
+    // ========== Helpers ==========
+
+    private ResponseEntity<Map<String, Object>> proxyPost(String baseUrl, String path,
+            Map<String, String> request, String pattern) {
+        try {
+            String response = WebClient.create(baseUrl).post().uri(path)
+                    .bodyValue(request).retrieve().bodyToMono(String.class).block();
+            return ResponseEntity.ok(Map.of("status", "started", "pattern", pattern, "response", response));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError()
+                    .body(Map.of("status", "error", "message", e.getMessage()));
+        }
     }
 }
