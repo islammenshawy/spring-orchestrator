@@ -439,7 +439,7 @@
         </div>
 
         <div class="grid-3">
-            <!-- Start New Flow -->
+            <!-- Start New Flow (library async API) -->
             <div class="card">
                 <h2>Start Flow</h2>
                 <div class="form-group">
@@ -450,36 +450,26 @@
                     <label>Signer Email</label>
                     <input type="email" id="flow-email" value="test@example.com" />
                 </div>
-                <div class="flex gap-2 mt-2 flex-wrap">
-                    <button class="btn btn-saga" onclick="startFlow('saga')">Saga</button>
-                    <button class="btn btn-sm-pattern" onclick="startFlow('statemachine')">SM</button>
-                    <button class="btn btn-primary" onclick="startFlow('spring-integration')">SI</button>
-                    <button class="btn btn-outline" onclick="startAllFlows()">All 3</button>
+                <div class="flex gap-2 mt-2">
+                    <button class="btn btn-primary" onclick="startFlow()">Start Flow</button>
                 </div>
+                <div class="text-dim text-sm mt-2">POST /flows → 202 Accepted → Kafka → steps execute async</div>
             </div>
 
-            <!-- Load Test -->
+            <!-- Load Test (library async API) -->
             <div class="card">
                 <h2>Load Test</h2>
                 <div class="loadtest-controls">
                     <div class="form-group">
                         <label>Count</label>
-                        <input type="number" id="lt-count" value="10" min="1" max="100" />
-                    </div>
-                    <div class="form-group">
-                        <label>Pattern</label>
-                        <select id="lt-pattern">
-                            <option value="all">All 3</option>
-                            <option value="saga">Saga only</option>
-                            <option value="statemachine">SM only</option>
-                            <option value="spring-integration">SI only</option>
-                        </select>
+                        <input type="number" id="lt-count" value="10" min="1" max="500" />
                     </div>
                 </div>
                 <div class="mt-2">
                     <button class="btn btn-primary" onclick="runLoadTest()">Run Load Test</button>
                     <span class="text-sm text-dim" id="lt-status"></span>
                 </div>
+                <div class="text-dim text-sm mt-2">Fires N flows via async API. Each: POST → MongoDB → Kafka → 5 vendor steps.</div>
             </div>
 
             <!-- Failure Simulation -->
@@ -1912,6 +1902,49 @@
 
         refreshFlows();
         loadFailureConfig();
+        // ========== Start Flow (library async API) ==========
+        async function startFlow() {
+            const data = {
+                title: document.getElementById('flow-title').value,
+                content: 'Auto-generated content',
+                signerEmail: document.getElementById('flow-email').value
+            };
+            try {
+                const result = await fetchJson('/api/dashboard/flows/start', {
+                    method: 'POST', body: JSON.stringify(data)
+                });
+                showToast('Flow started (async via Kafka)', 'success');
+                setTimeout(refreshFlows, 1000);
+            } catch (e) {
+                showToast('Failed: ' + e.message, 'error');
+            }
+        }
+
+        // ========== Load Test ==========
+        async function runLoadTest() {
+            const count = parseInt(document.getElementById('lt-count').value) || 10;
+            const statusEl = document.getElementById('lt-status');
+            statusEl.textContent = 'Launching ' + count + ' flows...';
+
+            try {
+                const result = await fetchJson('/api/dashboard/flows/loadtest', {
+                    method: 'POST',
+                    body: JSON.stringify({ count })
+                });
+                statusEl.textContent = 'Launched ' + result.flowsStarted + ' flows via async API';
+                showToast('Load test: ' + result.flowsStarted + ' flows', 'success');
+                // Start auto-refresh to watch progress
+                if (!autoRefreshInterval) {
+                    autoRefreshInterval = setInterval(refreshFlows, 2000);
+                    document.getElementById('autoRefreshBtn').textContent = 'Auto-refresh: ON';
+                }
+                setTimeout(refreshFlows, 1000);
+            } catch (e) {
+                statusEl.textContent = 'Failed';
+                showToast('Load test failed', 'error');
+            }
+        }
+
         loadCollections();
         loadLadder();
     </script>
