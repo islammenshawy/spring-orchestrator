@@ -38,10 +38,20 @@ public class EnigioDocumentFlow extends FlowDefinition<EnigioFlow> {
     @RecoverOn(httpStatus = 409, message = "already", action = RecoverAction.SKIP)
     public void createDocument(EnigioFlow flow) {
         log.info("Creating document for flow {}", flow.getId());
+
+        // 1. API call
         Map res = vendorClient.post().uri("/documents")
                 .bodyValue(Map.of("title", flow.getTitle(), "content", flow.getContent()))
                 .retrieve().bodyToMono(Map.class).block();
+
+        // 2. Save result immediately — protects against crash between API
+        //    call and library's flow save. On redelivery, completedWhen sees
+        //    enigioDocumentId is set, skips the API call entirely.
         flow.setEnigioDocumentId((String) res.get("documentId"));
+        checkpoint(flow);
+
+        // 3. Additional DB writes are now safe — if we crash here,
+        //    the API result is already persisted
     }
 
     @Compensate(step = "createDocument")

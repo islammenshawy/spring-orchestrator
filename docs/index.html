@@ -78,6 +78,7 @@ Kafka retry topics with jittered exponential backoff. MongoDB persistence. Annot
         <li><a href="#retry">Retry with Jittered Backoff</a></li>
         <li><a href="#error-handling">Error Handling</a></li>
         <li><a href="#idempotency">Two-Layer Idempotency</a></li>
+        <li><a href="#checkpoint">Steps with API + DB Write (checkpoint)</a></li>
         <li><a href="#outbox">Transactional Outbox</a></li>
         <li><a href="#compensation">Saga Compensation (Rollback)</a></li>
         <li><a href="#crash">Container Crash Recovery</a></li>
@@ -345,6 +346,53 @@ Step executes → API call → result saved to MongoDB
 Redelivery → Layer 1: isProcessed? → NO → proceed
            → Layer 2: completedWhen? → YES (result in DB) → skip API
            → advance to next step → mark processed → done
+</div>
+
+<!-- ============================================================ -->
+<h2 id="checkpoint">Steps with API Call + DB Write</h2>
+
+<p>Most real steps call an external API <strong>and</strong> write to the database in the same method. The danger: if the container crashes after the API call but before the flow is saved, the result is lost and the API gets called again on redelivery.</p>
+
+<div class="grid grid-2">
+    <div class="card" style="border-left: 3px solid var(--danger)">
+        <h4 style="color: var(--danger)">Without checkpoint (unsafe for non-idempotent APIs)</h4>
+        <pre style="font-size:12px;border:none;padding:4px">1. API call → succeeds (money charged)
+2. flow.setPaymentId(...)  (in memory only)
+   ← CRASH →
+3. flowRepository.save()   ← NEVER RUNS
+   paymentId lost
+
+Redelivery → completedWhen = false
+  → API called AGAIN → double charge</pre>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--success)">
+        <h4 style="color: var(--success)">With checkpoint (safe)</h4>
+        <pre style="font-size:12px;border:none;padding:4px">1. API call → succeeds (money charged)
+2. flow.setPaymentId(...)
+3. checkpoint(flow)  ← SAVES TO DB NOW
+   ← CRASH →
+4. auditRepo.save()  ← lost, but safe
+
+Redelivery → completedWhen = true
+  → skip API → advance (no double charge)</pre>
+    </div>
+</div>
+
+<pre><code><span class="anno">@Step</span>(order = 1, completedWhen = "paymentId != null")
+public void chargePayment(OrderFlow flow) {
+    // 1. Call external API
+    var result = paymentClient.charge(flow.getAmount());
+
+    // 2. Save result immediately — crash-safe from this point
+    flow.setPaymentId(result.getId());
+    <strong>checkpoint(flow);</strong>
+
+    // 3. Additional DB writes are now safe
+    auditRepo.save(new AuditRecord(flow.getId(), result.getId()));
+}</code></pre>
+
+<div class="callout callout-warning">
+    <strong>When to use checkpoint:</strong> After any non-idempotent external API call where you need the result to survive a crash. If your vendor API supports idempotency keys (most modern APIs), the regular flow is fine — the duplicate call returns the same result.
 </div>
 
 <!-- ============================================================ -->
