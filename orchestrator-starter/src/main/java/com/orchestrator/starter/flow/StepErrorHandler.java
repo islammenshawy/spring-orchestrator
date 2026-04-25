@@ -8,17 +8,14 @@ import com.orchestrator.starter.exception.RetryableStepException;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Reads @RetryOn, @RecoverOn, @FailOn annotations from a step handler
- * and maps exceptions to the correct behavior.
+ * Maps exceptions to retry/recover/fail behavior using annotations.
  *
- * For MethodStepAdapter: reads from method first, falls back to class level.
- * For standalone StepHandler: reads from the class directly.
+ * Built-in defaults (when no annotations declared):
+ * - HTTP 5xx + 429 → retryable (Kafka retry topics)
+ * - HTTP 4xx (except 429) → non-retryable (FAILED immediately)
+ * - Any other exception → retryable
  *
- * Resolution order:
- * 1. @RecoverOn match → return (treat as success, skip to next step)
- * 2. @FailOn match → throw NonRetryableStepException
- * 3. @RetryOn match → throw RetryableStepException
- * 4. Default → treat as retryable
+ * Users can override with @RetryOn, @FailOn, @RecoverOn on class or method.
  */
 @Slf4j
 public class StepErrorHandler {
@@ -54,7 +51,7 @@ public class StepErrorHandler {
             }
         }
 
-        // 2. @FailOn — fail immediately
+        // 2. @FailOn — fail immediately (explicit)
         if (failOn != null) {
             if (httpStatus > 0 && contains(failOn.httpStatus(), httpStatus)) {
                 throw new NonRetryableStepException(
@@ -68,7 +65,7 @@ public class StepErrorHandler {
             }
         }
 
-        // 3. @RetryOn — retry via Kafka
+        // 3. @RetryOn — retry via Kafka (explicit)
         if (retryOn != null) {
             if (httpStatus > 0 && contains(retryOn.httpStatus(), httpStatus)) {
                 throw new RetryableStepException(
@@ -86,7 +83,21 @@ public class StepErrorHandler {
         if (ex instanceof RetryableStepException rse) throw rse;
         if (ex instanceof NonRetryableStepException nrse) throw nrse;
 
-        // 5. Default: retryable
+        // 5. BUILT-IN DEFAULTS (when no annotations match)
+        if (httpStatus > 0) {
+            // 5xx or 429 → retryable
+            if (httpStatus >= 500 || httpStatus == 429) {
+                throw new RetryableStepException(
+                        "HTTP " + httpStatus + " on " + handler.getStepName() + ": " + errorMessage, ex);
+            }
+            // 4xx (except 429) → non-retryable
+            if (httpStatus >= 400) {
+                throw new NonRetryableStepException(
+                        "HTTP " + httpStatus + " on " + handler.getStepName() + ": " + errorMessage, ex);
+            }
+        }
+
+        // 6. Non-HTTP exception with no annotation → retryable (safe default)
         throw new RetryableStepException(handler.getStepName() + " failed: " + errorMessage, ex);
     }
 

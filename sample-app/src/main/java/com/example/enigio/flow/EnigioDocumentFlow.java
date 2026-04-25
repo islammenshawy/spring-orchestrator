@@ -23,9 +23,10 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-@Flow(topic = "enigio.sample.commands")
-@RetryOn(httpStatus = {500, 502, 503, 429})
-@FailOn(httpStatus = {400, 403})
+@Flow  // topic from orchestrator.kafka.command-topic in application.yml
+       // @RetryOn/@FailOn not needed — built-in defaults:
+       //   5xx + 429 → retry via Kafka topics
+       //   4xx (except 429) → fail immediately
 public class EnigioDocumentFlow extends FlowDefinition<EnigioFlow> {
 
     private final WebClient vendorClient;
