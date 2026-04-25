@@ -47,8 +47,8 @@ public class OrchestratorKafkaConsumer<F extends OrchestratorFlow> {
         log.info("[topic={}][offset={}] Step {} for flow {}",
                 topic, offset, command.getStepName(), command.getFlowId());
 
-        // Execute — may throw RetryableStepException for Kafka retry routing
-        orchestrator.executeStep(command.getFlowId());
+        // Execute — passes step name from message (supports parallel steps)
+        orchestrator.executeStep(command.getFlowId(), command.getStepName());
 
         // Layer 1: mark processed AFTER successful completion
         idempotencyService.markProcessed(command.getEventId());

@@ -52,6 +52,10 @@ public class EnigioFlow implements OrchestratorFlow {
     @Version
     private Long version;
 
+    // Parallel step tracking (managed by library)
+    @Builder.Default
+    private java.util.Set<String> completedParallelSteps = new java.util.HashSet<>();
+
     // === Your domain fields ===
     private String title;
     private String content;

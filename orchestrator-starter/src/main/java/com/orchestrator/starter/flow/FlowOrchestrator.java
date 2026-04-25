@@ -44,19 +44,40 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         return flow;
     }
 
-    public void executeStep(String flowId) {
+    /**
+     * Execute a step by name. For sequential steps, stepName matches currentStep.
+     * For parallel steps, stepName is the specific parallel step from the Kafka message.
+     */
+    public void executeStep(String flowId, String stepName) {
         F flow = flowRepository.findById(flowId)
                 .orElseThrow(() -> new IllegalArgumentException("Flow not found: " + flowId));
 
         if (flow.getStatus() == FlowStatus.COMPLETED) return;
 
-        String stepName = flow.getCurrentStep();
+        // Use the step name from the Kafka message (supports parallel steps)
+        if (stepName == null) stepName = flow.getCurrentStep();
         StepHandler<F> handler = stepRegistry.getHandler(stepName);
+
+        // Check if this is a join point — all parallel steps must be done first
+        if (handler instanceof MethodStepAdapter<?> adapter && adapter.isJoinPoint()) {
+            String group = adapter.getJoinOnGroup();
+            List<StepHandler<F>> parallelSteps = stepRegistry.getParallelGroup(group);
+            boolean allDone = parallelSteps.stream()
+                    .allMatch(ps -> ps.isAlreadyCompleted(flow));
+            if (!allDone) {
+                log.info("[Saga] Join {} waiting — not all parallel steps in group '{}' completed",
+                        stepName, group);
+                return; // Don't ack — message will be redelivered
+            }
+            log.info("[Saga] Join {} — all parallel steps in group '{}' completed, proceeding",
+                    stepName, group);
+        }
 
         // Layer 2 idempotency
         if (handler.isAlreadyCompleted(flow)) {
-            log.info("[Saga] Step {} already completed for flow {}, advancing", stepName, flowId);
-            advanceToNextStep(flow);
+            log.info("[Saga] Step {} already completed for flow {}, marking parallel + advancing",
+                    stepName, flowId);
+            markParallelStepCompleted(flow, stepName, handler);
             return;
         }
 
@@ -109,7 +130,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         logStep(flowId, stepName, "COMPLETED", 1,
                 flowBefore, serialize(flow), null, startedAt);
 
-        advanceToNextStep(flow);
+        markParallelStepCompleted(flow, stepName, handler);
     }
 
     public void markDeadLettered(String flowId) {
@@ -172,8 +193,25 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         if (nextStep == null) {
             flow.setStatus(FlowStatus.COMPLETED);
             flow.setUpdatedAt(Instant.now());
+            flow.setCompletedParallelSteps(new java.util.HashSet<>());
             flowRepository.save(flow);
             log.info("[Saga] Flow {} completed", flow.getId());
+            return;
+        }
+
+        // Check if next steps form a parallel group
+        List<String> stepsAtNextOrder = stepRegistry.getStepsAtSameOrder(nextStep);
+        if (stepsAtNextOrder.size() > 1) {
+            // Parallel: publish one outbox event per parallel step
+            flow.setCurrentStep(nextStep);
+            flow.setCompletedParallelSteps(new java.util.HashSet<>());
+            flow.setUpdatedAt(Instant.now());
+            flowRepository.save(flow);
+            for (String parallelStep : stepsAtNextOrder) {
+                writeOutboxEvent(flow, parallelStep);
+            }
+            log.info("[Saga] Published {} parallel steps for flow {}: {}",
+                    stepsAtNextOrder.size(), flow.getId(), stepsAtNextOrder);
         } else {
             flow.setCurrentStep(nextStep);
             flow.setUpdatedAt(Instant.now());
@@ -203,13 +241,47 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         runCompensation(flow);
     }
 
+    /**
+     * After a parallel step completes, track it and check if all siblings are done.
+     * If all done, advance to the next step (which may be a @JoinOn step).
+     */
+    private void markParallelStepCompleted(F flow, String stepName, StepHandler<F> handler) {
+        if (handler instanceof MethodStepAdapter<?> adapter && adapter.isParallel()) {
+            java.util.Set<String> completed = new java.util.HashSet<>(flow.getCompletedParallelSteps());
+            completed.add(stepName);
+            flow.setCompletedParallelSteps(completed);
+            flow.setUpdatedAt(Instant.now());
+            flowRepository.save(flow);
+
+            // Check if all parallel siblings are done
+            List<StepHandler<F>> siblings = stepRegistry.getParallelGroup(adapter.getParallelGroup());
+            boolean allDone = siblings.stream().allMatch(s -> s.isAlreadyCompleted(flow));
+
+            if (allDone) {
+                log.info("[Saga] All parallel steps in group '{}' completed for flow {}",
+                        adapter.getParallelGroup(), flow.getId());
+                advanceToNextStep(flow);
+            } else {
+                log.info("[Saga] Parallel step {} done, waiting for siblings in group '{}'",
+                        stepName, adapter.getParallelGroup());
+            }
+        } else {
+            // Sequential step — just advance
+            advanceToNextStep(flow);
+        }
+    }
+
     private void writeOutboxEvent(F flow) {
+        writeOutboxEvent(flow, flow.getCurrentStep());
+    }
+
+    private void writeOutboxEvent(F flow, String stepNameOverride) {
         try {
             StepCommandMessage cmd = StepCommandMessage.builder()
                     .eventId(UUID.randomUUID().toString())
                     .flowId(flow.getId())
                     .correlationId(flow.getCorrelationId())
-                    .stepName(flow.getCurrentStep())
+                    .stepName(stepNameOverride)
                     .build();
 
             OutboxEvent event = OutboxEvent.builder()

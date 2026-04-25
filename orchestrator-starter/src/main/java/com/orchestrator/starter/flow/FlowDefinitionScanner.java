@@ -2,6 +2,8 @@ package com.orchestrator.starter.flow;
 
 import com.orchestrator.starter.annotation.Compensate;
 import com.orchestrator.starter.annotation.Flow;
+import com.orchestrator.starter.annotation.JoinOn;
+import com.orchestrator.starter.annotation.Parallel;
 import com.orchestrator.starter.annotation.Step;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import lombok.extern.slf4j.Slf4j;
@@ -96,6 +98,33 @@ public class FlowDefinitionScanner {
                     throw new IllegalStateException(
                             "@Compensate method " + clazz.getSimpleName() + "." + method.getName() +
                                     " must accept exactly one parameter extending OrchestratorFlow");
+                }
+            }
+
+            // Pass 3: validate @Parallel and @JoinOn
+            Set<String> parallelGroups = new HashSet<>();
+            Set<String> joinGroups = new HashSet<>();
+            for (Method method : clazz.getDeclaredMethods()) {
+                Parallel parallel = method.getAnnotation(Parallel.class);
+                if (parallel != null) {
+                    parallelGroups.add(parallel.group());
+                    // Parallel steps must have completedWhen (needed for join check)
+                    Step step = method.getAnnotation(Step.class);
+                    if (step != null && step.completedWhen().isEmpty()) {
+                        throw new IllegalStateException(
+                                "@Parallel step " + clazz.getSimpleName() + "." + method.getName() +
+                                        " must have completedWhen (needed for join verification)");
+                    }
+                }
+                JoinOn joinOn = method.getAnnotation(JoinOn.class);
+                if (joinOn != null) joinGroups.add(joinOn.group());
+            }
+            // Every @JoinOn group must have matching @Parallel group
+            for (String group : joinGroups) {
+                if (!parallelGroups.contains(group)) {
+                    throw new IllegalStateException(
+                            "@JoinOn references group '" + group + "' but no @Parallel steps " +
+                                    "with that group exist in " + clazz.getSimpleName());
                 }
             }
 

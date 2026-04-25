@@ -55,4 +55,12 @@ public interface OrchestratorFlow {
 
     Instant getUpdatedAt();
     void setUpdatedAt(Instant updatedAt);
+
+    /**
+     * Tracks which steps in a parallel group have completed.
+     * Managed by the library — users don't interact with this.
+     * Default implementation returns empty set (for non-parallel flows).
+     */
+    default java.util.Set<String> getCompletedParallelSteps() { return java.util.Set.of(); }
+    default void setCompletedParallelSteps(java.util.Set<String> steps) {}
 }

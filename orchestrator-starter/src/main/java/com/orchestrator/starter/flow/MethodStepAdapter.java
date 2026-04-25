@@ -30,7 +30,9 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
     private final Method method;
     private final Step stepAnnotation;
     private final String stepName;
-    private Method compensateMethod; // null if no @Compensate defined
+    private final String parallelGroup;  // null if not parallel
+    private final String joinOnGroup;    // null if not a join point
+    private Method compensateMethod;
 
     public MethodStepAdapter(Object flowDefinition, Method method, Step stepAnnotation) {
         this.flowDefinition = flowDefinition;
@@ -38,6 +40,12 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
         this.stepAnnotation = stepAnnotation;
         this.stepName = resolveStepName(method, stepAnnotation);
         this.method.setAccessible(true);
+
+        Parallel parallel = method.getAnnotation(Parallel.class);
+        this.parallelGroup = parallel != null ? parallel.group() : null;
+
+        JoinOn joinOn = method.getAnnotation(JoinOn.class);
+        this.joinOnGroup = joinOn != null ? joinOn.group() : null;
         this.compensateMethod = findCompensateMethod(flowDefinition.getClass(), method.getName());
     }
 
@@ -85,6 +93,11 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
         if (methodLevel != null) return methodLevel;
         return flowDefinition.getClass().getAnnotation(annotationType);
     }
+
+    public boolean isParallel() { return parallelGroup != null; }
+    public String getParallelGroup() { return parallelGroup; }
+    public boolean isJoinPoint() { return joinOnGroup != null; }
+    public String getJoinOnGroup() { return joinOnGroup; }
 
     public RetryOn getRetryOn() { return getAnnotation(RetryOn.class); }
     public FailOn getFailOn() { return getAnnotation(FailOn.class); }
