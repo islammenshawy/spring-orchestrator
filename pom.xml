@@ -15,18 +15,43 @@
     <artifactId>spring-orchestrator-parent</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <packaging>pom</packaging>
-    <name>Spring Orchestrator - Parent</name>
+    <name>Spring Orchestrator</name>
 
+    <!--
+      ============================================================
+      PUBLISHABLE LIBRARY (what teams depend on):
+        orchestrator-starter  — the reusable library
+        sample-app            — usage example
+
+      REFERENCE / DEMO (comparison only, not for production use):
+        common, saga-outbox, statemachine, spring-integration,
+        mock-vendor, dashboard
+      ============================================================
+    -->
+
+    <!-- Default build: only the library and sample app -->
     <modules>
-        <module>common</module>
-        <module>mock-vendor</module>
-        <module>saga-outbox</module>
-        <module>statemachine</module>
-        <module>dashboard</module>
-        <module>spring-integration</module>
         <module>orchestrator-starter</module>
         <module>sample-app</module>
     </modules>
+
+    <profiles>
+        <!-- Build everything including reference implementations:
+             mvn package -P demo -->
+        <profile>
+            <id>demo</id>
+            <modules>
+                <module>orchestrator-starter</module>
+                <module>sample-app</module>
+                <module>common</module>
+                <module>mock-vendor</module>
+                <module>saga-outbox</module>
+                <module>statemachine</module>
+                <module>spring-integration</module>
+                <module>dashboard</module>
+            </modules>
+        </profile>
+    </profiles>
 
     <properties>
         <java.version>21</java.version>
