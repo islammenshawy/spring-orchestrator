@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>orchestrator-starter — Documentation</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface2: #232733;
+            --border: #2d3140;
+            --text: #e4e6ed;
+            --dim: #8b8fa3;
+            --primary: #6366f1;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --info: #3b82f6;
+            --saga: #a78bfa;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+        .container { max-width: 960px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 32px; font-weight: 800; margin-bottom: 8px; }
+        h2 { font-size: 22px; font-weight: 700; margin: 48px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+        h3 { font-size: 17px; font-weight: 600; margin: 32px 0 12px; }
+        p { margin-bottom: 16px; color: var(--text); }
+        .subtitle { color: var(--dim); font-size: 16px; margin-bottom: 32px; }
+        a { color: var(--primary); text-decoration: none; }
+        code { background: var(--surface2); padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 13px; }
+        pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto; margin: 16px 0; font-size: 13px; line-height: 1.6; }
+        pre code { background: none; padding: 0; }
+        table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+        th { text-align: left; padding: 10px 12px; font-size: 12px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid var(--border); }
+        td { padding: 10px 12px; font-size: 14px; border-bottom: 1px solid var(--border); }
+        tr:hover { background: var(--surface2); }
+        .diagram { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px; margin: 16px 0; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.8; white-space: pre; overflow-x: auto; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+        .badge-success { background: rgba(34,197,94,0.15); color: var(--success); }
+        .badge-danger { background: rgba(239,68,68,0.15); color: var(--danger); }
+        .badge-warning { background: rgba(245,158,11,0.15); color: var(--warning); }
+        .badge-info { background: rgba(59,130,246,0.15); color: var(--info); }
+        .callout { padding: 14px 18px; border-radius: 8px; margin: 16px 0; font-size: 14px; }
+        .callout-info { background: rgba(59,130,246,0.08); border-left: 3px solid var(--info); }
+        .callout-warning { background: rgba(245,158,11,0.08); border-left: 3px solid var(--warning); }
+        .callout-success { background: rgba(34,197,94,0.08); border-left: 3px solid var(--success); }
+        .callout-danger { background: rgba(239,68,68,0.08); border-left: 3px solid var(--danger); }
+        .grid { display: grid; gap: 16px; margin: 16px 0; }
+        .grid-2 { grid-template-columns: 1fr 1fr; }
+        .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+        .card h4 { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+        .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px 24px; margin: 24px 0; }
+        .toc h3 { margin: 0 0 12px; font-size: 14px; color: var(--dim); text-transform: uppercase; }
+        .toc ul { list-style: none; }
+        .toc li { margin: 6px 0; }
+        .toc a { color: var(--text); font-size: 14px; }
+        .toc a:hover { color: var(--primary); }
+        .anno { color: var(--saga); }
+        @media (max-width: 768px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+<div class="container">
+
+<h1>orchestrator-starter</h1>
+<p class="subtitle">Saga + Transactional Outbox pattern as a Spring Boot starter library.<br>
+Kafka retry topics with jittered exponential backoff. MongoDB persistence. Annotation-driven.</p>
+
+<div class="toc">
+    <h3>Contents</h3>
+    <ul>
+        <li><a href="#pattern">The Pattern</a></li>
+        <li><a href="#quickstart">Quick Start</a></li>
+        <li><a href="#annotations">Annotations Reference</a></li>
+        <li><a href="#flow-types">Flow Types: Sequential, Parallel, Join</a></li>
+        <li><a href="#retry">Retry with Jittered Backoff</a></li>
+        <li><a href="#error-handling">Error Handling</a></li>
+        <li><a href="#idempotency">Two-Layer Idempotency</a></li>
+        <li><a href="#outbox">Transactional Outbox</a></li>
+        <li><a href="#compensation">Saga Compensation (Rollback)</a></li>
+        <li><a href="#crash">Container Crash Recovery</a></li>
+        <li><a href="#rebalancing">Kafka Rebalancing</a></li>
+        <li><a href="#config">Configuration Reference</a></li>
+        <li><a href="#collections">MongoDB Collections</a></li>
+        <li><a href="#deps">Dependencies</a></li>
+        <li><a href="#validation">Startup Validation</a></li>
+    </ul>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="pattern">The Pattern</h2>
+
+<p>The library implements the <strong>Saga Orchestrator</strong> pattern with a <strong>Transactional Outbox</strong> for reliable message delivery. Each workflow step is a separate Kafka message, executed by a single consumer with crash-resilient retry.</p>
+
+<div class="diagram">
+Your Application                     Library (auto-configured)
+─────────────                        ─────────────────────────
+
+@Flow class                          FlowOrchestrator
+  @Step methods      ──────────▶       ├── Step Registry
+  @Compensate                          ├── Outbox Writer
+  @RetryOn                             ├── Kafka Consumer
+  @RecoverOn                           ├── Retry Topic Config
+  @FailOn                              ├── Idempotency Service
+  @Parallel                            ├── Step Audit Logger
+  @JoinOn                              ├── Stale Flow Recovery
+                                       └── Compensation Engine
+
+Flow Entity          ──────────▶     MongoDB (flow state)
+  implements
+  OrchestratorFlow                   Kafka Topics (auto-created)
+                                       ├── {topic}
+                                       ├── {topic}-retry-0
+                                       ├── {topic}-retry-1
+                                       ├── {topic}-retry-2
+                                       └── {topic}-dlt
+</div>
+
+<!-- ============================================================ -->
+<h2 id="quickstart">Quick Start</h2>
+
+<h3>1. Add dependency</h3>
+<pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;com.enigio.orchestrator&lt;/groupId&gt;
+    &lt;artifactId&gt;orchestrator-starter&lt;/artifactId&gt;
+&lt;/dependency&gt;</code></pre>
+
+<h3>2. Define your flow (one class, all steps)</h3>
+<pre><code><span class="anno">@Component</span>
+<span class="anno">@Flow</span>(topic = "orders.commands")
+<span class="anno">@RetryOn</span>(httpStatus = {500, 502, 503, 429})
+<span class="anno">@FailOn</span>(httpStatus = {400, 403})
+public class OrderFlow extends FlowDefinition&lt;OrderEntity&gt; {
+
+    @Autowired private PaymentClient paymentClient;
+
+    <span class="anno">@Step</span>(order = 1, completedWhen = "paymentId != null")
+    <span class="anno">@RecoverOn</span>(httpStatus = 409, message = "already charged", action = RecoverAction.SKIP)
+    public void chargePayment(OrderEntity flow) {
+        var result = paymentClient.charge(flow.getAmount());
+        flow.setPaymentId(result.getId());
+    }
+
+    <span class="anno">@Compensate</span>(step = "chargePayment")
+    public void refundPayment(OrderEntity flow) {
+        paymentClient.refund(flow.getPaymentId());
+    }
+
+    <span class="anno">@Step</span>(order = 2, completedWhen = "trackingNumber != null")
+    public void shipOrder(OrderEntity flow) {
+        var result = shippingClient.ship(flow.getAddress());
+        flow.setTrackingNumber(result.getTracking());
+    }
+}</code></pre>
+
+<h3>3. Flow entity + repository (boilerplate)</h3>
+<pre><code><span class="anno">@Document</span>(collection = "order_flows")
+public class OrderEntity implements OrchestratorFlow {
+    @Id private String id;
+    private String correlationId, currentStep, errorMessage;
+    private FlowStatus status = FlowStatus.PENDING;
+    private int retryCount, backoffSeconds;
+    private Instant nextRetryAt, updatedAt;
+    private Set&lt;String&gt; completedParallelSteps = new HashSet&lt;&gt;();
+    @Version private Long version;
+
+    // Your fields
+    private BigDecimal amount;
+    private String paymentId, trackingNumber, address;
+}
+
+public interface OrderRepository extends OrchestratorFlowRepository&lt;OrderEntity&gt; {}</code></pre>
+
+<h3>4. Configure</h3>
+<pre><code>orchestrator:
+  kafka:
+    command-topic: orders.commands
+  retry:
+    max-attempts: 4
+    initial-interval-ms: 2000
+    multiplier: 2.0
+    jitter-factor: 0.5</code></pre>
+
+<div class="callout callout-success">
+    <strong>That's it.</strong> No orchestrator code, no outbox tables, no Kafka consumer classes, no retry logic. The library auto-configures everything.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="annotations">Annotations Reference</h2>
+
+<h3>Class-level (defaults for all steps)</h3>
+<table>
+    <tr><th>Annotation</th><th>Purpose</th><th>Example</th></tr>
+    <tr><td><code>@Flow(topic)</code></td><td>Marks class as a flow definition</td><td><code>@Flow(topic = "orders.commands")</code></td></tr>
+    <tr><td><code>@RetryOn(httpStatus, exceptions)</code></td><td>Which errors trigger Kafka retry</td><td><code>@RetryOn(httpStatus = {500, 502, 429})</code></td></tr>
+    <tr><td><code>@FailOn(httpStatus, exceptions)</code></td><td>Which errors fail immediately</td><td><code>@FailOn(httpStatus = {400, 403})</code></td></tr>
+</table>
+
+<h3>Method-level (override class defaults per step)</h3>
+<table>
+    <tr><th>Annotation</th><th>Purpose</th><th>Example</th></tr>
+    <tr><td><code>@Step(order, completedWhen)</code></td><td>Marks method as a step</td><td><code>@Step(order = 1, completedWhen = "paymentId != null")</code></td></tr>
+    <tr><td><code>@RecoverOn(httpStatus, message, action)</code></td><td>Auto-recover (e.g., vendor "already exists")</td><td><code>@RecoverOn(httpStatus = 409, action = SKIP)</code></td></tr>
+    <tr><td><code>@Compensate(step)</code></td><td>Rollback method for a step</td><td><code>@Compensate(step = "chargePayment")</code></td></tr>
+    <tr><td><code>@Parallel(group)</code></td><td>Execute concurrently with group</td><td><code>@Parallel(group = "prep")</code></td></tr>
+    <tr><td><code>@JoinOn(group)</code></td><td>Wait for all parallel steps in group</td><td><code>@JoinOn(group = "prep")</code></td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="flow-types">Flow Types</h2>
+
+<h3>Sequential (default)</h3>
+<div class="diagram">
+Step 1 ──▶ Step 2 ──▶ Step 3 ──▶ COMPLETED
+
+Each step is one Kafka message.
+Next step published via outbox after current step succeeds.
+</div>
+
+<h3>Parallel + Join</h3>
+<div class="diagram">
+Step 1
+  │
+  ├──▶ Step 2a  (@Parallel group="prep")     concurrent
+  ├──▶ Step 2b  (@Parallel group="prep")     Kafka messages
+  │
+  └──▶ Step 3   (@JoinOn group="prep")       waits for both
+  │
+  ▼
+COMPLETED
+</div>
+
+<pre><code><span class="anno">@Step</span>(order = 2, completedWhen = "attachmentId != null")
+<span class="anno">@Parallel</span>(group = "prep")
+public void uploadAttachment(MyFlow flow) { ... }
+
+<span class="anno">@Step</span>(order = 2, completedWhen = "signatureId != null")
+<span class="anno">@Parallel</span>(group = "prep")
+public void requestSignature(MyFlow flow) { ... }
+
+<span class="anno">@Step</span>(order = 3)
+<span class="anno">@JoinOn</span>(group = "prep")
+public void verifyBoth(MyFlow flow) {
+    // only runs when BOTH parallel steps completed
+}</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="retry">Retry with Jittered Exponential Backoff</h2>
+
+<div class="diagram">
+Step fails (HTTP 500 from vendor)
+  │
+  ├──▶ orders.commands              attempt 1     FAIL
+  │         │
+  │    ┌────▼─────────────────────────────────────────┐
+  │    │  orders.commands-retry-0    2s + jitter  FAIL │
+  │    │  orders.commands-retry-1    4s + jitter  FAIL │
+  │    │  orders.commands-retry-2    8s + jitter  FAIL │
+  │    └────┬─────────────────────────────────────────┘
+  │         │
+  │    ┌────▼────┐
+  │    │  -dlt   │  Dead Letter Topic
+  │    └────┬────┘
+  │         │
+  │         ▼
+  │    DLT Handler:
+  │      ├── flow.status = FAILED
+  │      └── @Compensate in reverse:
+  │            ├── undo step 2
+  │            └── undo step 1
+</div>
+
+<h3>Jitter prevents thundering herd</h3>
+
+<div class="grid grid-3">
+    <div class="card" style="border-top: 3px solid var(--danger)">
+        <h4 style="color: var(--danger)">jitter = 0.0</h4>
+        <pre style="font-size:11px;border:none;padding:8px">2000ms → 4000ms → 8000ms
+All retries aligned.
+100 flows hit vendor
+at the same instant.</pre>
+    </div>
+    <div class="card" style="border-top: 3px solid var(--success)">
+        <h4 style="color: var(--success)">jitter = 0.5 (recommended)</h4>
+        <pre style="font-size:11px;border:none;padding:8px">1000-2000ms → 2000-4000ms
+Minimum delay guaranteed.
+Retries spread evenly.</pre>
+    </div>
+    <div class="card" style="border-top: 3px solid var(--info)">
+        <h4 style="color: var(--info)">jitter = 1.0</h4>
+        <pre style="font-size:11px;border:none;padding:8px">0-2000ms → 0-4000ms
+Maximum spread.
+Risk of very short delays.</pre>
+    </div>
+</div>
+
+<p>Formula: <code>delay = base * (1 - factor) + random(0, base * factor)</code></p>
+
+<!-- ============================================================ -->
+<h2 id="error-handling">Error Handling</h2>
+
+<p>Resolution order when a step throws:</p>
+
+<table>
+    <tr><th>Priority</th><th>Annotation</th><th>Behavior</th><th>Example</th></tr>
+    <tr><td>1</td><td><code>@RecoverOn</code></td><td>Treat as success, skip API</td><td>HTTP 409 "already created"</td></tr>
+    <tr><td>2</td><td><code>@FailOn</code></td><td>FAILED immediately + compensation</td><td>HTTP 400 bad request</td></tr>
+    <tr><td>3</td><td><code>@RetryOn</code></td><td>Route to Kafka retry topic</td><td>HTTP 500 server error</td></tr>
+    <tr><td>4</td><td>Manual throw</td><td><code>RetryableStepException</code> / <code>NonRetryableStepException</code></td><td>"Signature not yet verified"</td></tr>
+    <tr><td>5</td><td>Default</td><td>Any unhandled exception → retryable</td><td>NullPointerException</td></tr>
+</table>
+
+<div class="callout callout-info">
+    <strong>No try/catch needed.</strong> Your <code>execute()</code> method is pure business logic. Declare error handling via annotations.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="idempotency">Two-Layer Idempotency</h2>
+
+<div class="grid grid-2">
+    <div class="card" style="border-left: 3px solid var(--info)">
+        <h4 style="color: var(--info)">Layer 1: Consumer (processed_events)</h4>
+        <p style="font-size:13px">Checks <code>eventId</code> from Kafka message. If already in <code>orchestrator_processed_events</code>, skip entirely.</p>
+        <p style="font-size:13px;color:var(--dim)"><strong>Protects:</strong> duplicate Kafka messages from redelivery after crash/rebalance.</p>
+        <p style="font-size:13px;color:var(--warning)"><strong>Key:</strong> marked AFTER step completes, not before.</p>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--warning)">
+        <h4 style="color: var(--warning)">Layer 2: Handler (completedWhen)</h4>
+        <p style="font-size:13px">SpEL expression on <code>@Step</code>: <code>completedWhen = "paymentId != null"</code>. If true, skip API call.</p>
+        <p style="font-size:13px;color:var(--dim)"><strong>Protects:</strong> crash between API call success and processed_events write.</p>
+        <p style="font-size:13px;color:var(--success)"><strong>Result:</strong> vendor API called at most once per step.</p>
+    </div>
+</div>
+
+<div class="diagram">
+Message delivered → Layer 1: isProcessed? → NO → execute step
+                                           YES → skip (fast path)
+
+Step executes → API call → result saved to MongoDB
+             ← CRASH →
+             processed_events NOT written
+
+Redelivery → Layer 1: isProcessed? → NO → proceed
+           → Layer 2: completedWhen? → YES (result in DB) → skip API
+           → advance to next step → mark processed → done
+</div>
+
+<!-- ============================================================ -->
+<h2 id="outbox">Transactional Outbox</h2>
+
+<div class="grid grid-2">
+    <div class="card" style="border-left: 3px solid var(--danger)">
+        <h4 style="color: var(--danger)">Without outbox (direct Kafka publish)</h4>
+        <pre style="font-size:12px;border:none;padding:4px">1. Save flow to MongoDB     ✓
+← CONTAINER CRASH →
+2. Publish to Kafka         ✗ LOST
+→ Flow stuck forever</pre>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--success)">
+        <h4 style="color: var(--success)">With outbox (this library)</h4>
+        <pre style="font-size:12px;border:none;padding:4px">1. Save flow to MongoDB     ✓
+2. Save outbox event (same DB) ✓
+← CONTAINER CRASH →
+3. OutboxPublisher polls    → sends to Kafka
+→ Flow continues (~500ms)</pre>
+    </div>
+</div>
+
+<div class="callout callout-info">
+    Enable <code>orchestrator.mongodb.transactions-enabled=true</code> on MongoDB replica sets for fully atomic flow + outbox writes.
+</div>
+
+<!-- ============================================================ -->
+<h2 id="compensation">Saga Compensation (Rollback)</h2>
+
+<div class="diagram">
+Step 1: chargePayment     ✓ completed
+Step 2: shipOrder         ✓ completed
+Step 3: generateInvoice   ✗ FAILED (non-retryable)
+  │
+  ▼ Compensation runs in reverse:
+  ├── @Compensate("shipOrder")     → cancelShipment()
+  └── @Compensate("chargePayment") → refundPayment()
+  │
+  ▼ flow.status = FAILED
+</div>
+
+<p>Compensation runs automatically on:</p>
+<ul style="margin:8px 0 16px 24px">
+    <li><code>NonRetryableStepException</code> (immediate failure)</li>
+    <li>Dead letter (all Kafka retries exhausted)</li>
+</ul>
+
+<p>Steps without <code>@Compensate</code> are skipped with a warning log.</p>
+
+<!-- ============================================================ -->
+<h2 id="crash">Container Crash Recovery</h2>
+
+<div class="diagram">
+Pod A processing flow-123, step=UPLOAD_ATTACHMENT:
+  1. API call succeeds → attachmentId saved to MongoDB  ✓
+  2. Outbox event written to MongoDB                    ✓
+     ← POD A CRASHES →
+  3. Kafka offset not committed                         ✗
+
+Recovery path 1 — Outbox (primary, ~500ms):
+  OutboxPublisher on any surviving pod
+    → polls → finds unpublished event → sends to Kafka
+    → next step executes on any available pod
+
+Recovery path 2 — Kafka redelivery (30s):
+  Kafka detects Pod A dead (session.timeout.ms)
+    → rebalance → Pod B gets partition
+    → message redelivered → Layer 2: attachmentId already set → skip API
+    → advance to next step
+
+Recovery path 3 — Safety net (5 min):
+  StaleFlowRecoveryService scans for IN_PROGRESS flows
+    → re-publishes step command to Kafka
+</div>
+
+<!-- ============================================================ -->
+<h2 id="rebalancing">Kafka Rebalancing</h2>
+
+<div class="grid grid-2">
+    <div class="card" style="border-top: 3px solid var(--danger)">
+        <h4 style="color: var(--danger)">Default RangeAssignor</h4>
+        <pre style="font-size:11px;border:none;padding:4px">Pod C joins:
+A: [P0,P1,P2] → [] STOP ALL
+B: [P3,P4,P5] → [] STOP ALL
+(wait 30s)
+A: [P0,P1]  B: [P3,P4]  C: [P2,P5]
+= 30s of ZERO processing</pre>
+    </div>
+    <div class="card" style="border-top: 3px solid var(--success)">
+        <h4 style="color: var(--success)">CooperativeStickyAssignor (used)</h4>
+        <pre style="font-size:11px;border:none;padding:4px">Pod C joins:
+A: [P0,P1,P2] → revoke P2 → [P0,P1] keeps running
+B: [P3,P4,P5] → revoke P5 → [P3,P4] keeps running
+C: gets [P2,P5]
+= only P2,P5 paused briefly</pre>
+    </div>
+</div>
+
+<h3>Guarantees during rebalancing</h3>
+<table>
+    <tr><th>Guarantee</th><th>Status</th><th>Mechanism</th></tr>
+    <tr><td>No duplicate API calls</td><td><span class="badge badge-success">Guaranteed</span></td><td>Layer 2: completedWhen checks result fields</td></tr>
+    <tr><td>No lost messages</td><td><span class="badge badge-success">Guaranteed</span></td><td>Kafka redelivers uncommitted offsets</td></tr>
+    <tr><td>No stuck flows</td><td><span class="badge badge-success">Guaranteed</span></td><td>Outbox + recovery service + Kafka redelivery</td></tr>
+    <tr><td>Flow step ordering</td><td><span class="badge badge-success">Guaranteed</span></td><td>flowId as Kafka key → same partition</td></tr>
+    <tr><td>Minimal processing pause</td><td><span class="badge badge-success">Yes</span></td><td>CooperativeStickyAssignor</td></tr>
+    <tr><td>Instant crash detection</td><td><span class="badge badge-warning">~30s</span></td><td>session.timeout.ms (outbox recovers in ~500ms)</td></tr>
+</table>
+
+<p>All rebalancing config is standard Spring Boot YAML — no custom library code:</p>
+<pre><code>spring.kafka.consumer.properties:
+  partition.assignment.strategy: CooperativeStickyAssignor
+  session.timeout.ms: 30000
+  heartbeat.interval.ms: 10000
+  # group.instance.id: ${HOSTNAME}   # for Kubernetes StatefulSet
+  # client.rack: ${KAFKA_RACK}       # for multi-region</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="config">Configuration Reference</h2>
+
+<table>
+    <tr><th>Property</th><th>Default</th><th>Description</th></tr>
+    <tr><td><code>orchestrator.kafka.command-topic</code></td><td><code>orchestrator.commands</code></td><td>Kafka topic for step commands</td></tr>
+    <tr><td><code>orchestrator.retry.max-attempts</code></td><td><code>4</code></td><td>1 initial + N-1 retries</td></tr>
+    <tr><td><code>orchestrator.retry.initial-interval-ms</code></td><td><code>2000</code></td><td>First retry delay (ms)</td></tr>
+    <tr><td><code>orchestrator.retry.multiplier</code></td><td><code>2.0</code></td><td>Exponential multiplier</td></tr>
+    <tr><td><code>orchestrator.retry.max-interval-ms</code></td><td><code>30000</code></td><td>Max retry delay cap (ms)</td></tr>
+    <tr><td><code>orchestrator.retry.jitter-factor</code></td><td><code>0.5</code></td><td>0.0=none, 0.5=equal, 1.0=full</td></tr>
+    <tr><td><code>orchestrator.recovery.scan-interval-ms</code></td><td><code>30000</code></td><td>Stale flow scan interval</td></tr>
+    <tr><td><code>orchestrator.recovery.stale-threshold-minutes</code></td><td><code>5</code></td><td>Mark stale after N minutes</td></tr>
+    <tr><td><code>orchestrator.mongodb.transactions-enabled</code></td><td><code>false</code></td><td>Atomic outbox on replica set</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="collections">MongoDB Collections</h2>
+
+<table>
+    <tr><th>Collection</th><th>Managed by</th><th>Purpose</th></tr>
+    <tr><td>Your flow collection</td><td>You</td><td>Flow state + domain fields</td></tr>
+    <tr><td><code>orchestrator_outbox</code></td><td>Library</td><td>Pending Kafka publishes (transactional outbox)</td></tr>
+    <tr><td><code>orchestrator_processed_events</code></td><td>Library</td><td>Consumer idempotency keys (Layer 1)</td></tr>
+    <tr><td><code>orchestrator_step_log</code></td><td>Library</td><td>Step execution audit trail (before/after snapshots)</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="deps">Dependencies</h2>
+
+<div class="grid grid-2">
+    <div class="card">
+        <h4>Pulled by library</h4>
+        <ul style="margin:8px 0 0 16px;font-size:13px">
+            <li><code>spring-boot-starter-data-mongodb</code></li>
+            <li><code>spring-kafka</code></li>
+            <li><code>spring-retry</code></li>
+            <li><code>spring-boot-autoconfigure</code></li>
+        </ul>
+    </div>
+    <div class="card">
+        <h4>Not pulled (your app provides)</h4>
+        <ul style="margin:8px 0 0 16px;font-size:13px">
+            <li><code>spring-boot-starter-web</code></li>
+            <li><code>spring-boot-starter-webflux</code></li>
+            <li><code>jackson-databind</code> (provided scope)</li>
+        </ul>
+    </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="validation">Startup Validation</h2>
+
+<p>The library validates at application startup. If any rule fails, the Spring context fails to start with a clear error message:</p>
+
+<table>
+    <tr><th>Rule</th><th>Error if violated</th></tr>
+    <tr><td><code>@Compensate(step="X")</code> must reference an existing <code>@Step</code> method</td><td>Lists available step method names</td></tr>
+    <tr><td><code>@JoinOn(group="X")</code> must reference an existing <code>@Parallel</code> group</td><td>Lists available parallel groups</td></tr>
+    <tr><td><code>@Parallel</code> steps must have <code>completedWhen</code></td><td>Needed for join verification</td></tr>
+    <tr><td>No duplicate step orders within a <code>@Flow</code></td><td>Lists the conflicting order number</td></tr>
+    <tr><td>No duplicate step names within a <code>@Flow</code></td><td>Lists the conflicting name</td></tr>
+    <tr><td><code>@Step</code> and <code>@Compensate</code> methods must accept one <code>OrchestratorFlow</code> parameter</td><td>Lists the invalid method signature</td></tr>
+</table>
+
+<div class="callout callout-success">
+    Any <code>@SpringBootTest</code> will catch these errors. No misconfiguration can reach production.
+</div>
+
+<!-- ============================================================ -->
+
+<p style="text-align:center;color:var(--dim);margin-top:48px;font-size:12px">
+    orchestrator-starter — Saga + Outbox pattern as a Spring Boot library.<br>
+    Java 21+ &middot; Spring Boot 3.2+ &middot; MongoDB &middot; Kafka
+</p>
+
+</div>
+</body>
+</html>
