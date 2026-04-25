@@ -61,16 +61,14 @@ public class FlowEndpointAutoConfiguration {
 
         @GetMapping("/{id}")
         public ResponseEntity<?> getFlow(@PathVariable String id) {
-            return repository.findById(id)
-                    .map(f -> ResponseEntity.ok(f))
-                    .orElse(ResponseEntity.notFound().build());
+            Object found = repository.findById(id).orElse(null);
+            return found != null ? ResponseEntity.ok(found) : ResponseEntity.notFound().build();
         }
 
         @GetMapping("/correlation/{correlationId}")
         public ResponseEntity<?> getByCorrelation(@PathVariable String correlationId) {
-            return repository.findByCorrelationId(correlationId)
-                    .map(f -> ResponseEntity.ok(f))
-                    .orElse(ResponseEntity.notFound().build());
+            Object found = repository.findByCorrelationId(correlationId).orElse(null);
+            return found != null ? ResponseEntity.ok(found) : ResponseEntity.notFound().build();
         }
     }
 }

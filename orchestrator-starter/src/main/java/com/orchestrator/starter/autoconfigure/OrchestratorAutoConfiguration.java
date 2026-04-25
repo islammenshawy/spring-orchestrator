@@ -53,6 +53,7 @@ import java.util.List;
 @Slf4j
 @AutoConfiguration
 @EnableScheduling
+@org.springframework.boot.autoconfigure.AutoConfigurationPackage
 @EnableConfigurationProperties(OrchestratorProperties.class)
 public class OrchestratorAutoConfiguration {
 
@@ -60,6 +61,40 @@ public class OrchestratorAutoConfiguration {
     @ConditionalOnMissingBean
     public IdempotencyService orchestratorIdempotencyService(ProcessedEventRepository repository) {
         return new IdempotencyService(repository);
+    }
+
+    /**
+     * Auto-generates a repository if the user hasn't defined one.
+     * Discovers the entity type from FlowDefinition<F> via reflection.
+     */
+    @Bean
+    @ConditionalOnMissingBean(OrchestratorFlowRepository.class)
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public OrchestratorFlowRepository<?> orchestratorGenericFlowRepository(
+            org.springframework.data.mongodb.core.MongoTemplate mongoTemplate,
+            ApplicationContext context) {
+
+        // Discover entity type from @Flow class's FlowDefinition<F> generic parameter
+        Class<?> entityClass = discoverEntityType(context);
+        log.info("Auto-generated repository for entity: {}", entityClass.getSimpleName());
+        return new com.orchestrator.starter.domain.GenericFlowRepository(mongoTemplate, entityClass);
+    }
+
+    private Class<?> discoverEntityType(ApplicationContext context) {
+        var flowBeans = context.getBeansWithAnnotation(
+                com.orchestrator.starter.annotation.Flow.class);
+        for (Object flowDef : flowBeans.values()) {
+            Class<?> clazz = flowDef.getClass();
+            java.lang.reflect.Type superclass = clazz.getGenericSuperclass();
+            if (superclass instanceof java.lang.reflect.ParameterizedType pt) {
+                java.lang.reflect.Type[] args = pt.getActualTypeArguments();
+                if (args.length > 0 && args[0] instanceof Class<?> entityClass) {
+                    return entityClass;
+                }
+            }
+        }
+        // Fallback
+        return com.orchestrator.starter.domain.AbstractFlow.class;
     }
 
     /**
