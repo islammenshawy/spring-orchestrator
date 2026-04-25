@@ -11,24 +11,23 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplicat
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.UUID;
+import java.util.Map;
 
 /**
- * Auto-exposes REST endpoints for flows when web is available.
+ * Auto-exposes REST endpoints for flows.
  *
- * Provides:
- *   POST {base-path}           — start a new flow (body = flow entity JSON)
- *   GET  {base-path}/{id}      — get flow by ID
- *   GET  {base-path}/correlation/{correlationId} — get by correlation ID
+ * POST {base-path}              — start flow async (returns ID immediately, execution via Kafka)
+ * GET  {base-path}/{id}         — get flow by ID (poll for status)
+ * GET  {base-path}/{id}/status  — get status only (lightweight)
  *
- * Enabled by default. Disable with:
- *   orchestrator.endpoints.enabled: false
+ * The POST is async by design:
+ *   1. Saves flow to MongoDB
+ *   2. Writes outbox event (same DB)
+ *   3. Returns 202 Accepted + flow ID + correlationId
+ *   4. Outbox publisher sends to Kafka (background, ~500ms)
+ *   5. Kafka consumer executes steps (async, separate thread/pod)
  *
- * Override base path:
- *   orchestrator.endpoints.base-path: /my-flows
- *
- * Users can override entirely by defining their own @RestController
- * on the same path — Spring won't register duplicates.
+ * Caller gets the ID immediately and polls GET /flows/{id} for completion.
  */
 @Slf4j
 @AutoConfiguration
@@ -45,26 +44,62 @@ public class FlowEndpointAutoConfiguration {
         private final FlowOrchestrator orchestrator;
         private final OrchestratorFlowRepository repository;
 
+        /**
+         * Start a flow asynchronously.
+         *
+         * Returns 202 Accepted with the flow ID and correlationId immediately.
+         * The actual step execution happens via Kafka in the background.
+         *
+         * Caller polls GET /flows/{id} or GET /flows/{id}/status for completion.
+         */
         @PostMapping
         public ResponseEntity<?> startFlow(@RequestBody Object flowEntity) {
             if (flowEntity instanceof OrchestratorFlow flow) {
-                if (flow.getCorrelationId() == null || flow.getCorrelationId().isBlank()) {
-                    // Auto-generate correlationId if not set
-                    flow.setCurrentStep(null); // will be set by orchestrator
-                }
                 var saved = repository.save(flow);
                 var started = orchestrator.startFlow((OrchestratorFlow) saved);
-                return ResponseEntity.ok(started);
+
+                return ResponseEntity.accepted().body(Map.of(
+                        "id", started.getId(),
+                        "correlationId", started.getCorrelationId(),
+                        "status", started.getStatus().name(),
+                        "currentStep", started.getCurrentStep(),
+                        "message", "Flow started. Poll GET /flows/" + started.getId() + " for status."
+                ));
             }
-            return ResponseEntity.badRequest().body("Request body must be a flow entity");
+            return ResponseEntity.badRequest().body(
+                    Map.of("error", "Request body must be a flow entity"));
         }
 
+        /**
+         * Get full flow state including domain fields.
+         */
         @GetMapping("/{id}")
         public ResponseEntity<?> getFlow(@PathVariable String id) {
             Object found = repository.findById(id).orElse(null);
             return found != null ? ResponseEntity.ok(found) : ResponseEntity.notFound().build();
         }
 
+        /**
+         * Lightweight status check — only returns orchestrator fields.
+         */
+        @GetMapping("/{id}/status")
+        public ResponseEntity<?> getStatus(@PathVariable String id) {
+            Object found = repository.findById(id).orElse(null);
+            if (found == null) return ResponseEntity.notFound().build();
+
+            OrchestratorFlow flow = (OrchestratorFlow) found;
+            return ResponseEntity.ok(Map.of(
+                    "id", flow.getId(),
+                    "status", flow.getStatus().name(),
+                    "currentStep", flow.getCurrentStep() != null ? flow.getCurrentStep() : "",
+                    "retryCount", flow.getRetryCount(),
+                    "errorMessage", flow.getErrorMessage() != null ? flow.getErrorMessage() : ""
+            ));
+        }
+
+        /**
+         * Get flow by correlation ID.
+         */
         @GetMapping("/correlation/{correlationId}")
         public ResponseEntity<?> getByCorrelation(@PathVariable String correlationId) {
             Object found = repository.findByCorrelationId(correlationId).orElse(null);

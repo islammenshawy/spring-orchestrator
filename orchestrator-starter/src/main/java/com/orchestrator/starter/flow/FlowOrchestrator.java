@@ -12,6 +12,7 @@ import com.orchestrator.starter.outbox.OutboxEvent;
 import com.orchestrator.starter.outbox.OutboxEventRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
@@ -35,6 +36,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private final String commandTopic;
     private final TransactionTemplate txTemplate;
     private final boolean includeFlowStateInLogs;
+    private final KafkaTemplate<String, String> kafkaTemplate;
 
     public FlowOrchestrator(
             OrchestratorFlowRepository<F> flowRepository,
@@ -44,7 +46,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             ObjectMapper objectMapper,
             String commandTopic,
             TransactionTemplate txTemplate,
-            boolean includeFlowStateInLogs) {
+            boolean includeFlowStateInLogs,
+            KafkaTemplate<String, String> kafkaTemplate) {
         this.flowRepository = flowRepository;
         this.stepRegistry = stepRegistry;
         this.outboxRepository = outboxRepository;
@@ -53,19 +56,44 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         this.commandTopic = commandTopic;
         this.includeFlowStateInLogs = includeFlowStateInLogs;
         this.txTemplate = txTemplate;
+        this.kafkaTemplate = kafkaTemplate;
     }
 
+    /**
+     * Starts a flow: saves to MongoDB, publishes first step to Kafka,
+     * then returns. The caller gets the flow ID immediately.
+     *
+     * The Kafka publish happens synchronously (waits for broker ack)
+     * so the message is guaranteed to be in Kafka before we return.
+     * The outbox event is also written as a safety net for subsequent steps.
+     */
     public F startFlow(F flow) {
         flow.setCurrentStep(stepRegistry.getFirstStep());
         flow.setStatus(FlowStatus.IN_PROGRESS);
         flow.setUpdatedAt(Instant.now());
 
-        // Atomic: flow save + outbox event in one transaction (if available)
+        // Save flow + outbox event atomically
         F savedFlow = runInTransaction(() -> {
             F f = flowRepository.save(flow);
             writeOutboxEvent(f);
             return f;
         }, flow);
+
+        // Publish to Kafka synchronously — message is in Kafka before we return
+        try {
+            StepCommandMessage cmd = StepCommandMessage.builder()
+                    .eventId(UUID.randomUUID().toString())
+                    .flowId(savedFlow.getId())
+                    .correlationId(savedFlow.getCorrelationId())
+                    .stepName(savedFlow.getCurrentStep())
+                    .build();
+            kafkaTemplate.send(commandTopic, savedFlow.getId(),
+                    objectMapper.writeValueAsString(cmd)).get();
+        } catch (Exception e) {
+            // Kafka publish failed — outbox publisher will pick it up (~500ms)
+            log.warn("[Saga] Direct Kafka publish failed for flow {}, outbox will retry: {}",
+                    savedFlow.getId(), e.getMessage());
+        }
 
         return savedFlow;
     }

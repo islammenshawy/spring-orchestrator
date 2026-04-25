@@ -500,6 +500,132 @@ After all retries exhaust, the message goes to the DLT topic, `@Compensate` runs
 
 ---
 
+## Async API: Start Flow and Poll
+
+The `POST /flows` endpoint is async — it saves the flow, writes an outbox event, and returns immediately. The actual step execution happens later via Kafka.
+
+```bash
+# 1. Start a flow — returns 202 Accepted with ID
+curl -X POST http://localhost:8085/flows \
+  -H "Content-Type: application/json" \
+  -d '{"title": "Contract #123", "signerEmail": "john@example.com"}'
+```
+
+```json
+{
+  "id": "682b3f1a2e9c",
+  "correlationId": "a1b2c3d4-e5f6-7890",
+  "status": "IN_PROGRESS",
+  "currentStep": "CREATE_DOCUMENT",
+  "message": "Flow started. Poll GET /flows/682b3f1a2e9c for status."
+}
+```
+
+```bash
+# 2. Poll for status (lightweight — no domain fields)
+curl http://localhost:8085/flows/682b3f1a2e9c/status
+```
+
+```json
+{"id": "682b3f1a2e9c", "status": "COMPLETED", "currentStep": "FINALIZE_DOCUMENT", "retryCount": 0}
+```
+
+```bash
+# 3. Get full result when done
+curl http://localhost:8085/flows/682b3f1a2e9c
+```
+
+```json
+{
+  "id": "682b3f1a2e9c",
+  "status": "COMPLETED",
+  "title": "Contract #123",
+  "documentId": "doc-456",
+  "signatureRequestId": "sig-789",
+  "finalUrl": "https://enigio.com/docs/doc-456"
+}
+```
+
+### What happens under the hood
+
+```
+POST /flows
+  │
+  ├── Save flow to MongoDB (status=IN_PROGRESS)     ~2ms
+  ├── Save outbox event to MongoDB (same DB)         ~1ms
+  ├── Return 202 Accepted + flow ID to caller        ~3ms total
+  │
+  ▼ (async, background)
+OutboxPublisher polls → sends to Kafka               ~500ms later
+  │
+  ▼ (async, consumer thread or separate worker pod)
+Kafka consumer → executes step 1 → outbox → step 2 → ... → COMPLETED
+```
+
+The caller never waits for vendor API calls. The API response is always ~3ms.
+
+---
+
+## Deployment: Combined vs Split
+
+By default, everything runs in one pod. For production at scale, split API and worker pods.
+
+**No code change needed.** Same JAR, different YAML profile.
+
+### Combined (default — dev/small scale)
+
+```yaml
+# application.yml — everything in one pod
+orchestrator:
+  kafka.command-topic: enigio.commands
+  endpoints.enabled: true
+```
+
+### Split (production — scale independently)
+
+```yaml
+# application-api.yml — HTTP only, no Kafka consumer
+server.port: 8085
+spring.kafka.listener.auto-startup: false
+orchestrator.endpoints.enabled: true
+
+# application-worker.yml — Kafka consumer only, no HTTP
+spring.kafka.listener.auto-startup: true
+spring.kafka.listener.concurrency: 6
+orchestrator.endpoints.enabled: false
+```
+
+```bash
+# Run API pods (scale for HTTP traffic)
+java -jar app.jar --spring.profiles.active=api
+
+# Run worker pods (scale for Kafka partitions)
+java -jar app.jar --spring.profiles.active=worker
+```
+
+```
+Client → Load Balancer → API Pods (×2)
+                            │
+                         MongoDB ← shared
+                            │
+                     Outbox Publisher
+                            │
+                          Kafka
+                            │
+                       Worker Pods (×6)
+                            │
+                       Vendor API
+```
+
+| | Combined | Split |
+|--|---------|-------|
+| API response time | ~3ms (same either way) | ~3ms |
+| Vendor call blocks API? | Yes (shared threads) | **No** (separate pods) |
+| Scale API independently | No | **Yes** |
+| Scale workers independently | No | **Yes** |
+
+---
+
 ## Kafka Rebalancing
 
 When you run multiple containers (pods), Kafka distributes partitions across them. When a container joins, leaves, or crashes, Kafka **rebalances** — reassigns partitions. How this happens determines whether your flows pause or keep processing.

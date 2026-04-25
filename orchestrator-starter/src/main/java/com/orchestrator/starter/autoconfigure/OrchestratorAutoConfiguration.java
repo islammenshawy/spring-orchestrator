@@ -136,6 +136,7 @@ public class OrchestratorAutoConfiguration {
             StepExecutionLogRepository stepLogRepository,
             ObjectMapper objectMapper,
             OrchestratorProperties props,
+            KafkaTemplate<String, String> kafkaTemplate,
             @Autowired(required = false) TransactionTemplate transactionTemplate) {
 
         boolean txEnabled = transactionTemplate != null;
@@ -146,7 +147,7 @@ public class OrchestratorAutoConfiguration {
         return new FlowOrchestrator(
                 flowRepository, stepRegistry, outboxRepository, stepLogRepository,
                 objectMapper, props.getKafka().getCommandTopic(), transactionTemplate,
-                props.getAudit().isIncludeFlowState());
+                props.getAudit().isIncludeFlowState(), kafkaTemplate);
     }
 
     @Bean
