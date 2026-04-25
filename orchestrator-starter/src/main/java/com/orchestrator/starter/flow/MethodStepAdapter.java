@@ -30,6 +30,7 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
     private final Method method;
     private final Step stepAnnotation;
     private final String stepName;
+    private Method compensateMethod; // null if no @Compensate defined
 
     public MethodStepAdapter(Object flowDefinition, Method method, Step stepAnnotation) {
         this.flowDefinition = flowDefinition;
@@ -37,6 +38,7 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
         this.stepAnnotation = stepAnnotation;
         this.stepName = resolveStepName(method, stepAnnotation);
         this.method.setAccessible(true);
+        this.compensateMethod = findCompensateMethod(flowDefinition.getClass(), method.getName());
     }
 
     @Override
@@ -94,6 +96,34 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
 
     public StepType getStepType() {
         return stepAnnotation.type();
+    }
+
+    public boolean hasCompensation() {
+        return compensateMethod != null;
+    }
+
+    public void compensate(F flow) {
+        if (compensateMethod == null) {
+            log.warn("[Step:{}] No @Compensate method defined, skipping compensation", stepName);
+            return;
+        }
+        try {
+            log.info("[Step:{}] Executing compensation", stepName);
+            compensateMethod.invoke(flowDefinition, flow);
+        } catch (Exception e) {
+            log.error("[Step:{}] Compensation failed: {}", stepName, e.getMessage());
+        }
+    }
+
+    private static Method findCompensateMethod(Class<?> clazz, String stepMethodName) {
+        for (Method m : clazz.getDeclaredMethods()) {
+            Compensate comp = m.getAnnotation(Compensate.class);
+            if (comp != null && comp.step().equals(stepMethodName)) {
+                m.setAccessible(true);
+                return m;
+            }
+        }
+        return null;
     }
 
     private static String resolveStepName(Method method, Step annotation) {

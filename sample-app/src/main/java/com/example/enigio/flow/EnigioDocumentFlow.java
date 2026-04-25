@@ -1,6 +1,7 @@
 package com.example.enigio.flow;
 
 import com.orchestrator.starter.annotation.*;
+import com.orchestrator.starter.annotation.Compensate;
 import com.orchestrator.starter.exception.RetryableStepException;
 import com.orchestrator.starter.flow.FlowDefinition;
 import lombok.extern.slf4j.Slf4j;
@@ -41,6 +42,12 @@ public class EnigioDocumentFlow extends FlowDefinition<EnigioFlow> {
                 .bodyValue(Map.of("title", flow.getTitle(), "content", flow.getContent()))
                 .retrieve().bodyToMono(Map.class).block();
         flow.setEnigioDocumentId((String) res.get("documentId"));
+    }
+
+    @Compensate(step = "createDocument")
+    public void undoCreateDocument(EnigioFlow flow) {
+        log.info("Compensating: would delete document {} (no-op in demo)", flow.getEnigioDocumentId());
+        // In production: vendorClient.delete().uri("/documents/{id}", flow.getEnigioDocumentId())...
     }
 
     @Step(order = 2, completedWhen = "attachmentId != null")

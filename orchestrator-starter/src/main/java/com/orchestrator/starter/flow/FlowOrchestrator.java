@@ -1,5 +1,7 @@
 package com.orchestrator.starter.flow;
 
+import com.orchestrator.starter.audit.StepExecutionLog;
+import com.orchestrator.starter.audit.StepExecutionLogRepository;
 import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
@@ -13,24 +15,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
- * Generic flow orchestrator with transactional outbox.
+ * Saga orchestrator with transactional outbox.
  *
- * All flow state changes + outbox event writes happen in the same
- * MongoDB operation. The outbox publisher polls and sends to Kafka later.
- *
- * This means:
- * - Flow state and the "publish next step" intent are written together
- * - If container crashes after write: outbox publisher picks up the event
- * - If container crashes before write: nothing happened, Kafka redelivers
- * - No gap where a flow is saved but the next step command is lost
- *
- * On MongoDB replica set with @Transactional: fully atomic.
- * On standalone MongoDB: two sequential writes (narrower gap than direct Kafka).
- *
- * @param <F> the flow entity type
+ * Executes steps one-per-Kafka-message, persists state + outbox atomically,
+ * logs every step attempt, and runs compensation in reverse on permanent failure.
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -39,6 +31,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private final OrchestratorFlowRepository<F> flowRepository;
     private final StepRegistry<F> stepRegistry;
     private final OutboxEventRepository outboxRepository;
+    private final StepExecutionLogRepository stepLogRepository;
     private final ObjectMapper objectMapper;
     private final String commandTopic;
 
@@ -62,48 +55,59 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
         // Layer 2 idempotency
         if (handler.isAlreadyCompleted(flow)) {
-            log.info("[Orchestrator] Step {} already completed for flow {}, advancing", stepName, flowId);
+            log.info("[Saga] Step {} already completed for flow {}, advancing", stepName, flowId);
             advanceToNextStep(flow);
             return;
         }
 
         flow.setStatus(FlowStatus.IN_PROGRESS);
-        log.info("[Orchestrator] Executing step {} for flow {}", stepName, flowId);
+        String flowBefore = serialize(flow);
+        Instant startedAt = Instant.now();
+
+        log.info("[Saga] Executing step {} for flow {}", stepName, flowId);
 
         try {
             handler.execute(flow);
         } catch (RetryableStepException e) {
+            logStep(flowId, stepName, "RETRYING", flow.getRetryCount() + 1,
+                    flowBefore, null, e.getMessage(), startedAt);
             handleRetryableFailure(flow, e);
             throw e;
         } catch (NonRetryableStepException e) {
+            logStep(flowId, stepName, "FAILED", flow.getRetryCount() + 1,
+                    flowBefore, null, e.getMessage(), startedAt);
             handlePermanentFailure(flow, e);
             return;
         } catch (Exception e) {
-            // Annotation-driven error handling: @RetryOn, @RecoverOn, @FailOn
-            // StepErrorHandler reads annotations from the handler class and
-            // either returns (recovered = treat as success) or throws
-            // RetryableStepException / NonRetryableStepException
             try {
                 StepErrorHandler.handleError(handler, e);
-                // Returned without throwing = recovered (e.g., HTTP 409 "already created")
-                log.info("[Orchestrator] Step {} recovered for flow {} ({})",
-                        stepName, flowId, e.getMessage());
+                // Recovered (e.g., HTTP 409)
+                logStep(flowId, stepName, "RECOVERED", flow.getRetryCount() + 1,
+                        flowBefore, serialize(flow), e.getMessage(), startedAt);
+                log.info("[Saga] Step {} recovered for flow {}", stepName, flowId);
             } catch (RetryableStepException re) {
+                logStep(flowId, stepName, "RETRYING", flow.getRetryCount() + 1,
+                        flowBefore, null, re.getMessage(), startedAt);
                 handleRetryableFailure(flow, re);
                 throw re;
             } catch (NonRetryableStepException nre) {
+                logStep(flowId, stepName, "FAILED", flow.getRetryCount() + 1,
+                        flowBefore, null, nre.getMessage(), startedAt);
                 handlePermanentFailure(flow, nre);
                 return;
             }
         }
 
-        // Step succeeded — persist result and write outbox event for next step
+        // Step succeeded
         flow.setRetryCount(0);
         flow.setBackoffSeconds(0);
         flow.setNextRetryAt(null);
         flow.setErrorMessage(null);
         flow.setUpdatedAt(Instant.now());
         flowRepository.save(flow);
+
+        logStep(flowId, stepName, "COMPLETED", 1,
+                flowBefore, serialize(flow), null, startedAt);
 
         advanceToNextStep(flow);
     }
@@ -114,9 +118,54 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             flow.setErrorMessage("[DLT] Exhausted all retry attempts");
             flow.setUpdatedAt(Instant.now());
             flowRepository.save(flow);
-            log.error("[Orchestrator] Flow {} dead-lettered at step {}", flowId, flow.getCurrentStep());
+
+            logStep(flowId, flow.getCurrentStep(), "DEAD_LETTERED", flow.getRetryCount(),
+                    null, null, "[DLT] Exhausted retries", Instant.now());
+
+            // Run compensation for all completed steps in reverse
+            runCompensation(flow);
         });
     }
+
+    // ========== Compensation (what makes this a Saga) ==========
+
+    private void runCompensation(F flow) {
+        List<String> completedSteps = stepRegistry.getCompletedStepsBefore(flow.getCurrentStep());
+        if (completedSteps.isEmpty()) return;
+
+        log.info("[Saga] Running compensation for flow {} — {} steps to undo",
+                flow.getId(), completedSteps.size());
+
+        flow.setStatus(FlowStatus.COMPENSATING);
+        flowRepository.save(flow);
+
+        // Compensate in reverse order
+        for (int i = completedSteps.size() - 1; i >= 0; i--) {
+            String stepName = completedSteps.get(i);
+            StepHandler<F> handler = stepRegistry.getHandler(stepName);
+
+            if (handler instanceof MethodStepAdapter<F> adapter && adapter.hasCompensation()) {
+                Instant start = Instant.now();
+                try {
+                    adapter.compensate(flow);
+                    logStep(flow.getId(), stepName, "COMPENSATED", 1, null, null, null, start);
+                } catch (Exception e) {
+                    log.error("[Saga] Compensation failed for step {} on flow {}: {}",
+                            stepName, flow.getId(), e.getMessage());
+                    logStep(flow.getId(), stepName, "COMPENSATION_FAILED", 1,
+                            null, null, e.getMessage(), start);
+                }
+            } else {
+                log.warn("[Saga] No @Compensate for step {}, skipping", stepName);
+            }
+        }
+
+        flow.setStatus(FlowStatus.FAILED);
+        flow.setUpdatedAt(Instant.now());
+        flowRepository.save(flow);
+    }
+
+    // ========== Internal ==========
 
     private void advanceToNextStep(F flow) {
         String nextStep = stepRegistry.getNextStep(flow.getCurrentStep());
@@ -124,11 +173,10 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             flow.setStatus(FlowStatus.COMPLETED);
             flow.setUpdatedAt(Instant.now());
             flowRepository.save(flow);
-            log.info("[Orchestrator] Flow {} completed", flow.getId());
+            log.info("[Saga] Flow {} completed", flow.getId());
         } else {
             flow.setCurrentStep(nextStep);
             flow.setUpdatedAt(Instant.now());
-            // Save flow + write outbox event (both MongoDB writes, same DB)
             flowRepository.save(flow);
             writeOutboxEvent(flow);
         }
@@ -150,18 +198,11 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setErrorMessage(e.getMessage());
         flow.setUpdatedAt(Instant.now());
         flowRepository.save(flow);
+
+        // Saga compensation — undo completed steps in reverse
+        runCompensation(flow);
     }
 
-    /**
-     * Writes a step command to the outbox collection (same DB as the flow).
-     * The OutboxPublisher polls this and sends to Kafka.
-     *
-     * On replica set with @Transactional: this write is atomic with the
-     * flow save above — both commit or neither does.
-     *
-     * On standalone: two sequential writes, but both to the same MongoDB.
-     * The gap is microseconds (vs milliseconds for MongoDB→Kafka).
-     */
     private void writeOutboxEvent(F flow) {
         try {
             StepCommandMessage cmd = StepCommandMessage.builder()
@@ -181,8 +222,37 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
             outboxRepository.save(event);
         } catch (Exception e) {
-            log.error("[Orchestrator] Failed to write outbox event for flow {}: {}",
-                    flow.getId(), e.getMessage());
+            log.error("[Saga] Failed to write outbox event: {}", e.getMessage());
+        }
+    }
+
+    private void logStep(String flowId, String stepName, String status, int attempt,
+                         String before, String after, String error, Instant startedAt) {
+        try {
+            Instant now = Instant.now();
+            stepLogRepository.save(StepExecutionLog.builder()
+                    .id(UUID.randomUUID().toString())
+                    .flowId(flowId)
+                    .stepName(stepName)
+                    .status(status)
+                    .attemptNumber(attempt)
+                    .flowStateBefore(before)
+                    .flowStateAfter(after)
+                    .errorMessage(error)
+                    .durationMs(now.toEpochMilli() - startedAt.toEpochMilli())
+                    .startedAt(startedAt)
+                    .completedAt(now)
+                    .build());
+        } catch (Exception e) {
+            log.warn("[Saga] Failed to log step execution: {}", e.getMessage());
+        }
+    }
+
+    private String serialize(F flow) {
+        try {
+            return objectMapper.writeValueAsString(flow);
+        } catch (Exception e) {
+            return "{}";
         }
     }
 }

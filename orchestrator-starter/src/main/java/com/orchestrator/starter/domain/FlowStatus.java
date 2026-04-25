@@ -5,5 +5,6 @@ public enum FlowStatus {
     IN_PROGRESS,
     WAITING_RETRY,
     COMPLETED,
+    COMPENSATING,
     FAILED
 }

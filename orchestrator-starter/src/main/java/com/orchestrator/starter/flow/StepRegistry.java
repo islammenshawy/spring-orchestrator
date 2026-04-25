@@ -58,4 +58,14 @@ public class StepRegistry<F extends OrchestratorFlow> {
     public List<String> getStepNames() {
         return orderedStepNames;
     }
+
+    /**
+     * Returns step names that completed before the given step (for compensation).
+     * E.g., if currentStep is step 3, returns [step1, step2].
+     */
+    public List<String> getCompletedStepsBefore(String currentStep) {
+        int idx = orderedStepNames.indexOf(currentStep);
+        if (idx <= 0) return List.of();
+        return orderedStepNames.subList(0, idx);
+    }
 }

@@ -1,5 +1,6 @@
 package com.orchestrator.starter.autoconfigure;
 
+import com.orchestrator.starter.audit.StepExecutionLogRepository;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.exception.RetryableStepException;
 import com.orchestrator.starter.flow.FlowDefinitionScanner;
@@ -87,13 +88,14 @@ public class OrchestratorAutoConfiguration {
             OrchestratorFlowRepository<?> flowRepository,
             StepRegistry<?> stepRegistry,
             OutboxEventRepository outboxRepository,
+            StepExecutionLogRepository stepLogRepository,
             ObjectMapper objectMapper,
             OrchestratorProperties props) {
-        log.info("Orchestrator: topic={}, steps={}, outbox=enabled",
+        log.info("Saga orchestrator: topic={}, steps={}, outbox=enabled, audit=enabled",
                 props.getKafka().getCommandTopic(), stepRegistry.getStepNames());
         return new FlowOrchestrator(
-                flowRepository, stepRegistry, outboxRepository, objectMapper,
-                props.getKafka().getCommandTopic());
+                flowRepository, stepRegistry, outboxRepository, stepLogRepository,
+                objectMapper, props.getKafka().getCommandTopic());
     }
 
     @Bean
