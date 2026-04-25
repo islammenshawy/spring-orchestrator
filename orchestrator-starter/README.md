@@ -281,107 +281,176 @@ Resolution order when a step throws:
 
 ## Two-Layer Idempotency
 
-Kafka guarantees **at-least-once** delivery — messages may be redelivered after a crash or rebalance. Without idempotency, a redelivered message would call the vendor API again, causing a duplicate charge/creation. The library uses two independent layers to prevent this:
+Kafka guarantees **at-least-once** delivery — messages may be redelivered after a crash or rebalance. Without idempotency, a redelivered message calls the vendor API again (double charge). The library uses two independent layers:
 
-| Layer | Where | What it checks | Protects against |
-|-------|-------|---------------|-----------------|
-| **Layer 1: Consumer** | `orchestrator_processed_events` collection | Kafka message `eventId` | Duplicate messages from Kafka redelivery after crash, rebalance, or retry topic routing |
-| **Layer 2: Handler** | `completedWhen` SpEL on `@Step` | Domain result fields (e.g., `paymentId != null`) | Crash between API call succeeding and Layer 1 write completing |
+| Layer | Where | Checks | Protects against |
+|-------|-------|--------|-----------------|
+| **Layer 1** | `orchestrator_processed_events` | Kafka `eventId` | Duplicate Kafka messages |
+| **Layer 2** | `completedWhen` SpEL on `@Step` | Your result fields | Crash between API success and Layer 1 write |
 
-### Resolution flow
+### Complete example: crash at every point
 
-```
-Kafka message arrives
-  │
-  ▼
-Layer 1: isProcessed(eventId)?
-  ├── YES → skip entirely (fast path, no DB lookup)
-  │
-  └── NO → load flow from MongoDB
-            │
-            ▼
-          Layer 2: completedWhen → evaluate SpEL against flow
-            ├── TRUE → result already in DB from a previous attempt
-            │          skip API call, advance to next step
-            │
-            └── FALSE → execute step (call vendor API)
-                          │
-                          ▼
-                     API returns → set result on flow → save to MongoDB
-                          │
-                          ▼
-                     Layer 1: markProcessed(eventId)  ← AFTER completion
-```
+Here's a payment step. We'll crash at every possible point and show what happens.
 
-### Why Layer 1 marks processed AFTER, not before
-
-```
-WRONG (mark before):                    RIGHT (mark after):
-1. markProcessed ✓                      1. execute step
-2. execute step                         2. save flow
-   ← CRASH →                              ← CRASH →
-3. (never runs)                         3. markProcessed (never runs)
-
-Redelivery:                             Redelivery:
-  isProcessed → YES → SKIP               isProcessed → NO → proceed
-  Step never executes. Flow stuck.        completedWhen → TRUE → skip API
-                                          Advance → markProcessed → done
-```
-
-### The two layers together
-
-Neither layer alone is sufficient:
-- **Layer 1 alone**: if we mark before execution, a crash means the step never runs but is marked "done"
-- **Layer 2 alone**: if the vendor API is called but the result field isn't set yet (crash between API return and `flow.setPaymentId()`), Layer 2 can't detect the previous call
-
-Together: Layer 1 is the **fast path** (skip without even loading the flow). Layer 2 is the **safe path** (even if re-entered, the vendor API is never called twice because the result field is already set from the previous successful call).
-
----
-
-## The Unavoidable Gap: API Call + Crash
-
-No library can make an HTTP call and a database write atomic. There is always a window where the API succeeded but the result isn't saved.
-
-```
-vendorApi.charge(amount);           // money charged
-     ← CRASH →
-flow.setPaymentId(result.getId());  // never runs
-
-Redelivery → completedWhen = false → API called AGAIN
-```
-
-> **This is not a library bug.** No framework can atomically span HTTP + DB.
-
-### Three strategies
-
-**1. Idempotency Key (best)** — vendor deduplicates by key:
 ```java
-vendorApi.charge(amount, idempotencyKey: flow.getCorrelationId() + ":CHARGE");
+@Step(order = 1, completedWhen = "paymentId != null")
+public void chargePayment(OrderFlow flow) {
+    //                              ← CRASH POINT A
+    var result = paymentClient.charge(flow.getAmount());
+    //                              ← CRASH POINT B
+    flow.setPaymentId(result.getId());
+    checkpoint(flow);
+    //                              ← CRASH POINT C
+}
+// Library runs after your method:
+//   save flow to MongoDB           ← CRASH POINT D
+//   save outbox event              ← CRASH POINT E
+//   mark processed (Layer 1)       ← CRASH POINT F
 ```
 
-**2. Pre-check** — query vendor before retrying:
+**Crash A — before API call:**
+```
+State: API never called, paymentId = null, processed_events = empty
+Redelivery:
+  Layer 1: tryProcess(eventId) → first time → proceed
+  Layer 2: completedWhen("paymentId != null") → false → execute
+  → calls API normally → no duplicate
+✅ Safe
+```
+
+**Crash B — API succeeded, result not saved:**
+```
+State: vendor charged $100, paymentId = null (not set yet), processed_events = empty
+Redelivery:
+  Layer 1: tryProcess(eventId) → first time → proceed
+  Layer 2: completedWhen("paymentId != null") → false → execute
+  → calls API AGAIN
+⚠️ DOUBLE CHARGE — unless vendor has idempotency (see strategies below)
+```
+
+**Crash C — after checkpoint, before library save:**
+```
+State: paymentId = "pay-123" (saved by checkpoint), processed_events = empty
+Redelivery:
+  Layer 1: tryProcess(eventId) → first time → proceed
+  Layer 2: completedWhen("paymentId != null") → TRUE → SKIP API
+  → advances to next step without calling vendor again
+✅ Safe — checkpoint saved the result
+```
+
+**Crash D — after flow save, before outbox:**
+```
+State: paymentId = "pay-123" (saved), outbox event = not written
+Recovery: StaleFlowRecoveryService finds flow stuck IN_PROGRESS after 5 min
+  → re-publishes step command to Kafka
+  → Layer 2: paymentId set → skip → advance
+✅ Safe — recovery service catches it
+```
+
+**Crash E — after outbox, before processed_events:**
+```
+State: paymentId saved, outbox event written, processed_events = empty
+Recovery: Outbox publisher sends to Kafka (~500ms)
+  AND: Kafka redelivers original message
+  → Layer 2: paymentId set → skip → advance
+  (duplicate advance is harmless — same next step published twice, idempotent)
+✅ Safe
+```
+
+**Crash F — after everything:**
+```
+State: all saved, processed_events has eventId
+Redelivery:
+  Layer 1: tryProcess(eventId) → duplicate → SKIP entirely
+✅ Safe — fast path, no DB lookup even needed
+```
+
+### The dangerous window: Crash B
+
+Crash B is the **only** scenario where the vendor API could be called twice. The library can't prevent this — no framework can atomically span an HTTP call and a database write.
+
+**Three strategies to handle Crash B:**
+
+**Strategy 1: Vendor idempotency key (best)**
+
+Most modern APIs (Stripe, Adyen, Enigio) support this. Send a deterministic key — vendor returns the same result on duplicate calls.
+
 ```java
-var existing = vendorApi.findByRef(flow.getCorrelationId());
-if (existing != null) { flow.setPaymentId(existing.getId()); return; }
+@Step(order = 1, completedWhen = "paymentId != null")
+public void chargePayment(OrderFlow flow) {
+    // Key = correlationId + step name → deterministic, same on every retry
+    var result = paymentClient.charge(
+            flow.getAmount(),
+            flow.getCorrelationId() + ":CHARGE_PAYMENT"  // idempotency key
+    );
+    flow.setPaymentId(result.getId());
+    checkpoint(flow);
+}
 ```
 
-**3. Reserve + Confirm** — two steps, reservation is repeatable:
+On retry: vendor receives same key → returns same result → no double charge.
+
+**Strategy 2: Pre-check (query vendor before retrying)**
+
+If the vendor doesn't support idempotency keys but has a lookup API:
+
+```java
+@Step(order = 1, completedWhen = "paymentId != null")
+public void chargePayment(OrderFlow flow) {
+    // Check if a previous attempt already succeeded
+    var existing = paymentClient.findByReference(flow.getCorrelationId());
+    if (existing != null) {
+        // Previous attempt succeeded — capture the result, don't charge again
+        flow.setPaymentId(existing.getId());
+        checkpoint(flow);
+        return;
+    }
+
+    // No previous charge found — proceed
+    var result = paymentClient.charge(flow.getAmount(), flow.getCorrelationId());
+    flow.setPaymentId(result.getId());
+    checkpoint(flow);
+}
+```
+
+On retry: queries vendor first → finds existing charge → skips API → no duplicate.
+
+**Strategy 3: Reserve + Confirm (two separate steps)**
+
+For legacy vendors with no idempotency and no lookup. Split into two steps — reserve is safe to repeat, confirm uses the reservation ID (idempotent by design).
+
 ```java
 @Step(order = 1, completedWhen = "reservationId != null")
-void reserve(Flow f) { f.setReservationId(vendor.reserve(...)); }
+public void reservePayment(OrderFlow flow) {
+    // Reserve is safe to repeat — creates a hold, doesn't charge
+    var reservation = paymentClient.reserve(flow.getAmount());
+    flow.setReservationId(reservation.getId());
+    checkpoint(flow);
+}
 
 @Step(order = 2, completedWhen = "paymentId != null")
-void confirm(Flow f) { f.setPaymentId(vendor.confirm(f.getReservationId())); }
+public void confirmPayment(OrderFlow flow) {
+    // Confirm by reservation ID — idempotent (confirming twice = no-op)
+    var result = paymentClient.confirm(flow.getReservationId());
+    flow.setPaymentId(result.getId());
+    checkpoint(flow);
+}
 ```
 
-### checkpoint() — narrows the gap
+### checkpoint() — when to use it
+
+`checkpoint(flow)` saves the flow to MongoDB immediately. Call it after setting result fields from an API call.
 
 ```java
-var result = paymentClient.charge(flow.getAmount());
-flow.setPaymentId(result.getId());
-checkpoint(flow);   // saved to MongoDB NOW — crash after here is safe
-auditRepo.save(...);
+var result = vendorApi.createDocument(flow.getTitle());
+flow.setDocumentId(result.getId());     // set in memory
+checkpoint(flow);                        // persist to MongoDB NOW
+
+// Crash after checkpoint → completedWhen("documentId != null") → TRUE → safe
+// Crash before checkpoint → completedWhen → FALSE → API called again (use strategy 1/2/3)
 ```
+
+**Rule:** Always call `checkpoint()` after setting a result field from a non-idempotent API call. If your vendor supports idempotency keys, `checkpoint()` is extra safety but not strictly required.
 
 ---
 
