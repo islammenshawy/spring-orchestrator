@@ -669,7 +669,43 @@ orchestrator.retry:
 ```
 Retries for ~24 hours with increasing intervals, capping at 2-hour gaps.
 
-> Retry state lives in **Kafka topics, not in memory**. If all pods restart during an outage, retry messages are still in Kafka — they resume when pods come back.
+### Where retry state lives
+
+During retry, **both** Kafka and MongoDB hold state:
+
+```
+Step fails (HTTP 500 on attempt 3)
+  │
+  ├── Kafka: message in orders.commands-retry-2 topic
+  │          (waiting 8s + jitter before consumer picks it up)
+  │          This DRIVES the retry — no scheduler, no polling.
+  │
+  └── MongoDB: flow.status = WAITING_RETRY
+               flow.retryCount = 3
+               flow.backoffSeconds = 8
+               flow.errorMessage = "HTTP 500..."
+               This is what GET /flows/{id} returns.
+```
+
+**Both survive full cluster restart:**
+- Kafka: message stays in retry topic until consumed (retention = days/weeks)
+- MongoDB: flow state persisted, loaded when consumer retries
+
+**What happens on cluster restart during retry:**
+```
+All pods die.
+  Kafka:   message sitting in retry-2 topic (untouched)
+  MongoDB: flow.status = WAITING_RETRY, retryCount = 3
+
+Pods restart:
+  1. Kafka consumer subscribes to retry-2
+  2. Backoff expires → message delivered
+  3. Consumer loads flow from MongoDB
+  4. Layer 2: completedWhen check
+  5. Execute step → succeed or next retry
+```
+
+Neither Kafka nor MongoDB alone is sufficient. Kafka drives the retry timing. MongoDB holds the flow state and domain data the step needs to execute.
 
 ---
 
