@@ -73,11 +73,16 @@ mvn package -P demo
 ## What the Library Provides
 
 - Transactional outbox (atomic MongoDB write + Kafka publish)
-- Kafka retry topics with jittered exponential backoff
+- Kafka retry topics with jittered exponential backoff (configurable ladder depth)
 - Two-layer idempotency (consumer + handler level)
-- Annotation-driven error handling (@RetryOn, @RecoverOn, @FailOn)
+- Annotation-driven error handling (@RetryOn, @RecoverOn, @FailOn — sensible defaults)
+- Saga compensation (@Compensate — reverse execution on failure)
 - Single-class flow definition (@Flow + @Step on methods)
+- Parallel execution + join (@Parallel + @JoinOn)
+- Async API with polling (POST returns 202 + ID, GET for status)
 - Stale flow recovery (container crash safety net)
+- TTL-based collection cleanup (configurable retention per collection)
+- Combined or split deployment (same JAR, different YAML profile)
 - CooperativeStickyAssignor rebalancing (config-only, zero custom code)
 
 ## Reference Implementations (demo profile)

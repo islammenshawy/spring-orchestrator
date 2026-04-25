@@ -82,6 +82,8 @@ Kafka retry topics with jittered exponential backoff. MongoDB persistence. Annot
         <li><a href="#outbox">Transactional Outbox</a></li>
         <li><a href="#compensation">Saga Compensation (Rollback)</a></li>
         <li><a href="#crash">Container Crash Recovery</a></li>
+        <li><a href="#async-api">Async API: Start Flow and Poll</a></li>
+        <li><a href="#deployment">Deployment: Combined vs Split</a></li>
         <li><a href="#rebalancing">Kafka Rebalancing</a></li>
         <li><a href="#config">Configuration Reference</a></li>
         <li><a href="#collections">MongoDB Collections</a></li>
@@ -507,6 +509,81 @@ Recovery path 3 — Safety net (5 min):
 </div>
 
 <!-- ============================================================ -->
+<h2 id="async-api">Async API: Start Flow and Poll</h2>
+
+<p><code>POST /flows</code> is async &mdash; saves the flow, publishes to Kafka synchronously (waits for broker ack), returns 202 Accepted with the flow ID. Step execution happens in the background via Kafka.</p>
+
+<div class="diagram">
+POST /flows  {"title": "Contract #123", "signerEmail": "john@example.com"}
+  │
+  ├── Save flow to MongoDB           ~2ms
+  ├── Save outbox event (safety net)  ~1ms
+  ├── Publish to Kafka (sync)         ~5ms
+  ├── Return 202 Accepted + flow ID
+  │
+  ▼ (async — consumer thread or separate worker pod)
+Kafka consumer → step 1 → step 2 → ... → COMPLETED
+</div>
+
+<h3>Endpoints</h3>
+<table>
+    <tr><th>Method</th><th>Path</th><th>Returns</th></tr>
+    <tr><td><code>POST</code></td><td><code>/flows</code></td><td>202 + flow ID, correlationId (async start)</td></tr>
+    <tr><td><code>GET</code></td><td><code>/flows/{id}/status</code></td><td>Lightweight: status, currentStep, retryCount</td></tr>
+    <tr><td><code>GET</code></td><td><code>/flows/{id}</code></td><td>Full flow with all domain fields</td></tr>
+    <tr><td><code>GET</code></td><td><code>/flows/correlation/{id}</code></td><td>Lookup by correlation ID</td></tr>
+</table>
+
+<pre><code># 1. Start flow → 202 Accepted
+curl -X POST http://localhost:8085/flows -d '{"title":"Contract #123","signerEmail":"john@example.com"}'
+# {"id":"682b3f1a","correlationId":"a1b2c3d4","status":"IN_PROGRESS",
+#  "message":"Flow started. Poll GET /flows/682b3f1a for status."}
+
+# 2. Poll status (lightweight)
+curl http://localhost:8085/flows/682b3f1a/status
+# {"status":"COMPLETED","currentStep":"FINALIZE_DOCUMENT","retryCount":0}
+
+# 3. Get full result
+curl http://localhost:8085/flows/682b3f1a
+# {"status":"COMPLETED","documentId":"doc-456","finalUrl":"https://..."}</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="deployment">Deployment: Combined vs Split</h2>
+
+<p>By default, everything runs in one pod. For production, split API and worker pods. <strong>No code change &mdash; same JAR, different YAML profile.</strong></p>
+
+<div class="grid grid-2">
+    <div class="card" style="border-top: 3px solid var(--info)">
+        <h4 style="color: var(--info)">Combined (default &mdash; dev)</h4>
+        <pre style="font-size:11px;border:none;padding:4px">Pod A (one JVM):
+  ├── REST API
+  ├── Kafka Consumer
+  ├── Outbox Publisher
+  └── Recovery Service</pre>
+    </div>
+    <div class="card" style="border-top: 3px solid var(--success)">
+        <h4 style="color: var(--success)">Split (production)</h4>
+        <pre style="font-size:11px;border:none;padding:4px">API Pods (×2):       Worker Pods (×6):
+ ├── REST API         ├── Kafka Consumer
+ └── Outbox Publisher └── Recovery Service
+
+Scale independently.</pre>
+    </div>
+</div>
+
+<pre><code># application-api.yml — HTTP only
+spring.kafka.listener.auto-startup: false
+orchestrator.endpoints.enabled: true
+
+# application-worker.yml — Kafka only
+spring.kafka.listener.auto-startup: true
+orchestrator.endpoints.enabled: false</code></pre>
+
+<div class="callout callout-info">
+    Same Docker image. Run with <code>--spring.profiles.active=api</code> or <code>worker</code>.
+</div>
+
+<!-- ============================================================ -->
 <h2 id="rebalancing">Kafka Rebalancing</h2>
 
 <div class="grid grid-2">
@@ -561,8 +638,18 @@ C: gets [P2,P5]
     <tr><td><code>orchestrator.retry.jitter-factor</code></td><td><code>0.5</code></td><td>0.0=none, 0.5=equal, 1.0=full</td></tr>
     <tr><td><code>orchestrator.recovery.scan-interval-ms</code></td><td><code>30000</code></td><td>Stale flow scan interval</td></tr>
     <tr><td><code>orchestrator.recovery.stale-threshold-minutes</code></td><td><code>5</code></td><td>Mark stale after N minutes</td></tr>
+    <tr><td><code>orchestrator.retention.outbox-days</code></td><td><code>7</code></td><td>TTL: auto-delete published outbox events</td></tr>
+    <tr><td><code>orchestrator.retention.processed-events-days</code></td><td><code>30</code></td><td>TTL: auto-delete idempotency records</td></tr>
+    <tr><td><code>orchestrator.retention.step-log-days</code></td><td><code>90</code></td><td>TTL: auto-delete step audit logs. 0=forever</td></tr>
+    <tr><td><code>orchestrator.audit.include-flow-state</code></td><td><code>false</code></td><td>Include flow JSON in step logs (expensive)</td></tr>
+    <tr><td><code>orchestrator.endpoints.enabled</code></td><td><code>true</code></td><td>Auto-expose REST endpoints</td></tr>
+    <tr><td><code>orchestrator.endpoints.base-path</code></td><td><code>/flows</code></td><td>REST endpoint base path</td></tr>
     <tr><td><code>orchestrator.mongodb.transactions-enabled</code></td><td><code>false</code></td><td>Atomic outbox on replica set</td></tr>
 </table>
+
+<div class="callout callout-info">
+    <strong>TTL cleanup:</strong> MongoDB automatically deletes expired documents via background thread (runs every 60s). No application code involved. Unpublished outbox events (<code>publishedAt = null</code>) are never deleted &mdash; only published events expire.
+</div>
 
 <!-- ============================================================ -->
 <h2 id="collections">MongoDB Collections</h2>
