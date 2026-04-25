@@ -127,20 +127,18 @@ That's the **minimum**. Two annotations (`@Flow`, `@Step`) and your business log
 
 ### 3. Flow entity + repository
 
-```java
-@Document(collection = "order_flows")
-public class OrderEntity implements OrchestratorFlow {
-    @Id private String id;
-    private String correlationId, currentStep, errorMessage;
-    private FlowStatus status = FlowStatus.PENDING;
-    private int retryCount, backoffSeconds;
-    private Instant nextRetryAt, updatedAt;
-    private Set<String> completedParallelSteps = new HashSet<>();
-    @Version private Long version;
+Extend `AbstractFlow` — only your domain fields. All library fields (id, status, retryCount, etc.) are inherited.
 
-    // Your domain fields
+```java
+@Data
+@EqualsAndHashCode(callSuper = true)
+@Document(collection = "order_flows")
+public class OrderEntity extends AbstractFlow {
+    // Only YOUR fields — no boilerplate
     private BigDecimal amount;
-    private String paymentId, trackingNumber, address;
+    private String paymentId;
+    private String trackingNumber;
+    private String address;
 }
 
 public interface OrderRepository extends OrchestratorFlowRepository<OrderEntity> {}
@@ -149,27 +147,27 @@ public interface OrderRepository extends OrchestratorFlowRepository<OrderEntity>
 ### 4. Configure
 
 ```yaml
-orchestrator:
-  kafka:
-    command-topic: orders.commands
-  retry:
-    max-attempts: 4
-    initial-interval-ms: 2000
-    multiplier: 2.0
-    jitter-factor: 0.5
-
 spring:
-  kafka:
-    bootstrap-servers: localhost:9092
-    consumer:
-      properties:
-        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
-    listener:
-      concurrency: 3
-      ack-mode: RECORD
+  data.mongodb.uri: mongodb://localhost:27017/my_db
+  kafka.bootstrap-servers: localhost:9092
+
+orchestrator:
+  kafka.command-topic: orders.commands
 ```
 
-> **That's it.** No orchestrator code, no outbox tables, no Kafka consumer classes, no retry logic.
+That's it — **3 files** (entity, repository one-liner, flow class) and **4 lines of config**.
+
+The library auto-configures:
+- REST endpoints: `POST /flows`, `GET /flows/{id}`, `GET /flows/correlation/{id}`
+- Kafka retry topics with jittered backoff
+- Transactional outbox
+- Two-layer idempotency
+- Stale flow recovery
+- Step audit logging
+- Compensation on failure
+
+> Disable auto-endpoints with `orchestrator.endpoints.enabled: false`.
+> Override base path with `orchestrator.endpoints.base-path: /my-flows`.
 
 ---
 

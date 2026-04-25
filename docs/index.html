@@ -156,18 +156,13 @@ public class OrderFlow extends FlowDefinition&lt;OrderEntity&gt; {
     }
 }</code></pre>
 
-<h3>3. Flow entity + repository (boilerplate)</h3>
-<pre><code><span class="anno">@Document</span>(collection = "order_flows")
-public class OrderEntity implements OrchestratorFlow {
-    @Id private String id;
-    private String correlationId, currentStep, errorMessage;
-    private FlowStatus status = FlowStatus.PENDING;
-    private int retryCount, backoffSeconds;
-    private Instant nextRetryAt, updatedAt;
-    private Set&lt;String&gt; completedParallelSteps = new HashSet&lt;&gt;();
-    @Version private Long version;
-
-    // Your fields
+<h3>3. Flow entity + repository</h3>
+<p>Extend <code>AbstractFlow</code> &mdash; only your domain fields. All library fields are inherited.</p>
+<pre><code><span class="anno">@Data</span>
+<span class="anno">@EqualsAndHashCode</span>(callSuper = true)
+<span class="anno">@Document</span>(collection = "order_flows")
+public class OrderEntity extends AbstractFlow {
+    // Only YOUR fields &mdash; no boilerplate
     private BigDecimal amount;
     private String paymentId, trackingNumber, address;
 }
@@ -175,17 +170,17 @@ public class OrderEntity implements OrchestratorFlow {
 public interface OrderRepository extends OrchestratorFlowRepository&lt;OrderEntity&gt; {}</code></pre>
 
 <h3>4. Configure</h3>
-<pre><code>orchestrator:
-  kafka:
-    command-topic: orders.commands
-  retry:
-    max-attempts: 4
-    initial-interval-ms: 2000
-    multiplier: 2.0
-    jitter-factor: 0.5</code></pre>
+<pre><code>spring:
+  data.mongodb.uri: mongodb://localhost:27017/my_db
+  kafka.bootstrap-servers: localhost:9092
+
+orchestrator:
+  kafka.command-topic: orders.commands</code></pre>
+
+<p><strong>3 files</strong> (entity, repository one-liner, flow class) and <strong>4 lines of config</strong>.</p>
 
 <div class="callout callout-success">
-    <strong>That's it.</strong> No orchestrator code, no outbox tables, no Kafka consumer classes, no retry logic. The library auto-configures everything.
+    <strong>Auto-configured:</strong> REST endpoints (<code>POST /flows</code>, <code>GET /flows/{id}</code>), Kafka retry topics, outbox, idempotency, recovery, audit logging, compensation. Disable endpoints with <code>orchestrator.endpoints.enabled: false</code>.
 </div>
 
 <!-- ============================================================ -->

@@ -34,28 +34,28 @@ Add the dependency and define your flow:
 ```
 
 ```java
+// Flow entity — just your domain fields (extends AbstractFlow)
+@Document(collection = "order_flows")
+public class MyFlow extends AbstractFlow {
+    private String orderId;
+    private String paymentId;
+}
+
+public interface MyFlowRepo extends OrchestratorFlowRepository<MyFlow> {}
+
+// Flow logic — one class, all steps
 @Component
-@Flow(topic = "my-service.commands")
-@RetryOn(httpStatus = {500, 502, 503, 429})
-@FailOn(httpStatus = {400, 403})
+@Flow
 public class MyVendorFlow extends FlowDefinition<MyFlow> {
 
     @Step(order = 1, completedWhen = "orderId != null")
-    @RecoverOn(httpStatus = 409, action = RecoverAction.SKIP)
     public void createOrder(MyFlow flow) {
-        var result = vendorClient.createOrder(...);
-        flow.setOrderId(result.getId());
+        flow.setOrderId(vendorClient.createOrder(...).getId());
     }
 
     @Step(order = 2, completedWhen = "paymentId != null")
     public void processPayment(MyFlow flow) {
-        var result = vendorClient.charge(...);
-        flow.setPaymentId(result.getId());
-    }
-
-    @Step(order = 3, type = StepType.DB_WRITE)
-    public void saveReceipt(MyFlow flow) {
-        receiptRepo.save(new Receipt(flow));
+        flow.setPaymentId(vendorClient.charge(...).getId());
     }
 }
 ```
