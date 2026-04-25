@@ -2,24 +2,28 @@ package com.orchestrator.starter.autoconfigure;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.mongodb.MongoDatabaseFactory;
 import org.springframework.data.mongodb.MongoTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Auto-configures MongoDB transaction manager for replica set deployments.
+ * Auto-configures MongoDB transactions for replica set deployments.
  *
- * Enabled with: orchestrator.mongodb.transactions-enabled=true
- * Requires MongoDB replica set (standalone doesn't support transactions).
+ * Enable with: orchestrator.mongodb.transactions-enabled=true
  *
- * When enabled, the outbox pattern becomes fully atomic:
- * flow save + outbox event = single transaction, both or neither.
+ * When enabled:
+ *   FlowOrchestrator wraps flow save + outbox event in a single
+ *   MongoDB transaction — both commit or neither. Fully atomic.
  *
- * When disabled (default): two sequential writes to the same MongoDB,
- * microseconds apart. The outbox publisher and recovery service handle
- * the rare case where the second write is lost.
+ * When disabled (default):
+ *   Two sequential writes to the same MongoDB. The outbox publisher
+ *   and recovery service handle the rare crash between them.
+ *
+ * The user never writes @Transactional — the library handles it internally.
  */
 @Slf4j
 @AutoConfiguration
@@ -31,5 +35,12 @@ public class MongoTransactionAutoConfiguration {
     public MongoTransactionManager mongoTransactionManager(MongoDatabaseFactory dbFactory) {
         log.info("MongoDB transactions enabled (replica set mode)");
         return new MongoTransactionManager(dbFactory);
+    }
+
+    @Bean
+    @ConditionalOnBean(MongoTransactionManager.class)
+    @ConditionalOnMissingBean(TransactionTemplate.class)
+    public TransactionTemplate mongoTransactionTemplate(MongoTransactionManager txManager) {
+        return new TransactionTemplate(txManager);
     }
 }

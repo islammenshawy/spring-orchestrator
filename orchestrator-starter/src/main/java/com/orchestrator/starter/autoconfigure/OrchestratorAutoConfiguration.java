@@ -16,7 +16,9 @@ import com.orchestrator.starter.recovery.StaleFlowRecoveryService;
 import com.orchestrator.starter.retry.JitteredExponentialBackOffPolicy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -90,12 +92,17 @@ public class OrchestratorAutoConfiguration {
             OutboxEventRepository outboxRepository,
             StepExecutionLogRepository stepLogRepository,
             ObjectMapper objectMapper,
-            OrchestratorProperties props) {
-        log.info("Saga orchestrator: topic={}, steps={}, outbox=enabled, audit=enabled",
-                props.getKafka().getCommandTopic(), stepRegistry.getStepNames());
+            OrchestratorProperties props,
+            @Autowired(required = false) TransactionTemplate transactionTemplate) {
+
+        boolean txEnabled = transactionTemplate != null;
+        log.info("Saga orchestrator: topic={}, steps={}, outbox=enabled, transactions={}",
+                props.getKafka().getCommandTopic(), stepRegistry.getStepNames(),
+                txEnabled ? "ATOMIC" : "best-effort");
+
         return new FlowOrchestrator(
                 flowRepository, stepRegistry, outboxRepository, stepLogRepository,
-                objectMapper, props.getKafka().getCommandTopic());
+                objectMapper, props.getKafka().getCommandTopic(), transactionTemplate);
     }
 
     @Bean

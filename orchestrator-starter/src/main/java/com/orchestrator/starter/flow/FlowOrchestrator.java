@@ -11,8 +11,8 @@ import com.orchestrator.starter.kafka.StepCommandMessage;
 import com.orchestrator.starter.outbox.OutboxEvent;
 import com.orchestrator.starter.outbox.OutboxEventRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
@@ -25,7 +25,6 @@ import java.util.UUID;
  * logs every step attempt, and runs compensation in reverse on permanent failure.
  */
 @Slf4j
-@RequiredArgsConstructor
 public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     private final OrchestratorFlowRepository<F> flowRepository;
@@ -34,14 +33,38 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private final StepExecutionLogRepository stepLogRepository;
     private final ObjectMapper objectMapper;
     private final String commandTopic;
+    private final TransactionTemplate txTemplate; // null on standalone MongoDB
+
+    public FlowOrchestrator(
+            OrchestratorFlowRepository<F> flowRepository,
+            StepRegistry<F> stepRegistry,
+            OutboxEventRepository outboxRepository,
+            StepExecutionLogRepository stepLogRepository,
+            ObjectMapper objectMapper,
+            String commandTopic,
+            TransactionTemplate txTemplate) {
+        this.flowRepository = flowRepository;
+        this.stepRegistry = stepRegistry;
+        this.outboxRepository = outboxRepository;
+        this.stepLogRepository = stepLogRepository;
+        this.objectMapper = objectMapper;
+        this.commandTopic = commandTopic;
+        this.txTemplate = txTemplate;
+    }
 
     public F startFlow(F flow) {
         flow.setCurrentStep(stepRegistry.getFirstStep());
         flow.setStatus(FlowStatus.IN_PROGRESS);
         flow.setUpdatedAt(Instant.now());
-        flow = flowRepository.save(flow);
-        writeOutboxEvent(flow);
-        return flow;
+
+        // Atomic: flow save + outbox event in one transaction (if available)
+        F savedFlow = runInTransaction(() -> {
+            F f = flowRepository.save(flow);
+            writeOutboxEvent(f);
+            return f;
+        }, flow);
+
+        return savedFlow;
     }
 
     /**
@@ -199,24 +222,30 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             return;
         }
 
-        // Check if next steps form a parallel group
         List<String> stepsAtNextOrder = stepRegistry.getStepsAtSameOrder(nextStep);
         if (stepsAtNextOrder.size() > 1) {
-            // Parallel: publish one outbox event per parallel step
+            // Parallel: atomic flow save + multiple outbox events
             flow.setCurrentStep(nextStep);
             flow.setCompletedParallelSteps(new java.util.HashSet<>());
             flow.setUpdatedAt(Instant.now());
-            flowRepository.save(flow);
-            for (String parallelStep : stepsAtNextOrder) {
-                writeOutboxEvent(flow, parallelStep);
-            }
+            runInTransaction(() -> {
+                flowRepository.save(flow);
+                for (String parallelStep : stepsAtNextOrder) {
+                    writeOutboxEvent(flow, parallelStep);
+                }
+                return null;
+            }, null);
             log.info("[Saga] Published {} parallel steps for flow {}: {}",
                     stepsAtNextOrder.size(), flow.getId(), stepsAtNextOrder);
         } else {
+            // Sequential: atomic flow save + outbox event
             flow.setCurrentStep(nextStep);
             flow.setUpdatedAt(Instant.now());
-            flowRepository.save(flow);
-            writeOutboxEvent(flow);
+            runInTransaction(() -> {
+                flowRepository.save(flow);
+                writeOutboxEvent(flow);
+                return null;
+            }, null);
         }
     }
 
@@ -318,6 +347,21 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         } catch (Exception e) {
             log.warn("[Saga] Failed to log step execution: {}", e.getMessage());
         }
+    }
+
+    /**
+     * Runs the given action in a MongoDB transaction if available.
+     * On standalone MongoDB (no TransactionTemplate): runs without transaction.
+     * On replica set with transactions enabled: fully atomic.
+     *
+     * The user never touches this — the library handles it internally
+     * for all flow save + outbox event writes.
+     */
+    private <R> R runInTransaction(java.util.function.Supplier<R> action, R fallback) {
+        if (txTemplate != null) {
+            return txTemplate.execute(status -> action.get());
+        }
+        return action.get();
     }
 
     private String serialize(F flow) {
