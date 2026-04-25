@@ -1,34 +1,23 @@
 package com.orchestrator.starter.autoconfigure;
 
+import com.orchestrator.starter.domain.AbstractFlow;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.flow.FlowOrchestrator;
-import lombok.RequiredArgsConstructor;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.context.ApplicationContext;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import jakarta.annotation.PostConstruct;
 import java.util.Map;
+import java.util.UUID;
 
-/**
- * Auto-exposes REST endpoints for flows.
- *
- * POST {base-path}              — start flow async (returns ID immediately, execution via Kafka)
- * GET  {base-path}/{id}         — get flow by ID (poll for status)
- * GET  {base-path}/{id}/status  — get status only (lightweight)
- *
- * The POST is async by design:
- *   1. Saves flow to MongoDB
- *   2. Writes outbox event (same DB)
- *   3. Returns 202 Accepted + flow ID + correlationId
- *   4. Outbox publisher sends to Kafka (background, ~500ms)
- *   5. Kafka consumer executes steps (async, separate thread/pod)
- *
- * Caller gets the ID immediately and polls GET /flows/{id} for completion.
- */
 @Slf4j
 @AutoConfiguration
 @ConditionalOnWebApplication
@@ -38,23 +27,40 @@ public class FlowEndpointAutoConfiguration {
     @SuppressWarnings({"unchecked", "rawtypes"})
     @RestController
     @RequestMapping("${orchestrator.endpoints.base-path:/flows}")
-    @RequiredArgsConstructor
     public static class FlowEndpointController {
 
-        private final FlowOrchestrator orchestrator;
-        private final OrchestratorFlowRepository repository;
+        @Autowired private FlowOrchestrator orchestrator;
+        @Autowired private OrchestratorFlowRepository repository;
+        @Autowired private ObjectMapper objectMapper;
+        @Autowired private ApplicationContext context;
 
-        /**
-         * Start a flow asynchronously.
-         *
-         * Returns 202 Accepted with the flow ID and correlationId immediately.
-         * The actual step execution happens via Kafka in the background.
-         *
-         * Caller polls GET /flows/{id} or GET /flows/{id}/status for completion.
-         */
+        private Class<?> entityClass;
+
+        @PostConstruct
+        void init() {
+            // Discover entity class from @Flow bean's FlowDefinition<F> generic
+            var flowBeans = context.getBeansWithAnnotation(
+                    com.orchestrator.starter.annotation.Flow.class);
+            for (Object flowDef : flowBeans.values()) {
+                java.lang.reflect.Type superclass = flowDef.getClass().getGenericSuperclass();
+                if (superclass instanceof java.lang.reflect.ParameterizedType pt) {
+                    java.lang.reflect.Type[] args = pt.getActualTypeArguments();
+                    if (args.length > 0 && args[0] instanceof Class<?> c) {
+                        entityClass = c;
+                        log.info("Auto-endpoint: entity class = {}", c.getSimpleName());
+                        return;
+                    }
+                }
+            }
+            entityClass = AbstractFlow.class;
+        }
+
         @PostMapping
-        public ResponseEntity<?> startFlow(@RequestBody Object flowEntity) {
-            if (flowEntity instanceof OrchestratorFlow flow) {
+        public ResponseEntity<?> startFlow(@RequestBody Map<String, Object> body) {
+            try {
+                body.putIfAbsent("correlationId", UUID.randomUUID().toString());
+                String json = objectMapper.writeValueAsString(body);
+                OrchestratorFlow flow = (OrchestratorFlow) objectMapper.readValue(json, entityClass);
                 var saved = repository.save(flow);
                 var started = orchestrator.startFlow((OrchestratorFlow) saved);
 
@@ -65,28 +71,21 @@ public class FlowEndpointAutoConfiguration {
                         "currentStep", started.getCurrentStep(),
                         "message", "Flow started. Poll GET /flows/" + started.getId() + " for status."
                 ));
+            } catch (Exception e) {
+                return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
             }
-            return ResponseEntity.badRequest().body(
-                    Map.of("error", "Request body must be a flow entity"));
         }
 
-        /**
-         * Get full flow state including domain fields.
-         */
         @GetMapping("/{id}")
         public ResponseEntity<?> getFlow(@PathVariable String id) {
             Object found = repository.findById(id).orElse(null);
             return found != null ? ResponseEntity.ok(found) : ResponseEntity.notFound().build();
         }
 
-        /**
-         * Lightweight status check — only returns orchestrator fields.
-         */
         @GetMapping("/{id}/status")
         public ResponseEntity<?> getStatus(@PathVariable String id) {
             Object found = repository.findById(id).orElse(null);
             if (found == null) return ResponseEntity.notFound().build();
-
             OrchestratorFlow flow = (OrchestratorFlow) found;
             return ResponseEntity.ok(Map.of(
                     "id", flow.getId(),
@@ -97,9 +96,6 @@ public class FlowEndpointAutoConfiguration {
             ));
         }
 
-        /**
-         * Get flow by correlation ID.
-         */
         @GetMapping("/correlation/{correlationId}")
         public ResponseEntity<?> getByCorrelation(@PathVariable String correlationId) {
             Object found = repository.findByCorrelationId(correlationId).orElse(null);

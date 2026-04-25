@@ -54,6 +54,7 @@ import java.util.List;
 @AutoConfiguration
 @EnableScheduling
 @org.springframework.boot.autoconfigure.AutoConfigurationPackage
+@org.springframework.data.mongodb.repository.config.EnableMongoRepositories(basePackages = "com.orchestrator.starter")
 @EnableConfigurationProperties(OrchestratorProperties.class)
 public class OrchestratorAutoConfiguration {
 
@@ -75,14 +76,23 @@ public class OrchestratorAutoConfiguration {
      * Auto-generates a repository if the user hasn't defined one.
      * Discovers the entity type from FlowDefinition<F> via reflection.
      */
+    /**
+     * Auto-generates a repository if the user hasn't defined one.
+     * Uses @Lazy to break the circular dependency:
+     *   FlowDefinition → rawRepository → GenericFlowRepository
+     *   GenericFlowRepository → discoverEntityType → needs @Flow bean
+     *
+     * @Lazy creates a proxy immediately, delays actual creation until first use.
+     * By then, all beans are created and ApplicationContext is ready.
+     */
     @Bean
+    @org.springframework.context.annotation.Lazy
     @ConditionalOnMissingBean(OrchestratorFlowRepository.class)
     @SuppressWarnings({"unchecked", "rawtypes"})
     public OrchestratorFlowRepository<?> orchestratorGenericFlowRepository(
             org.springframework.data.mongodb.core.MongoTemplate mongoTemplate,
             ApplicationContext context) {
 
-        // Discover entity type from @Flow class's FlowDefinition<F> generic parameter
         Class<?> entityClass = discoverEntityType(context);
         log.info("Auto-generated repository for entity: {}", entityClass.getSimpleName());
         return new com.orchestrator.starter.domain.GenericFlowRepository(mongoTemplate, entityClass);
@@ -101,7 +111,6 @@ public class OrchestratorAutoConfiguration {
                 }
             }
         }
-        // Fallback
         return com.orchestrator.starter.domain.AbstractFlow.class;
     }
 

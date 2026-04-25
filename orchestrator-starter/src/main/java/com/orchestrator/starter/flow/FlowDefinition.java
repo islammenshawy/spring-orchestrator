@@ -38,6 +38,7 @@ import org.springframework.beans.factory.annotation.Autowired;
  */
 public abstract class FlowDefinition<F extends OrchestratorFlow> {
 
+    @org.springframework.context.annotation.Lazy
     @Autowired(required = false)
     @SuppressWarnings("unchecked")
     private OrchestratorFlowRepository rawRepository;
