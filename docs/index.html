@@ -419,17 +419,33 @@ void confirm(Flow f) {
     </div>
 </div>
 
-<h3>checkpoint() — when to use</h3>
+<h3>checkpoint(flow) &mdash; CRITICAL for crash safety</h3>
 
-<pre><code>var result = vendorApi.createDocument(flow.getTitle());
-flow.setDocumentId(result.getId());     // in memory only
-<strong>checkpoint(flow);</strong>                        // persisted to MongoDB NOW
+<p><code>checkpoint(flow)</code> saves the flow to MongoDB <strong>immediately</strong>. Without it, a crash after the API call loses the result.</p>
 
-// Crash before checkpoint → completedWhen = false → API called again (use strategy 1/2/3)
-// Crash after checkpoint  → completedWhen = true  → API skipped ✅</code></pre>
+<div class="grid grid-2">
+    <div class="card" style="border-left: 3px solid var(--success)">
+        <h4 style="color: var(--success)">&#10003; DO THIS</h4>
+        <pre style="font-size:12px;border:none;padding:4px">var result = vendorApi.create(...);
+flow.setDocumentId(result.getId());
+<strong>checkpoint(flow);</strong>
+// crash-safe from here</pre>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--danger)">
+        <h4 style="color: var(--danger)">&#10007; DON'T DO THIS</h4>
+        <pre style="font-size:12px;border:none;padding:4px">var result = vendorApi.create(...);
+flow.setDocumentId(result.getId());
+// forgot checkpoint()
+// crash = documentId lost
+// retry = duplicate API call</pre>
+    </div>
+</div>
 
-<div class="callout callout-info">
-<strong>Rule:</strong> Always <code>checkpoint()</code> after setting a result field. If vendor supports idempotency keys, it's extra safety. If vendor doesn't, it's essential.
+<p style="font-size:13px;margin-top:12px"><strong>The rule:</strong> Called an API? Set the result? Call <code>checkpoint()</code>.</p>
+
+<div class="callout callout-warning">
+<strong>When you MUST call checkpoint():</strong> after any external API call where you set a result field.<br>
+<strong>When you can skip it:</strong> if vendor supports idempotency keys, or if the step only reads/computes (no side effects).
 </div>
 
 <!-- ============================================================ -->

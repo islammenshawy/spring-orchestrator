@@ -437,20 +437,57 @@ public void confirmPayment(OrderFlow flow) {
 }
 ```
 
-### checkpoint() — when to use it
+### checkpoint(flow) — CRITICAL for crash safety
 
-`checkpoint(flow)` saves the flow to MongoDB immediately. Call it after setting result fields from an API call.
+`checkpoint(flow)` saves the flow to MongoDB **immediately**. Without it, if the container crashes after your API call returns but before the library saves the flow, the API result is lost and the vendor gets called again on retry.
 
-```java
-var result = vendorApi.createDocument(flow.getTitle());
-flow.setDocumentId(result.getId());     // set in memory
-checkpoint(flow);                        // persist to MongoDB NOW
+**The rule is simple: called an API? Set the result? Call `checkpoint()`.**
 
-// Crash after checkpoint → completedWhen("documentId != null") → TRUE → safe
-// Crash before checkpoint → completedWhen → FALSE → API called again (use strategy 1/2/3)
+```
+✅ DO THIS:
+    var result = vendorApi.createDocument(flow.getTitle());
+    flow.setDocumentId(result.getId());
+    checkpoint(flow);                    // ← SAVE NOW. Crash-safe from here.
+
+❌ DON'T DO THIS:
+    var result = vendorApi.createDocument(flow.getTitle());
+    flow.setDocumentId(result.getId());
+    // forgot checkpoint() — if container crashes here, documentId is lost
+    // on retry, completedWhen = false, API called AGAIN → duplicate document
 ```
 
-**Rule:** Always call `checkpoint()` after setting a result field from a non-idempotent API call. If your vendor supports idempotency keys, `checkpoint()` is extra safety but not strictly required.
+**When you MUST call checkpoint():**
+- After any external API call where you set a result field
+- Before doing additional work in the same step (DB writes, notifications, etc.)
+
+**When you can skip checkpoint():**
+- If your vendor supports idempotency keys (duplicate call returns same result)
+- If the step only reads data (no side effects)
+- If the step only computes/transforms (no external calls)
+
+**Full pattern every step should follow:**
+
+```java
+@Step(order = 1, completedWhen = "documentId != null")
+public void createDocument(MyFlow flow) {
+    // 1. Call vendor API (with idempotency key if available)
+    var result = vendorApi.createDocument(
+            flow.getTitle(),
+            flow.getCorrelationId() + ":CREATE_DOCUMENT"  // idempotency key
+    );
+
+    // 2. Set result on flow
+    flow.setDocumentId(result.getId());
+
+    // 3. CHECKPOINT — persist to MongoDB immediately
+    checkpoint(flow);
+
+    // 4. (Optional) Additional work — safe to do after checkpoint
+    auditService.log("Created document " + result.getId());
+}
+```
+
+If you forget `checkpoint()`, the step still works — the library saves the flow after your method returns. But there's a crash window between your API call and the library's save where the result can be lost.
 
 ---
 
