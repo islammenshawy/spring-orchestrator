@@ -18,7 +18,7 @@ import java.lang.reflect.Method;
  * Handles:
  * - Step name from annotation or method name (camelCase → UPPER_SNAKE)
  * - completedWhen SpEL evaluation for idempotency
- * - StepType for determining protection level
+ * - Annotation inheritance: method-level overrides class-level
  * - Annotation inheritance: method-level overrides class-level
  */
 @Slf4j
@@ -92,10 +92,6 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
         RecoverOn[] methodLevel = method.getAnnotationsByType(RecoverOn.class);
         if (methodLevel.length > 0) return methodLevel;
         return flowDefinition.getClass().getAnnotationsByType(RecoverOn.class);
-    }
-
-    public StepType getStepType() {
-        return stepAnnotation.type();
     }
 
     public boolean hasCompensation() {

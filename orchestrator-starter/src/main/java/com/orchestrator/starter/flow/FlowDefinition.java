@@ -16,7 +16,7 @@ import com.orchestrator.starter.domain.OrchestratorFlow;
  *     @Step(order = 1, completedWhen = "enigioDocumentId != null")
  *     public void createDocument(EnigioFlow flow) { ... }
  *
- *     @Step(order = 2, type = StepType.DB_WRITE)
+ *     @Step(order = 2)
  *     public void saveAudit(EnigioFlow flow) { ... }
  * }
  * </pre>

@@ -21,7 +21,7 @@ import java.lang.annotation.Target;
  *     flow.setDocumentId(res.getId());
  * }
  *
- * @Step(order = 2, type = StepType.DB_WRITE)
+ * @Step(order = 2)
  * public void saveAuditRecord(MyFlow flow) {
  *     auditRepo.save(new AuditRecord(flow));
  * }
@@ -47,7 +47,4 @@ public @interface Step {
      *   "status == 'VERIFIED'"
      */
     String completedWhen() default "";
-
-    /** Step type — determines what protection the library applies. */
-    StepType type() default StepType.API_CALL;
 }

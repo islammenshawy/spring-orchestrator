@@ -24,7 +24,7 @@ import java.lang.annotation.Target;
  *     @RecoverOn(httpStatus = 409, action = RecoverAction.SKIP)
  *     public void createDocument(EnigioFlow flow) { ... }
  *
- *     @Step(order = 2, type = StepType.DB_WRITE)
+ *     @Step(order = 2)
  *     public void saveAuditRecord(EnigioFlow flow) { ... }
  *
  *     @Step(order = 3, completedWhen = "signatureId != null")

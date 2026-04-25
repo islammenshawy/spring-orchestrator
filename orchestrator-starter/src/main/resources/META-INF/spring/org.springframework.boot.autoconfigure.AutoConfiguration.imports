@@ -1,1 +1,2 @@
 com.orchestrator.starter.autoconfigure.OrchestratorAutoConfiguration
+com.orchestrator.starter.autoconfigure.MongoTransactionAutoConfiguration
