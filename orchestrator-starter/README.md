@@ -73,23 +73,15 @@ Flow Entity          ──────────►     MongoDB (flow state)
 
 ```java
 @Component
-@Flow(topic = "orders.commands")
-@RetryOn(httpStatus = {500, 502, 503, 429})
-@FailOn(httpStatus = {400, 403})
+@Flow  // topic from orchestrator.kafka.command-topic in yml
 public class OrderFlow extends FlowDefinition<OrderEntity> {
 
     @Autowired private PaymentClient paymentClient;
 
     @Step(order = 1, completedWhen = "paymentId != null")
-    @RecoverOn(httpStatus = 409, message = "already charged", action = RecoverAction.SKIP)
     public void chargePayment(OrderEntity flow) {
         var result = paymentClient.charge(flow.getAmount());
         flow.setPaymentId(result.getId());
-    }
-
-    @Compensate(step = "chargePayment")
-    public void refundPayment(OrderEntity flow) {
-        paymentClient.refund(flow.getPaymentId());
     }
 
     @Step(order = 2, completedWhen = "trackingNumber != null")
@@ -98,6 +90,20 @@ public class OrderFlow extends FlowDefinition<OrderEntity> {
         flow.setTrackingNumber(result.getTracking());
     }
 }
+```
+
+That's the **minimum**. Two annotations (`@Flow`, `@Step`) and your business logic. Everything else is optional:
+
+```java
+// Add ONLY when you need them:
+@RecoverOn(httpStatus = 409, action = SKIP)  // vendor returns "already exists"
+@Compensate(step = "chargePayment")          // rollback on failure
+@Parallel(group = "prep")                    // concurrent execution
+@JoinOn(group = "prep")                      // wait for parallel steps
+
+// Rarely needed — built-in defaults handle the common case:
+@RetryOn(httpStatus = {500, 502, 503, 429})  // DEFAULT: all 5xx + 429 retry
+@FailOn(httpStatus = {400, 403})             // DEFAULT: all 4xx (except 429) fail
 ```
 
 ### 3. Flow entity + repository
@@ -150,23 +156,18 @@ spring:
 
 ## Annotations Reference
 
-### Class-level (defaults for all steps)
+| Annotation | Required? | Default if omitted | Where |
+|-----------|-----------|-------------------|-------|
+| `@Flow` | **Yes** | `topic` from `orchestrator.kafka.command-topic` in yml | Class |
+| `@Step(order, completedWhen)` | **Yes** | `name` = method name as UPPER_SNAKE. `completedWhen` empty = always execute | Method |
+| `@RetryOn` | No | **Built-in: HTTP 5xx + 429 → retry via Kafka topics** | Class or method |
+| `@FailOn` | No | **Built-in: HTTP 4xx (except 429) → fail immediately** | Class or method |
+| `@RecoverOn` | No | No recovery — add for vendor-specific cases (409, etc.) | Class or method |
+| `@Compensate(step)` | No | No rollback for that step | Method |
+| `@Parallel(group)` | No | Sequential execution | Method |
+| `@JoinOn(group)` | No | No join point | Method |
 
-| Annotation | Purpose | Example |
-|-----------|---------|---------|
-| `@Flow(topic)` | Marks class as a flow definition | `@Flow(topic = "orders.commands")` |
-| `@RetryOn(httpStatus, exceptions)` | Which errors trigger Kafka retry | `@RetryOn(httpStatus = {500, 502, 429})` |
-| `@FailOn(httpStatus, exceptions)` | Which errors fail immediately | `@FailOn(httpStatus = {400, 403})` |
-
-### Method-level (override class defaults per step)
-
-| Annotation | Purpose | Example |
-|-----------|---------|---------|
-| `@Step(order, completedWhen)` | Marks method as a step | `@Step(order = 1, completedWhen = "paymentId != null")` |
-| `@RecoverOn(httpStatus, message, action)` | Auto-recover on vendor "already exists" | `@RecoverOn(httpStatus = 409, action = SKIP)` |
-| `@Compensate(step)` | Rollback method for a step | `@Compensate(step = "chargePayment")` |
-| `@Parallel(group)` | Execute concurrently with group | `@Parallel(group = "prep")` |
-| `@JoinOn(group)` | Wait for all parallel steps in group | `@JoinOn(group = "prep")` |
+Method-level annotations override class-level. `@RetryOn`/`@FailOn` only needed to override the built-in defaults.
 
 ---
 
