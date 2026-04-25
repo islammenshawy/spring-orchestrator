@@ -349,50 +349,92 @@ Redelivery → Layer 1: isProcessed? → NO → proceed
 </div>
 
 <!-- ============================================================ -->
-<h2 id="checkpoint">Steps with API Call + DB Write</h2>
+<h2 id="checkpoint">The Unavoidable Gap: API Call + Crash</h2>
 
-<p>Most real steps call an external API <strong>and</strong> write to the database in the same method. The danger: if the container crashes after the API call but before the flow is saved, the result is lost and the API gets called again on redelivery.</p>
+<p>No library can make an HTTP call and a database write atomic. They are two different systems. There is always a window where the API call succeeded but the result hasn't been saved yet.</p>
 
-<div class="grid grid-2">
-    <div class="card" style="border-left: 3px solid var(--danger)">
-        <h4 style="color: var(--danger)">Without checkpoint (unsafe for non-idempotent APIs)</h4>
-        <pre style="font-size:12px;border:none;padding:4px">1. API call → succeeds (money charged)
-2. flow.setPaymentId(...)  (in memory only)
-   ← CRASH →
-3. flowRepository.save()   ← NEVER RUNS
-   paymentId lost
+<div class="diagram">
+var result = vendorApi.charge(amount);   // money charged on vendor side
+     ← CONTAINER CRASHES HERE →
+flow.setPaymentId(result.getId());       // never runs
+checkpoint(flow);                         // never runs
 
-Redelivery → completedWhen = false
-  → API called AGAIN → double charge</pre>
+Redelivery → completedWhen("paymentId != null") → false
+           → vendorApi.charge() called AGAIN → double charge
+</div>
+
+<div class="callout callout-danger">
+<strong>This is not a library bug.</strong> It's a fundamental distributed systems constraint. No framework — not Temporal, not Camunda, not this library — can atomically span an HTTP call and a database write.
+</div>
+
+<h3>Three strategies (pick based on your vendor)</h3>
+
+<div class="grid grid-3">
+    <div class="card" style="border-top: 3px solid var(--success)">
+        <h4 style="color: var(--success)">1. Idempotency Key (best)</h4>
+        <p style="font-size:12px">Send a unique key with the API call. Vendor returns same result on duplicate.</p>
+        <pre style="font-size:11px;border:none;padding:4px">var result = vendorApi.charge(
+    amount,
+    idempotencyKey:
+      flow.getCorrelationId()
+      + ":CHARGE_PAYMENT"
+);
+// Safe: duplicate call returns
+// same result, no double charge</pre>
+        <p style="font-size:11px;color:var(--dim)">Stripe, Adyen, most modern APIs support this.</p>
     </div>
-    <div class="card" style="border-left: 3px solid var(--success)">
-        <h4 style="color: var(--success)">With checkpoint (safe)</h4>
-        <pre style="font-size:12px;border:none;padding:4px">1. API call → succeeds (money charged)
-2. flow.setPaymentId(...)
-3. checkpoint(flow)  ← SAVES TO DB NOW
-   ← CRASH →
-4. auditRepo.save()  ← lost, but safe
-
-Redelivery → completedWhen = true
-  → skip API → advance (no double charge)</pre>
+    <div class="card" style="border-top: 3px solid var(--info)">
+        <h4 style="color: var(--info)">2. Pre-check (query before retry)</h4>
+        <p style="font-size:12px">Before calling the API, check if a previous attempt already succeeded.</p>
+        <pre style="font-size:11px;border:none;padding:4px">var existing = vendorApi
+  .findByRef(flow.getCorrelationId());
+if (existing != null) {
+    flow.setPaymentId(existing.getId());
+    return; // already done
+}
+var result = vendorApi.charge(amount,
+    ref: flow.getCorrelationId());
+flow.setPaymentId(result.getId());</pre>
+        <p style="font-size:11px;color:var(--dim)">Works if vendor supports lookup by reference.</p>
+    </div>
+    <div class="card" style="border-top: 3px solid var(--warning)">
+        <h4 style="color: var(--warning)">3. Reserve + Confirm (two-phase)</h4>
+        <p style="font-size:12px">Split into two steps. Reserve is repeatable, confirm uses the reservation ID.</p>
+        <pre style="font-size:11px;border:none;padding:4px">// Step 1: reserve (safe to repeat)
+@Step(order=1,
+  completedWhen="reservationId != null")
+void reserve(Flow f) {
+    f.setReservationId(
+        vendor.reserve(f.getAmount()));
+}
+// Step 2: confirm by reservation ID
+@Step(order=2,
+  completedWhen="paymentId != null")
+void confirm(Flow f) {
+    f.setPaymentId(
+        vendor.confirm(f.getReservationId()));
+}</pre>
+        <p style="font-size:11px;color:var(--dim)">For legacy APIs with no idempotency support.</p>
     </div>
 </div>
 
+<h3>checkpoint() — narrows the gap</h3>
+
+<p><code>checkpoint(flow)</code> saves the flow to MongoDB immediately after setting the result. It can't close the gap between the API call and the set, but it closes the gap between the set and the library's own save.</p>
+
 <pre><code><span class="anno">@Step</span>(order = 1, completedWhen = "paymentId != null")
 public void chargePayment(OrderFlow flow) {
-    // 1. Call external API
-    var result = paymentClient.charge(flow.getAmount());
+    var result = paymentClient.charge(flow.getAmount(),
+        idempotencyKey: flow.getCorrelationId() + ":CHARGE");  // strategy 1
 
-    // 2. Save result immediately — crash-safe from this point
     flow.setPaymentId(result.getId());
-    <strong>checkpoint(flow);</strong>
+    <strong>checkpoint(flow);</strong>   // persisted NOW — crash after this is safe
 
-    // 3. Additional DB writes are now safe
-    auditRepo.save(new AuditRecord(flow.getId(), result.getId()));
+    auditRepo.save(new AuditRecord(flow));  // additional DB writes
 }</code></pre>
 
-<div class="callout callout-warning">
-    <strong>When to use checkpoint:</strong> After any non-idempotent external API call where you need the result to survive a crash. If your vendor API supports idempotency keys (most modern APIs), the regular flow is fine — the duplicate call returns the same result.
+<div class="callout callout-info">
+<strong>Rule of thumb:</strong> If your vendor supports idempotency keys, use them — <code>checkpoint()</code> is just extra safety. If your vendor doesn't, use strategy 2 or 3, and always call <code>checkpoint()</code> after setting result fields.
 </div>
 
 <!-- ============================================================ -->
