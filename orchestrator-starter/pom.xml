@@ -19,14 +19,9 @@
     </description>
 
     <dependencies>
-        <!--
-          Only pull what the library actually uses.
-          The consuming app provides web, webflux, etc.
-        -->
-
         <!-- MongoDB for flow persistence + outbox + idempotency -->
         <dependency>
-            <groupId>org.springframework.kafka</groupId>
+            <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-mongodb</artifactId>
         </dependency>
 
@@ -38,7 +33,7 @@
 
         <!-- Auto-configuration support -->
         <dependency>
-            <groupId>org.springframework.kafka</groupId>
+            <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
         </dependency>
 
@@ -52,10 +47,11 @@
         <dependency>
             <groupId>org.springframework.retry</groupId>
             <artifactId>spring-retry</artifactId>
+        </dependency>
 
         <!-- Web support for auto-exposed flow endpoints (optional) -->
         <dependency>
-            <groupId>org.springframework.kafka</groupId>
+            <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
             <optional>true</optional>
         </dependency>
@@ -69,7 +65,7 @@
 
         <!-- IDE metadata generation -->
         <dependency>
-            <groupId>org.springframework.kafka</groupId>
+            <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-configuration-processor</artifactId>
             <optional>true</optional>
         </dependency>

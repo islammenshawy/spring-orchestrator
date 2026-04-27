@@ -6,7 +6,7 @@ spring:
     name: dashboard
   data:
     mongodb:
-    uri: mongodb://localhost:27017/enigio_orchestrator
+      uri: mongodb://localhost:27017/enigio_orchestrator
   thymeleaf:
     cache: false
   kafka:

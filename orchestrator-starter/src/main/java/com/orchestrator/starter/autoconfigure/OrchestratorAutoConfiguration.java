@@ -328,16 +328,6 @@ public class OrchestratorAutoConfiguration {
         private final OrchestratorKafkaConsumer<?> consumer;
         public OrchestratorCommandListener(OrchestratorKafkaConsumer<?> consumer) { this.consumer = consumer; }
 
-        @org.springframework.kafka.annotation.RetryableTopic(
-                attempts = "${orchestrator.retry.max-attempts:4}",
-                backOff = @org.springframework.kafka.annotation.BackOff(
-                        delayString = "${orchestrator.retry.initial-interval-ms:5000}",
-                        multiplierString = "${orchestrator.retry.multiplier:2.0}",
-                        maxDelayString = "${orchestrator.retry.max-interval-ms:30000}"),
-                retryTopicSuffix = "-retry",
-                dltTopicSuffix = "-dlt",
-                topicSuffixingStrategy = org.springframework.kafka.retrytopic.TopicSuffixingStrategy.SUFFIX_WITH_INDEX_VALUE,
-                include = RetryableStepException.class)
         @org.springframework.kafka.annotation.KafkaListener(
                 topics = "${orchestrator.kafka.command-topic}",
                 groupId = "${spring.application.name:orchestrator}-executor")
@@ -349,7 +339,9 @@ public class OrchestratorAutoConfiguration {
             consumer.onStepCommand(payload, topic, offset);
         }
 
-        @org.springframework.kafka.annotation.DltHandler
+        @org.springframework.kafka.annotation.KafkaListener(
+                topics = "${orchestrator.kafka.command-topic}-dlt",
+                groupId = "${spring.application.name:orchestrator}-dlt")
         public void onCommandDlt(String payload,
                                  @org.springframework.messaging.handler.annotation.Header(
                                          name = org.springframework.kafka.support.KafkaHeaders.RECEIVED_TOPIC) String topic,
@@ -361,7 +353,33 @@ public class OrchestratorAutoConfiguration {
         }
     }
 
-    // Retry topic config is now handled via @RetryableTopic annotation on the listener above.
+    @Bean
+    public RetryTopicConfiguration orchestratorCommandRetryConfig(
+            KafkaTemplate<String, String> template,
+            OrchestratorProperties props) {
+        OrchestratorProperties.RetryConfig retry = props.getRetry();
+        log.info("Non-blocking retry: topic={}, attempts={}, delay={}ms, jitter={}",
+                props.getKafka().getCommandTopic(), retry.getMaxAttempts(),
+                retry.getInitialIntervalMs(), retry.getJitterFactor());
+
+        JitteredExponentialBackOffPolicy backoff = new JitteredExponentialBackOffPolicy();
+        backoff.setInitialInterval(retry.getInitialIntervalMs());
+        backoff.setMultiplier(retry.getMultiplier());
+        backoff.setMaxInterval(retry.getMaxIntervalMs());
+        backoff.setJitterFactor(retry.getJitterFactor());
+
+        return RetryTopicConfigurationBuilder
+                .newInstance()
+                .customBackoff(backoff)
+                .maxAttempts(retry.getMaxAttempts())
+                .includeTopic(props.getKafka().getCommandTopic())
+                .retryTopicSuffix("-retry")
+                .dltSuffix("-dlt")
+                .setTopicSuffixingStrategy(TopicSuffixingStrategy.SUFFIX_WITH_INDEX_VALUE)
+                .dltProcessingFailureStrategy(DltStrategy.ALWAYS_RETRY_ON_ERROR)
+                .retryOn(RetryableStepException.class)
+                .create(template);
+    }
 
     // ========== Recovery Service ==========
 

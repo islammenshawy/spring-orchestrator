@@ -71,11 +71,12 @@ class FlowResilienceTest {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> startFlow(String title) {
-        return rest.post().uri("/flows")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of("title", title, "content", "test", "signerEmail", "test@test.com"))
-                .retrieve()
-                .body(Map.class);
+        var response = rest.postForEntity(baseUrl() + "/flows",
+                Map.of("title", title, "content", "test", "signerEmail", "test@test.com"),
+                Map.class);
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode(),
+                "Flow should return 202 Accepted");
+        return response.getBody();
     }
 
     private EnigioFlow waitForStatus(String flowId, FlowStatus expected, Duration timeout) {
