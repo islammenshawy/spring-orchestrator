@@ -103,22 +103,45 @@ Your Application                     Library (auto-configured)
 
 @Flow class                          FlowOrchestrator
   @Step methods      ──────────▶       ├── Step Registry
-  @Compensate                          ├── Outbox Writer
-  @RetryOn                             ├── Kafka Consumer
-  @RecoverOn                           ├── Retry Topic Config
-  @FailOn                              ├── Idempotency Service
-  @Parallel                            ├── Step Audit Logger
-  @JoinOn                              ├── Stale Flow Recovery
-                                       └── Compensation Engine
+  @Compensate                          ├── Outbox Writer (atomic with flow save)
+  @RetryOn                             ├── Executor Consumer (executes steps)
+  @RecoverOn                           ├── Orchestrator Consumer (advances flows)
+  @FailOn                              ├── Retry Topic Config (jittered backoff)
+  @Parallel                            ├── Idempotency Service (two-layer dedup)
+  @JoinOn                              ├── Step Audit Logger
+                                       ├── Stale Flow Recovery (crash safety net)
+                                       └── Compensation Engine (reverse on failure)
 
-Flow Entity          ──────────▶     MongoDB (flow state)
-  implements
-  OrchestratorFlow                   Kafka Topics (auto-created)
-                                       ├── {topic}
-                                       ├── {topic}-retry-0
-                                       ├── {topic}-retry-1
-                                       ├── {topic}-retry-2
-                                       └── {topic}-dlt
+Flow Entity          ──────────▶     MongoDB
+  extends AbstractFlow                   ├── your_flows (domain state)
+                                       ├── orchestrator_outbox
+                                       ├── orchestrator_processed_events
+                                       └── orchestrator_step_log
+
+                                     Kafka Topics (auto-created)
+                                       ├── {command-topic}             (step commands)
+                                       ├── {command-topic}-retry-0/1/2 + -dlt
+                                       ├── {command-topic}.replies     (step results)
+                                       └── {command-topic}.replies-retry-0/1/2 + -dlt
+</div>
+
+<h3>Decoupled Executor / Orchestrator (default)</h3>
+
+<div class="diagram">
+  ┌─────────────┐  command   ┌──────────────┐  reply    ┌─────────────┐
+  │ Orchestrator│ ─────────▶ │   Executor   │ ────────▶ │ Orchestrator│
+  │  (publishes │            │  (executes   │           │  (advances  │
+  │   commands) │            │   the step)  │           │   the flow) │
+  └─────────────┘            └──────────────┘           └─────────────┘
+                                   │
+                              Calls vendor API
+                              (30s timeout max)
+
+  Executor thread:      blocked during API call (up to 30s)
+  Orchestrator thread:  NEVER blocked — publishes commands, processes replies
+
+  Scale executors for throughput. Orchestrator stays lightweight.
+  To disable: orchestrator.kafka.reply-topic: ""  (inline mode)
 </div>
 
 <!-- ============================================================ -->
@@ -320,8 +343,8 @@ Risk of very short delays.</pre>
 <div class="grid grid-2">
     <div class="card" style="border-left: 3px solid var(--info)">
         <h4 style="color: var(--info)">Layer 1: Consumer (processed_events)</h4>
-        <p style="font-size:13px">Single try-insert with Kafka <code>eventId</code>. If duplicate key &rarr; already processed &rarr; skip entirely.</p>
-        <p style="font-size:13px;color:var(--warning)"><strong>Key:</strong> marked AFTER step completes, not before.</p>
+        <p style="font-size:13px">Check-only with <code>isProcessed(eventId)</code> before execution. Mark with <code>tryProcess(eventId)</code> AFTER success.</p>
+        <p style="font-size:13px;color:var(--warning)"><strong>Key:</strong> checked BEFORE, marked AFTER. Failed steps are NOT marked — retries work correctly.</p>
     </div>
     <div class="card" style="border-left: 3px solid var(--warning)">
         <h4 style="color: var(--warning)">Layer 2: Handler (completedWhen)</h4>
@@ -472,6 +495,21 @@ flow.setDocumentId(result.getId());
 <div class="callout callout-info">
     Enable <code>orchestrator.mongodb.transactions-enabled=true</code> on MongoDB replica sets for fully atomic flow + outbox writes.
 </div>
+
+<h3>Outbox vs 2PC vs Event Sourcing</h3>
+
+<table>
+    <tr><th>Aspect</th><th>Outbox (this library)</th><th>Two-Phase Commit (2PC)</th><th>Event Sourcing</th></tr>
+    <tr><td>Consistency</td><td>Eventual (async)</td><td>Strong (synchronous)</td><td>Eventual</td></tr>
+    <tr><td>Availability</td><td><span class="badge badge-success">High</span> — outbox queues if Kafka down</td><td><span class="badge badge-error">Low</span> — blocks if any participant down</td><td><span class="badge badge-success">High</span></td></tr>
+    <tr><td>Coupling</td><td>Loose — events</td><td>Tight — all must be available</td><td>Loose — events</td></tr>
+    <tr><td>Storage</td><td>Traditional docs + event notifications</td><td>Traditional with distributed locks</td><td>Event log is primary, state derived</td></tr>
+    <tr><td>Audit trail</td><td>Step logs (opt-in)</td><td>Transaction logs</td><td>Complete by design</td></tr>
+    <tr><td>Complexity</td><td>CRUD + outbox poller</td><td>Coordinator + participant protocol</td><td>Projections, snapshots, replays</td></tr>
+    <tr><td>Best for</td><td>Standard workflows with reliable event delivery</td><td>Strong consistency across databases</td><td>Full audit history + time-travel</td></tr>
+</table>
+
+<p>This library uses the outbox pattern: traditional MongoDB CRUD for flow state, with reliable Kafka delivery as a side effect. Choose 2PC when you need strict consistency across multiple databases. Choose event sourcing when complete audit history and time-travel are core requirements, not afterthoughts.</p>
 
 <!-- ============================================================ -->
 <h2 id="compensation">Saga Compensation (Rollback)</h2>
@@ -626,7 +664,7 @@ C: gets [P2,P5]
     <tr><td>No duplicate API calls</td><td><span class="badge badge-success">Guaranteed</span></td><td>Layer 2: completedWhen checks result fields</td></tr>
     <tr><td>No lost messages</td><td><span class="badge badge-success">Guaranteed</span></td><td>Kafka redelivers uncommitted offsets</td></tr>
     <tr><td>No stuck flows</td><td><span class="badge badge-success">Guaranteed</span></td><td>Outbox + recovery service + Kafka redelivery</td></tr>
-    <tr><td>Flow step ordering</td><td><span class="badge badge-success">Guaranteed</span></td><td>flowId as Kafka key → same partition</td></tr>
+    <tr><td>Flow step ordering</td><td><span class="badge badge-success">Guaranteed</span></td><td>flowId as Kafka partition key → same partition → same consumer. Next command only published after previous reply processed.</td></tr>
     <tr><td>Minimal processing pause</td><td><span class="badge badge-success">Yes</span></td><td>CooperativeStickyAssignor</td></tr>
     <tr><td>Instant crash detection</td><td><span class="badge badge-warning">~30s</span></td><td>session.timeout.ms (outbox recovers in ~500ms)</td></tr>
 </table>
@@ -640,11 +678,98 @@ C: gets [P2,P5]
   # client.rack: ${KAFKA_RACK}       # for multi-region</code></pre>
 
 <!-- ============================================================ -->
+<h2 id="ordering">Step Ordering Guarantee</h2>
+
+<p>With multiple executor and orchestrator pods, how do we ensure steps execute <strong>in order</strong> for each flow?</p>
+
+<div class="callout callout-info">
+    <strong>Kafka partition key = flowId.</strong> Every command and reply message uses the flow's ID as the Kafka message key. Kafka guarantees that all messages with the same key go to the <strong>same partition</strong>, and each partition is consumed by <strong>exactly one consumer</strong> in the group. Therefore, all steps for a given flow are always processed by the same executor and same orchestrator instance — sequentially, never concurrently.
+</div>
+
+<div class="diagram">
+Flow abc-123:
+  Command: kafkaTemplate.send(commandTopic, "abc-123", payload)
+                                            ^^^^^^^^^^
+                                            partition key
+
+  All commands for abc-123 → same partition → same executor pod
+  All replies  for abc-123 → same partition → same orchestrator pod
+
+  Step 1 command → executor runs step 1 → reply
+  Reply → orchestrator publishes step 2 command
+  Step 2 command → same executor → step 2 → reply
+  ...
+
+  No race condition. Next command only exists AFTER previous reply is processed.
+
+With 10 executor pods and 5 orchestrator pods:
+  Flow abc-123 → always partition P3 → always executor Pod-B, orchestrator Pod-A
+  Flow def-456 → always partition P7 → always executor Pod-E, orchestrator Pod-C
+  Different flows run in parallel. Same flow runs sequentially.
+</div>
+
+<h3>Multi-Flow Per App</h3>
+
+<p>Multiple <code>@Flow</code> classes in one app, sharing topics by default. Each flow type gets its own <code>StepRegistry</code>, <code>FlowOrchestrator</code>, and <code>GenericFlowRepository</code>. The <code>flowType</code> field in every Kafka message routes to the correct handler.</p>
+
+<pre><code>@Flow(name = "enigio")
+class EnigioFlow extends FlowDefinition&lt;EnigioEntity&gt; { ... }
+
+@Flow(name = "payment")
+class PaymentFlow extends FlowDefinition&lt;PaymentEntity&gt; { ... }
+
+# Optional per-flow overrides in YAML:
+orchestrator:
+  flows:
+    payment:
+      topic: payment.commands     # own topic
+      dlt-topic: payment.critical-dlt
+</code></pre>
+
+<h3>Concurrency Guarantees (Zero Data Loss)</h3>
+
+<table>
+    <tr><th>Guarantee</th><th>Mechanism</th></tr>
+    <tr><td>No duplicate API calls</td><td>Two-layer idempotency: check before, mark after + completedWhen SpEL</td></tr>
+    <tr><td>No lost messages</td><td>Kafka offsets committed after success. Failed &rarr; retry topic</td></tr>
+    <tr><td>No stuck flows</td><td>Outbox (~500ms) + Kafka redeliver (~30s) + recovery service (~5min)</td></tr>
+    <tr><td>No overwritten domain fields</td><td>Reply carries flow snapshot &mdash; reply consumer never re-reads stale MongoDB data</td></tr>
+    <tr><td>No @Version conflicts</td><td>Reply consumer uses <code>$set</code> partial updates (only changes <code>currentStep</code>, <code>status</code>). Command consumer uses full save with <code>@Version</code>. No conflict between them.</td></tr>
+    <tr><td>Step ordering</td><td>flowId = partition key &rarr; same partition &rarr; same consumer &rarr; sequential</td></tr>
+    <tr><td>Infrastructure errors</td><td>MongoDB/connection failures wrapped as <code>RetryableStepException</code> &rarr; Kafka retry</td></tr>
+    <tr><td>DLT with exception</td><td><code>kafka_dlt-exception-message</code> header captured in flow + step log</td></tr>
+</table>
+
+<h3>How the Snapshot Pattern Works</h3>
+
+<div class="diagram">
+Command Consumer (executor):
+  1. Execute step (calls vendor API)
+  2. Save flow to MongoDB (domain fields persisted, @Version incremented)
+  3. Serialize flow to JSON snapshot
+  4. Publish reply WITH snapshot to Kafka (.get() waits for broker ack)
+
+Reply Consumer (orchestrator):
+  5. Receive reply with snapshot
+  6. Deserialize flow FROM snapshot (not from MongoDB &mdash; no stale read)
+  7. Advance: $set currentStep + status (partial update, bypasses @Version)
+  8. Write outbox event for next step command
+
+Why this works:
+  - Step 2 completes before step 3 (synchronous)
+  - Step 4 completes before step 5 (Kafka ordering)
+  - Step 6 uses snapshot from step 3 (guaranteed fresh)
+  - Step 7 uses $set (no @Version conflict with step 2)
+  - Crash at any point: Kafka redelivers, Layer 2 catches duplicates
+</div>
+
+<!-- ============================================================ -->
 <h2 id="config">Configuration Reference</h2>
 
 <table>
     <tr><th>Property</th><th>Default</th><th>Description</th></tr>
     <tr><td><code>orchestrator.kafka.command-topic</code></td><td><code>orchestrator.commands</code></td><td>Kafka topic for step commands</td></tr>
+    <tr><td><code>orchestrator.kafka.reply-topic</code></td><td><code>{command-topic}.replies</code></td><td>Reply topic for step results. Set to <code>""</code> for inline mode</td></tr>
     <tr><td><code>orchestrator.retry.max-attempts</code></td><td><code>4</code></td><td>1 initial + N-1 retries</td></tr>
     <tr><td><code>orchestrator.retry.initial-interval-ms</code></td><td><code>2000</code></td><td>First retry delay (ms)</td></tr>
     <tr><td><code>orchestrator.retry.multiplier</code></td><td><code>2.0</code></td><td>Exponential multiplier</td></tr>

@@ -17,6 +17,7 @@ public class MetricsController {
     private record AppInfo(String name, String pattern, String baseUrl, String color) {}
 
     private static final List<AppInfo> APPS = List.of(
+            new AppInfo("Starter Library", "library", "http://localhost:8085", "#22c55e"),
             new AppInfo("Saga+Outbox", "saga", "http://localhost:8082", "#a78bfa"),
             new AppInfo("Statemachine", "statemachine", "http://localhost:8083", "#22d3ee"),
             new AppInfo("Spring Integration", "spring-integration", "http://localhost:8084", "#818cf8")

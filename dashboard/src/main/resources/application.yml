@@ -6,7 +6,7 @@ spring:
     name: dashboard
   data:
     mongodb:
-      uri: mongodb://localhost:27017/enigio_orchestrator
+    uri: mongodb://localhost:27017/enigio_orchestrator
   thymeleaf:
     cache: false
   kafka:
@@ -15,3 +15,9 @@ spring:
 enigio:
   client:
     base-url: http://localhost:8081/api/v1
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics

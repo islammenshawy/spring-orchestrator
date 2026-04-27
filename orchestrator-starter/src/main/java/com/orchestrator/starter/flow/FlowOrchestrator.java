@@ -8,6 +8,7 @@ import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.exception.NonRetryableStepException;
 import com.orchestrator.starter.exception.RetryableStepException;
 import com.orchestrator.starter.kafka.StepCommandMessage;
+import com.orchestrator.starter.kafka.StepReplyMessage;
 import com.orchestrator.starter.outbox.OutboxEvent;
 import com.orchestrator.starter.outbox.OutboxEventRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -33,10 +34,15 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private final OutboxEventRepository outboxRepository;
     private final StepExecutionLogRepository stepLogRepository;
     private final ObjectMapper objectMapper;
+    private final String flowType;
     private final String commandTopic;
+    private final String replyTopic;
+    private final boolean replyEnabled;
     private final TransactionTemplate txTemplate;
     private final boolean includeFlowStateInLogs;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private Class<F> entityClass;
+    private org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
 
     public FlowOrchestrator(
             OrchestratorFlowRepository<F> flowRepository,
@@ -45,6 +51,26 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             StepExecutionLogRepository stepLogRepository,
             ObjectMapper objectMapper,
             String commandTopic,
+            String replyTopic,
+            boolean replyEnabled,
+            TransactionTemplate txTemplate,
+            boolean includeFlowStateInLogs,
+            KafkaTemplate<String, String> kafkaTemplate) {
+        this(flowRepository, stepRegistry, outboxRepository, stepLogRepository,
+                objectMapper, null, commandTopic, replyTopic, replyEnabled,
+                txTemplate, includeFlowStateInLogs, kafkaTemplate);
+    }
+
+    public FlowOrchestrator(
+            OrchestratorFlowRepository<F> flowRepository,
+            StepRegistry<F> stepRegistry,
+            OutboxEventRepository outboxRepository,
+            StepExecutionLogRepository stepLogRepository,
+            ObjectMapper objectMapper,
+            String flowType,
+            String commandTopic,
+            String replyTopic,
+            boolean replyEnabled,
             TransactionTemplate txTemplate,
             boolean includeFlowStateInLogs,
             KafkaTemplate<String, String> kafkaTemplate) {
@@ -53,7 +79,10 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         this.outboxRepository = outboxRepository;
         this.stepLogRepository = stepLogRepository;
         this.objectMapper = objectMapper;
+        this.flowType = flowType;
         this.commandTopic = commandTopic;
+        this.replyTopic = replyTopic;
+        this.replyEnabled = replyEnabled;
         this.includeFlowStateInLogs = includeFlowStateInLogs;
         this.txTemplate = txTemplate;
         this.kafkaTemplate = kafkaTemplate;
@@ -71,6 +100,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setCurrentStep(stepRegistry.getFirstStep());
         flow.setStatus(FlowStatus.IN_PROGRESS);
         flow.setUpdatedAt(Instant.now());
+        if (flowType != null) flow.setFlowType(flowType);
 
         // Save flow + outbox event atomically
         F savedFlow = runInTransaction(() -> {
@@ -86,6 +116,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                     .flowId(savedFlow.getId())
                     .correlationId(savedFlow.getCorrelationId())
                     .stepName(savedFlow.getCurrentStep())
+                    .flowType(flowType)
                     .build();
             kafkaTemplate.send(commandTopic, savedFlow.getId(),
                     objectMapper.writeValueAsString(cmd)).get();
@@ -101,8 +132,26 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     /**
      * Execute a step by name. For sequential steps, stepName matches currentStep.
      * For parallel steps, stepName is the specific parallel step from the Kafka message.
+     *
+     * Any infrastructure exception (MongoDB down, connection error) is wrapped as
+     * RetryableStepException so Spring Kafka routes to retry topics rather than DLT.
+     * Only explicit NonRetryableStepException (business errors like HTTP 400) goes to DLT.
      */
     public void executeStep(String flowId, String stepName) {
+        try {
+            doExecuteStep(flowId, stepName);
+        } catch (RetryableStepException | NonRetryableStepException e) {
+            throw e; // Already typed — let Spring Kafka handle
+        } catch (Exception e) {
+            // Infrastructure failure (MongoDB, network, etc.) — retryable
+            log.warn("[Saga] Infrastructure error in step {} for flow {}: {}",
+                    stepName, flowId, e.getMessage());
+            throw new RetryableStepException(
+                    "Infrastructure error in " + stepName + ": " + e.getMessage(), e);
+        }
+    }
+
+    private void doExecuteStep(String flowId, String stepName) {
         F flow = flowRepository.findById(flowId)
                 .orElseThrow(() -> new IllegalArgumentException("Flow not found: " + flowId));
 
@@ -173,33 +222,129 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
-        // Step succeeded
+        // Step succeeded — save domain fields + clear retry state.
         flow.setRetryCount(0);
         flow.setBackoffSeconds(0);
         flow.setNextRetryAt(null);
         flow.setErrorMessage(null);
         flow.setUpdatedAt(Instant.now());
-        flowRepository.save(flow);
+
+        // Save flow — persists domain fields set by the step handler.
+        saveFlow(flow);
+
+        if (replyEnabled) {
+            // Reply mode: include full flow snapshot in the reply message.
+            // The reply consumer uses this snapshot instead of re-reading from
+            // MongoDB, eliminating race conditions between consumers.
+            publishReply(flowId, stepName, "COMPLETED", null, serialize(flow));
+        } else {
+            // Inline mode: advance in same thread
+            markParallelStepCompleted(flow, stepName, handler);
+        }
 
         logStep(flowId, stepName, "COMPLETED", 1,
                 flowBefore, includeFlowStateInLogs ? serialize(flow) : null, null, startedAt);
+    }
 
-        markParallelStepCompleted(flow, stepName, handler);
+    /**
+     * Execute step only — no advancement. Used in reply mode.
+     * The consumer publishes a reply after this returns.
+     */
+    public void executeStepOnly(String flowId, String stepName) {
+        executeStep(flowId, stepName);
+    }
+
+    /**
+     * Called by the reply consumer after receiving a COMPLETED reply.
+     * Advances the flow to the next step.
+     */
+    /**
+     * Called by the reply consumer after receiving a COMPLETED reply.
+     * Uses the flow snapshot from the reply message (not a MongoDB re-read)
+     * to avoid the race condition where re-read returns stale data.
+     */
+    @SuppressWarnings("unchecked")
+    public void advanceAfterReply(String flowId, String stepName, String flowSnapshot) {
+        F flow;
+        if (flowSnapshot != null && !flowSnapshot.isEmpty() && entityClass != null) {
+            // Use snapshot from reply — guaranteed to have all domain fields
+            try {
+                flow = objectMapper.readValue(flowSnapshot, entityClass);
+            } catch (Exception e) {
+                log.warn("[Saga] Failed to deserialize flow snapshot, falling back to DB: {}",
+                        e.getMessage());
+                flow = flowRepository.findById(flowId).orElse(null);
+            }
+        } else {
+            // No snapshot (backward compat) — fall back to DB read
+            flow = flowRepository.findById(flowId).orElse(null);
+        }
+
+        if (flow == null) {
+            throw new IllegalArgumentException("Flow not found: " + flowId);
+        }
+        if (flow.getStatus() == FlowStatus.COMPLETED || flow.getStatus() == FlowStatus.FAILED) return;
+
+        StepHandler<F> handler = stepRegistry.getHandler(stepName);
+        markParallelStepCompleted(flow, stepName, handler, stepName);
+    }
+
+    /**
+     * Publish a reply synchronously to Kafka. Called AFTER saveFlow() completes.
+     * Uses .get() to block until broker acknowledges — guarantees the reply
+     * consumer reads the flow AFTER domain fields are persisted.
+     */
+    private void publishReply(String flowId, String stepName, String status,
+                              String error, String flowSnapshot) {
+        try {
+            StepReplyMessage reply = StepReplyMessage.builder()
+                    .flowId(flowId)
+                    .stepName(stepName)
+                    .eventId(UUID.randomUUID().toString())
+                    .status(status)
+                    .errorMessage(error)
+                    .flowType(flowType)
+                    .flowSnapshot(flowSnapshot)
+                    .build();
+            kafkaTemplate.send(replyTopic, flowId, objectMapper.writeValueAsString(reply)).get();
+        } catch (Exception e) {
+            log.warn("[Saga] Reply publish failed for flow {} step {}: {}",
+                    flowId, stepName, e.getMessage());
+        }
     }
 
     public void markDeadLettered(String flowId) {
-        flowRepository.findById(flowId).ifPresent(flow -> {
-            flow.setStatus(FlowStatus.FAILED);
-            flow.setErrorMessage("[DLT] Exhausted all retry attempts");
-            flow.setUpdatedAt(Instant.now());
-            flowRepository.save(flow);
+        markDeadLettered(flowId, null, null);
+    }
 
-            logStep(flowId, flow.getCurrentStep(), "DEAD_LETTERED", flow.getRetryCount(),
-                    null, null, "[DLT] Exhausted retries", Instant.now());
+    public void markDeadLettered(String flowId, String stepName) {
+        markDeadLettered(flowId, stepName, null);
+    }
 
-            // Run compensation for all completed steps in reverse
-            runCompensation(flow);
-        });
+    public void markDeadLettered(String flowId, String stepName, String exceptionMessage) {
+        var optFlow = flowRepository.findById(flowId);
+        if (optFlow.isEmpty()) {
+            log.warn("[DLT] Flow {} not found in database — orphaned Kafka message", flowId);
+            logStep(flowId, stepName != null ? stepName : "UNKNOWN", "DEAD_LETTERED", 0,
+                    null, null, "[DLT] Flow not found: " + (exceptionMessage != null ? exceptionMessage : "orphaned message"), Instant.now());
+            return;
+        }
+
+        F flow = optFlow.get();
+        String errorDetail = exceptionMessage != null
+                ? "[DLT] " + exceptionMessage
+                : "[DLT] Exhausted all retry attempts";
+        flow.setStatus(FlowStatus.FAILED);
+        flow.setErrorMessage(errorDetail);
+        flow.setUpdatedAt(Instant.now());
+        saveFlow(flow);
+
+        logStep(flowId, stepName != null ? stepName : flow.getCurrentStep(),
+                "DEAD_LETTERED", flow.getRetryCount(),
+                null, null, errorDetail, Instant.now());
+
+        // Run compensation for all completed steps in reverse
+        runCompensation(flow);
     }
 
     // ========== Compensation (what makes this a Saga) ==========
@@ -212,7 +357,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 flow.getId(), completedSteps.size());
 
         flow.setStatus(FlowStatus.COMPENSATING);
-        flowRepository.save(flow);
+        saveFlow(flow);
 
         // Compensate in reverse order
         for (int i = completedSteps.size() - 1; i >= 0; i--) {
@@ -237,46 +382,77 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
         flow.setStatus(FlowStatus.FAILED);
         flow.setUpdatedAt(Instant.now());
-        flowRepository.save(flow);
+        saveFlow(flow);
     }
 
     // ========== Internal ==========
 
     private void advanceToNextStep(F flow) {
-        String nextStep = stepRegistry.getNextStep(flow.getCurrentStep());
+        advanceToNextStep(flow, flow.getCurrentStep());
+    }
+
+    private void advanceToNextStep(F flow, String completedStep) {
+        String nextStep = stepRegistry.getNextStep(completedStep);
+
         if (nextStep == null) {
-            flow.setStatus(FlowStatus.COMPLETED);
-            flow.setUpdatedAt(Instant.now());
-            flow.setCompletedParallelSteps(new java.util.HashSet<>());
-            flowRepository.save(flow);
+            // Flow complete — use partial $set to avoid @Version conflicts.
+            // Only updates status/updatedAt, preserves all domain fields.
+            updateFlowPartial(flow.getId(), java.util.Map.of(
+                    "status", FlowStatus.COMPLETED.name(),
+                    "updatedAt", Instant.now(),
+                    "completedParallelSteps", java.util.List.of()));
             log.info("[Saga] Flow {} completed", flow.getId());
             return;
         }
 
+        // Advance to next step — partial update + outbox event.
+        // The partial update avoids @Version conflicts with the command consumer.
+        updateFlowPartial(flow.getId(), java.util.Map.of(
+                "currentStep", nextStep,
+                "updatedAt", Instant.now()));
+
+        // Write outbox event for the next step command.
+        // Re-read the flow to get the latest state for serialization.
+        F latest = flowRepository.findById(flow.getId()).orElse(flow);
+        latest.setCurrentStep(nextStep);
+
         List<String> stepsAtNextOrder = stepRegistry.getStepsAtSameOrder(nextStep);
         if (stepsAtNextOrder.size() > 1) {
-            // Parallel: atomic flow save + multiple outbox events
-            flow.setCurrentStep(nextStep);
-            flow.setCompletedParallelSteps(new java.util.HashSet<>());
-            flow.setUpdatedAt(Instant.now());
-            runInTransaction(() -> {
-                flowRepository.save(flow);
-                for (String parallelStep : stepsAtNextOrder) {
-                    writeOutboxEvent(flow, parallelStep);
-                }
-                return null;
-            }, null);
+            for (String parallelStep : stepsAtNextOrder) {
+                writeOutboxEvent(latest, parallelStep);
+            }
             log.info("[Saga] Published {} parallel steps for flow {}: {}",
-                    stepsAtNextOrder.size(), flow.getId(), stepsAtNextOrder);
+                    stepsAtNextOrder.size(), latest.getId(), stepsAtNextOrder);
         } else {
-            // Sequential: atomic flow save + outbox event
-            flow.setCurrentStep(nextStep);
-            flow.setUpdatedAt(Instant.now());
-            runInTransaction(() -> {
+            writeOutboxEvent(latest);
+        }
+    }
+
+    /**
+     * Partial update via $set — modifies only specified fields.
+     * Bypasses @Version check, preserves domain fields.
+     * Used by the reply consumer to avoid conflicts with the command consumer.
+     */
+    private void updateFlowPartial(String flowId, java.util.Map<String, Object> fields) {
+        if (mongoTemplate != null && entityClass != null) {
+            var update = new org.springframework.data.mongodb.core.query.Update();
+            fields.forEach(update::set);
+            update.inc("version", 1);
+            mongoTemplate.updateFirst(
+                    org.springframework.data.mongodb.core.query.Query.query(
+                            org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flowId)),
+                    update, entityClass);
+        } else {
+            // Fallback: full save (inline mode or no MongoTemplate)
+            F flow = flowRepository.findById(flowId).orElse(null);
+            if (flow != null) {
+                fields.forEach((k, v) -> {
+                    if ("status".equals(k)) flow.setStatus(FlowStatus.valueOf((String) v));
+                    if ("currentStep".equals(k)) flow.setCurrentStep((String) v);
+                    if ("updatedAt".equals(k)) flow.setUpdatedAt((Instant) v);
+                });
                 flowRepository.save(flow);
-                writeOutboxEvent(flow);
-                return null;
-            }, null);
+            }
         }
     }
 
@@ -288,14 +464,14 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setStatus(FlowStatus.WAITING_RETRY);
         flow.setErrorMessage(e.getMessage());
         flow.setUpdatedAt(Instant.now());
-        flowRepository.save(flow);
+        saveFlow(flow);
     }
 
     private void handlePermanentFailure(F flow, NonRetryableStepException e) {
         flow.setStatus(FlowStatus.FAILED);
         flow.setErrorMessage(e.getMessage());
         flow.setUpdatedAt(Instant.now());
-        flowRepository.save(flow);
+        saveFlow(flow);
 
         // Saga compensation — undo completed steps in reverse
         runCompensation(flow);
@@ -306,28 +482,32 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      * If all done, advance to the next step (which may be a @JoinOn step).
      */
     private void markParallelStepCompleted(F flow, String stepName, StepHandler<F> handler) {
+        markParallelStepCompleted(flow, stepName, handler, stepName);
+    }
+
+    private void markParallelStepCompleted(F flow, String stepName, StepHandler<F> handler,
+                                            String completedStep) {
         if (handler instanceof MethodStepAdapter<?> adapter && adapter.isParallel()) {
             java.util.Set<String> completed = new java.util.HashSet<>(flow.getCompletedParallelSteps());
             completed.add(stepName);
             flow.setCompletedParallelSteps(completed);
             flow.setUpdatedAt(Instant.now());
-            flowRepository.save(flow);
+            saveFlow(flow);
 
-            // Check if all parallel siblings are done
             List<StepHandler<F>> siblings = stepRegistry.getParallelGroup(adapter.getParallelGroup());
             boolean allDone = siblings.stream().allMatch(s -> s.isAlreadyCompleted(flow));
 
             if (allDone) {
                 log.info("[Saga] All parallel steps in group '{}' completed for flow {}",
                         adapter.getParallelGroup(), flow.getId());
-                advanceToNextStep(flow);
+                advanceToNextStep(flow, completedStep);
             } else {
                 log.info("[Saga] Parallel step {} done, waiting for siblings in group '{}'",
                         stepName, adapter.getParallelGroup());
             }
         } else {
-            // Sequential step — just advance
-            advanceToNextStep(flow);
+            // Sequential step — advance using the completed step name for correct next-step resolution
+            advanceToNextStep(flow, completedStep);
         }
     }
 
@@ -342,6 +522,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                     .flowId(flow.getId())
                     .correlationId(flow.getCorrelationId())
                     .stepName(stepNameOverride)
+                    .flowType(flowType)
                     .build();
 
             OutboxEvent event = OutboxEvent.builder()
@@ -393,6 +574,30 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             return txTemplate.execute(status -> action.get());
         }
         return action.get();
+    }
+
+    /**
+     * Save with optimistic lock retry (up to 3 attempts).
+     * Concurrent reply consumers may increment the version between our read
+     * and save. On conflict, re-read the latest version and retry.
+     */
+
+    public void setEntityClass(Class<F> entityClass) {
+        this.entityClass = entityClass;
+    }
+
+    public void setMongoTemplate(org.springframework.data.mongodb.core.MongoTemplate mongoTemplate) {
+        this.mongoTemplate = mongoTemplate;
+    }
+
+    /**
+     * Persist the flow. Concurrency is handled by Kafka partition key
+     * (same flowId → same partition → same consumer) and two-layer idempotency,
+     * not by optimistic locking. This avoids version conflicts between
+     * coordinated command and reply consumers.
+     */
+    private void saveFlow(F flow) {
+        flowRepository.save(flow);
     }
 
     private String serialize(F flow) {

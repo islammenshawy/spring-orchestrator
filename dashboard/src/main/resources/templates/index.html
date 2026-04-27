@@ -5,444 +5,995 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Orchestrator Dashboard</title>
     <style>
-        :root { --bg:#0f1117; --surface:#1a1d27; --surface2:#232733; --border:#2d3140; --text:#e4e6ed; --dim:#8b8fa3; --primary:#6366f1; --success:#22c55e; --warning:#f59e0b; --danger:#ef4444; --info:#3b82f6; }
-        * { margin:0; padding:0; box-sizing:border-box; }
-        body { font-family:'Inter',-apple-system,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
-
-        .header { background:var(--surface); border-bottom:1px solid var(--border); padding:12px 24px; display:flex; align-items:center; justify-content:space-between; }
-        .header h1 { font-size:18px; font-weight:600; }
-        .header .sub { color:var(--dim); font-size:12px; }
-
-        .nav { display:flex; gap:2px; background:var(--surface); padding:0 24px; border-bottom:1px solid var(--border); }
-        .nav-tab { padding:10px 18px; font-size:13px; font-weight:500; color:var(--dim); cursor:pointer; border:none; background:none; border-bottom:2px solid transparent; }
-        .nav-tab:hover { color:var(--text); }
-        .nav-tab.active { color:var(--primary); border-bottom-color:var(--primary); }
-
-        .main { padding:20px 24px; max-width:1440px; margin:0 auto; }
-        .tab-content { display:none; }
-        .tab-content.active { display:block; }
-
-        .card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:16px; }
-        .card h3 { font-size:13px; font-weight:600; color:var(--dim); text-transform:uppercase; letter-spacing:.5px; margin-bottom:12px; }
-        .grid { display:grid; gap:16px; margin-bottom:16px; }
-        .grid-2 { grid-template-columns:1fr 1fr; }
-        .grid-3 { grid-template-columns:1fr 1fr 1fr; }
-
-        .btn { padding:7px 14px; border-radius:7px; border:none; cursor:pointer; font-size:12px; font-weight:500; transition:.15s; }
-        .btn-primary { background:var(--primary); color:white; }
-        .btn-primary:hover { background:#818cf8; }
-        .btn-danger { background:var(--danger); color:white; }
-        .btn-outline { background:transparent; border:1px solid var(--border); color:var(--text); }
-        .btn-outline:hover { border-color:var(--primary); color:var(--primary); }
-        .btn-sm { padding:4px 10px; font-size:11px; }
-        .btn-success { background:var(--success); color:white; }
-
-        .form-group { margin-bottom:10px; }
-        .form-group label { display:block; font-size:11px; color:var(--dim); margin-bottom:3px; }
-        .form-group input,.form-group select { width:100%; padding:7px 10px; background:var(--surface2); border:1px solid var(--border); border-radius:5px; color:var(--text); font-size:12px; }
-
-        .badge { display:inline-block; padding:2px 8px; border-radius:12px; font-size:10px; font-weight:600; text-transform:uppercase; }
-        .badge-pending { background:#374151; color:#9ca3af; }
-        .badge-progress { background:#1e3a5f; color:#60a5fa; }
-        .badge-waiting { background:#451a03; color:#fbbf24; animation:blink 2s infinite; }
-        .badge-completed { background:#14532d; color:#4ade80; }
-        .badge-failed { background:#450a0a; color:#f87171; }
-        .badge-compensating { background:#451a03; color:#fbbf24; }
-        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.5} }
-
-        table { width:100%; border-collapse:collapse; }
-        th { text-align:left; padding:8px 10px; font-size:10px; font-weight:600; color:var(--dim); text-transform:uppercase; border-bottom:2px solid var(--border); }
-        td { padding:8px 10px; font-size:12px; border-bottom:1px solid var(--border); }
-        tr:hover { background:var(--surface2); }
-
-        .stats { display:flex; gap:20px; flex-wrap:wrap; }
-        .stat { text-align:center; min-width:70px; }
-        .stat .val { font-size:24px; font-weight:700; }
-        .stat .lbl { font-size:10px; color:var(--dim); text-transform:uppercase; }
-
-        .mono { font-family:'JetBrains Mono','Fira Code',monospace; font-size:11px; }
-        .dim { color:var(--dim); }
-        .text-sm { font-size:11px; }
-        .mt { margin-top:8px; }
-        .flex { display:flex; }
-        .gap { gap:8px; }
-        .between { justify-content:space-between; }
-        .center { align-items:center; }
-        .wrap { flex-wrap:wrap; }
-
-        .toast { position:fixed; bottom:20px; right:20px; padding:10px 18px; border-radius:7px; font-size:12px; z-index:1000; animation:slideIn .3s; }
-        .toast.success { background:#14532d; border:1px solid var(--success); }
-        .toast.error { background:#450a0a; border:1px solid var(--danger); }
-        @keyframes slideIn { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
-
-        .empty { text-align:center; padding:30px; color:var(--dim); font-size:13px; }
-
-        /* Steps progress dots */
-        .steps { display:flex; align-items:center; gap:3px; }
-        .dot { width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:8px; font-weight:700; flex-shrink:0; }
-        .dot.done { background:var(--success); color:white; }
-        .dot.active { background:var(--info); color:white; animation:pulse 1.5s infinite; }
-        .dot.fail { background:var(--danger); color:white; }
-        .dot.wait { background:var(--surface2); color:var(--dim); border:1px solid var(--border); }
-        .conn { width:10px; height:2px; background:var(--border); flex-shrink:0; }
-        .conn.done { background:var(--success); }
-        @keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(59,130,246,.4)} 50%{box-shadow:0 0 0 5px rgba(59,130,246,0)} }
-
-        .failure-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:8px; }
-        .failure-item { background:var(--surface2); border-radius:6px; padding:8px; }
-        .failure-item label { font-size:10px; font-weight:500; display:block; margin-bottom:3px; }
+        :root{--bg:#0f1117;--surface:#1a1d27;--surface2:#232733;--border:#2d3140;--text:#e4e6ed;--dim:#8b8fa3;--primary:#6366f1;--success:#22c55e;--warning:#f59e0b;--danger:#ef4444;--info:#3b82f6}
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Inter',-apple-system,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+        .header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between}
+        .header h1{font-size:18px;font-weight:600}
+        .nav{display:flex;gap:2px;background:var(--surface);padding:0 24px;border-bottom:1px solid var(--border)}
+        .nav-tab{padding:10px 18px;font-size:13px;font-weight:500;color:var(--dim);cursor:pointer;border:none;background:none;border-bottom:2px solid transparent}
+        .nav-tab:hover{color:var(--text)} .nav-tab.active{color:var(--primary);border-bottom-color:var(--primary)}
+        .main{padding:20px 24px;max-width:1440px;margin:0 auto}
+        .tab-content{display:none} .tab-content.active{display:block}
+        .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px}
+        .card h3{font-size:12px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
+        .grid{display:grid;gap:12px;margin-bottom:12px} .grid-2{grid-template-columns:1fr 1fr} .grid-3{grid-template-columns:1fr 1fr 1fr}
+        .btn{padding:6px 12px;border-radius:6px;border:none;cursor:pointer;font-size:11px;font-weight:500;transition:.15s}
+        .btn-primary{background:var(--primary);color:white} .btn-primary:hover{background:#818cf8}
+        .btn-danger{background:var(--danger);color:white} .btn-success{background:var(--success);color:white}
+        .btn-outline{background:transparent;border:1px solid var(--border);color:var(--text)} .btn-outline:hover{border-color:var(--primary);color:var(--primary)}
+        .btn-sm{padding:3px 8px;font-size:10px}
+        .form-group{margin-bottom:8px} .form-group label{display:block;font-size:10px;color:var(--dim);margin-bottom:2px}
+        .form-group input,.form-group select{width:100%;padding:6px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px}
+        .badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:9px;font-weight:600;text-transform:uppercase}
+        .b-pending{background:#374151;color:#9ca3af} .b-progress{background:#1e3a5f;color:#60a5fa}
+        .b-waiting{background:#451a03;color:#fbbf24;animation:blink 2s infinite} .b-completed{background:#14532d;color:#4ade80}
+        .b-failed{background:#450a0a;color:#f87171} .b-compensating{background:#451a03;color:#fbbf24}
+        @keyframes blink{0%,100%{opacity:1}50%{opacity:.5}}
+        table{width:100%;border-collapse:collapse} th{text-align:left;padding:6px 8px;font-size:9px;font-weight:600;color:var(--dim);text-transform:uppercase;border-bottom:2px solid var(--border)}
+        td{padding:6px 8px;font-size:11px;border-bottom:1px solid var(--border)} tr:hover{background:var(--surface2)}
+        .stats{display:flex;gap:16px;flex-wrap:wrap} .stat{text-align:center;min-width:60px} .stat .v{font-size:22px;font-weight:700} .stat .l{font-size:9px;color:var(--dim);text-transform:uppercase}
+        .mono{font-family:'JetBrains Mono',monospace;font-size:10px} .dim{color:var(--dim)} .text-sm{font-size:10px} .mt{margin-top:6px}
+        .flex{display:flex} .gap{gap:6px} .between{justify-content:space-between} .center{align-items:center} .wrap{flex-wrap:wrap}
+        .toast{position:fixed;bottom:20px;right:20px;padding:10px 16px;border-radius:6px;font-size:11px;z-index:1000;animation:slideIn .3s}
+        .toast.success{background:#14532d;border:1px solid var(--success)} .toast.error{background:#450a0a;border:1px solid var(--danger)}
+        @keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+        .empty{text-align:center;padding:24px;color:var(--dim);font-size:12px}
+        .steps{display:flex;align-items:center;gap:2px}
+        .dot{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:7px;font-weight:700;flex-shrink:0}
+        .dot.done{background:var(--success);color:white} .dot.active{background:var(--info);color:white;animation:pulse 1.5s infinite}
+        .dot.fail{background:var(--danger);color:white} .dot.wait{background:var(--surface2);color:var(--dim);border:1px solid var(--border)}
+        .conn{width:8px;height:2px;background:var(--border);flex-shrink:0} .conn.done{background:var(--success)}
+        @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(59,130,246,.4)}50%{box-shadow:0 0 0 4px rgba(59,130,246,0)}}
+        .failure-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px}
+        .failure-item{background:var(--surface2);border-radius:5px;padding:6px}
+        .failure-item label{font-size:9px;font-weight:500;display:block;margin-bottom:2px}
+        .section-title{font-size:11px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 8px}
+        .b-lib{background:#14532d;color:#4ade80;font-size:8px;padding:1px 5px;border-radius:8px;font-weight:600;text-transform:uppercase}
+        .pager{display:flex;gap:4px;align-items:center;font-size:10px;color:var(--dim)}
+        .pager button{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer}
+        .pager button:disabled{opacity:.3;cursor:default}
+        .pager button:hover:not(:disabled){border-color:var(--primary)}
+        .filter-btn.active{background:var(--primary);color:white;border-color:var(--primary)}
+        /* Ladder view */
+        .ladder{position:relative;min-height:100px}
+        .ladder-header{display:flex;position:sticky;top:0;z-index:10;background:var(--surface);border-bottom:2px solid var(--border);padding-bottom:6px}
+        .ladder-col-header{flex:1;text-align:center;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:6px 4px;min-width:120px}
+        .ladder-col-header .topic-name{color:var(--text)}
+        .ladder-col-header .topic-count{font-size:9px;font-weight:400;color:var(--dim);margin-top:2px}
+        .ladder-col-header .topic-delay{font-size:9px;color:var(--warning);margin-top:1px}
+        .ladder-body{position:relative}
+        .ladder-row{display:flex;align-items:stretch;min-height:40px;border-bottom:1px solid rgba(45,49,64,.5)}
+        .ladder-row:hover{background:rgba(35,39,51,.5)}
+        .ladder-cell{flex:1;min-width:120px;position:relative;display:flex;align-items:center;justify-content:center;padding:3px 2px}
+        .ladder-cell::before{content:'';position:absolute;top:0;bottom:0;left:50%;width:1px;background:rgba(45,49,64,.6)}
+        .ladder-node{position:relative;z-index:2;background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:3px 6px;font-size:9px;max-width:120px;text-align:center;cursor:pointer;transition:.15s}
+        .ladder-node:hover{border-color:var(--primary);transform:scale(1.05)}
+        .ladder-node.main{border-color:var(--info);background:rgba(59,130,246,.1)}
+        .ladder-node.retry{border-color:var(--warning);background:rgba(245,158,11,.1)}
+        .ladder-node.dlt{border-color:var(--danger);background:rgba(239,68,68,.15)}
+        .ladder-node .node-step{font-weight:600;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:8px}
+        .ladder-node .node-time{color:var(--dim);font-size:8px}
+        .ladder-time-col{width:60px;min-width:60px;flex:none;display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--dim);font-family:'JetBrains Mono',monospace;padding:3px}
+        .ladder-stats{display:flex;gap:12px;margin-bottom:8px;flex-wrap:wrap}
+        .ladder-stat-item{display:flex;align-items:center;gap:4px;font-size:10px}
+        .ladder-stat-dot{width:8px;height:8px;border-radius:50%}
+        .ladder-legend{display:flex;gap:12px;margin-top:6px;font-size:10px;color:var(--dim);flex-wrap:wrap}
+        .ladder-legend-item{display:flex;align-items:center;gap:4px}
+        .ladder-flow-sep{display:flex;align-items:center;gap:6px;padding:4px 6px;background:rgba(99,102,241,.05);border-left:3px solid var(--primary);cursor:pointer;font-size:10px}
+        .ladder-flow-sep:hover{background:rgba(99,102,241,.1)}
     </style>
 </head>
 <body>
-
 <div class="header">
-    <div>
-        <h1>Orchestrator Dashboard</h1>
-        <div class="sub">Saga + Outbox pattern with Kafka retry topics</div>
-    </div>
+    <div><h1>Orchestrator Dashboard</h1><div class="dim text-sm">Saga + Outbox | Kafka Retry | MongoDB</div></div>
     <div class="flex gap center">
         <button class="btn btn-outline btn-sm" onclick="refreshAll()">Refresh</button>
         <button class="btn btn-outline btn-sm" id="autoBtn" onclick="toggleAuto()">Auto: OFF</button>
     </div>
 </div>
-
 <div class="nav">
-    <button class="nav-tab active" onclick="switchTab('flows',this)">Flows</button>
-    <button class="nav-tab" onclick="switchTab('kafka',this)">Kafka Topics</button>
-    <button class="nav-tab" onclick="switchTab('data',this)">MongoDB</button>
+    <button class="nav-tab active" onclick="switchTab('main',this)">Dashboard</button>
+    <button class="nav-tab" onclick="switchTab('arch',this)">Architecture</button>
 </div>
 
 <div class="main">
 
-<!-- ==================== TAB: FLOWS ==================== -->
-<div id="tab-flows" class="tab-content active">
+<!-- ==================== MAIN VIEW ==================== -->
+<div id="tab-main" class="tab-content active">
 
     <!-- Stats -->
     <div class="card">
         <div class="stats" id="stats">
-            <div class="stat"><div class="val" id="s-total">0</div><div class="lbl">Total</div></div>
-            <div class="stat"><div class="val" id="s-progress" style="color:var(--info)">0</div><div class="lbl">Active</div></div>
-            <div class="stat"><div class="val" id="s-waiting" style="color:var(--warning)">0</div><div class="lbl">Retrying</div></div>
-            <div class="stat"><div class="val" id="s-completed" style="color:var(--success)">0</div><div class="lbl">Completed</div></div>
-            <div class="stat"><div class="val" id="s-failed" style="color:var(--danger)">0</div><div class="lbl">Failed</div></div>
+            <div class="stat"><div class="v" id="s-total">0</div><div class="l">Total</div></div>
+            <div class="stat"><div class="v" id="s-progress" style="color:var(--info)">0</div><div class="l">Active</div></div>
+            <div class="stat"><div class="v" id="s-waiting" style="color:var(--warning)">0</div><div class="l">Retrying</div></div>
+            <div class="stat"><div class="v" id="s-completed" style="color:var(--success)">0</div><div class="l">Completed</div></div>
+            <div class="stat"><div class="v" id="s-failed" style="color:var(--danger)">0</div><div class="l">Failed</div></div>
         </div>
     </div>
 
-    <!-- Controls -->
+    <!-- Controls Row -->
     <div class="grid grid-3">
         <div class="card">
             <h3>Start Flow</h3>
             <div class="form-group"><label>Title</label><input id="f-title" value="Test Document"/></div>
             <div class="form-group"><label>Email</label><input id="f-email" value="test@example.com"/></div>
             <button class="btn btn-primary" onclick="startFlow()">Start Flow</button>
-            <div class="dim text-sm mt">POST → 202 → Kafka → async steps</div>
         </div>
         <div class="card">
             <h3>Load Test</h3>
             <div class="form-group"><label>Count</label><input type="number" id="lt-count" value="10" min="1" max="500"/></div>
             <button class="btn btn-primary" onclick="runLoadTest()">Run Load Test</button>
             <span class="dim text-sm" id="lt-status"></span>
+            <div class="dim" style="font-size:9px;margin-top:4px">Set failures first → load test triggers retries. Reply mode (decoupled).</div>
         </div>
         <div class="card">
             <h3>Failure Simulation</h3>
             <div class="failure-grid">
-                <div class="failure-item"><label>createDocument</label><select id="fail-createDocument" onchange="setFailure('createDocument',this.value)"><option value="NONE">None</option><option value="HTTP_500">500</option><option value="HTTP_409">409</option><option value="HTTP_429">429</option><option value="FLAKY">Flaky</option></select></div>
-                <div class="failure-item"><label>uploadAttachment</label><select id="fail-uploadAttachment" onchange="setFailure('uploadAttachment',this.value)"><option value="NONE">None</option><option value="HTTP_500">500</option><option value="HTTP_409">409</option><option value="FLAKY">Flaky</option></select></div>
-                <div class="failure-item"><label>requestSignature</label><select id="fail-requestSignature" onchange="setFailure('requestSignature',this.value)"><option value="NONE">None</option><option value="HTTP_500">500</option><option value="HTTP_409">409</option><option value="FLAKY">Flaky</option></select></div>
-                <div class="failure-item"><label>verifySignature</label><select id="fail-verifySignature" onchange="setFailure('verifySignature',this.value)"><option value="NONE">None</option><option value="HTTP_500">500</option><option value="FLAKY">Flaky</option></select></div>
-                <div class="failure-item"><label>finalizeDocument</label><select id="fail-finalizeDocument" onchange="setFailure('finalizeDocument',this.value)"><option value="NONE">None</option><option value="HTTP_500">500</option><option value="HTTP_409">409</option><option value="FLAKY">Flaky</option></select></div>
+                <div class="failure-item"><label>createDoc</label><select id="fail-createDocument" onchange="setFailure('createDocument',this.value)"><option value="NONE">None</option><option value="HTTP_500">500</option><option value="HTTP_409">409</option><option value="HTTP_429">429</option><option value="TIMEOUT">Timeout</option><option value="FLAKY">Flaky</option></select></div>
+                <div class="failure-item"><label>upload</label><select id="fail-uploadAttachment" onchange="setFailure('uploadAttachment',this.value)"><option value="NONE">None</option><option value="HTTP_500">500</option><option value="HTTP_409">409</option><option value="HTTP_429">429</option><option value="TIMEOUT">Timeout</option><option value="FLAKY">Flaky</option></select></div>
+                <div class="failure-item"><label>sign</label><select id="fail-requestSignature" onchange="setFailure('requestSignature',this.value)"><option value="NONE">None</option><option value="HTTP_500">500</option><option value="HTTP_409">409</option><option value="HTTP_429">429</option><option value="TIMEOUT">Timeout</option><option value="FLAKY">Flaky</option></select></div>
+                <div class="failure-item"><label>verify</label><select id="fail-verifySignature" onchange="setFailure('verifySignature',this.value)"><option value="NONE">None</option><option value="HTTP_500">500</option><option value="HTTP_429">429</option><option value="TIMEOUT">Timeout</option><option value="FLAKY">Flaky</option></select></div>
+                <div class="failure-item"><label>finalize</label><select id="fail-finalizeDocument" onchange="setFailure('finalizeDocument',this.value)"><option value="NONE">None</option><option value="HTTP_500">500</option><option value="HTTP_409">409</option><option value="HTTP_429">429</option><option value="TIMEOUT">Timeout</option><option value="FLAKY">Flaky</option></select></div>
             </div>
-            <button class="btn btn-danger btn-sm mt" onclick="resetFailures()">Reset All</button>
+            <button class="btn btn-danger btn-sm mt" onclick="resetFailures()">Reset</button>
         </div>
     </div>
 
     <!-- Flow Table -->
     <div class="card">
-        <div class="flex between center" style="margin-bottom:12px">
-            <h3 style="margin-bottom:0">Workflow Flows</h3>
-            <div class="flex gap">
-                <button class="btn btn-outline btn-sm" onclick="filterFlows('all')">All</button>
-                <button class="btn btn-outline btn-sm" onclick="filterFlows('IN_PROGRESS')">Active</button>
-                <button class="btn btn-outline btn-sm" onclick="filterFlows('WAITING_RETRY')">Retrying</button>
-                <button class="btn btn-outline btn-sm" onclick="filterFlows('FAILED')">Failed</button>
-                <button class="btn btn-outline btn-sm" onclick="filterFlows('COMPLETED')">Done</button>
+        <div class="flex between center" style="margin-bottom:8px">
+            <div class="flex gap center">
+                <h3 style="margin-bottom:0">Flows</h3>
+                <div class="flex gap" id="filter-btns">
+                    <button class="btn btn-outline btn-sm filter-btn" data-filter="all" onclick="filterFlows('all')">All</button>
+                    <button class="btn btn-outline btn-sm filter-btn active" data-filter="active" onclick="filterFlows('active')">Active</button>
+                    <button class="btn btn-outline btn-sm filter-btn" data-filter="WAITING_RETRY" onclick="filterFlows('WAITING_RETRY')">Retrying</button>
+                    <button class="btn btn-outline btn-sm filter-btn" data-filter="FAILED" onclick="filterFlows('FAILED')">Failed</button>
+                    <button class="btn btn-outline btn-sm filter-btn" data-filter="COMPLETED" onclick="filterFlows('COMPLETED')">Done</button>
+                </div>
+            </div>
+            <div class="pager">
+                <button onclick="changePage(-1)" id="pg-prev" disabled>&laquo; Prev</button>
+                <span id="pg-info">-</span>
+                <button onclick="changePage(1)" id="pg-next">Next &raquo;</button>
             </div>
         </div>
-        <table>
-            <thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Step</th><th>Progress</th><th>Retries</th><th>Time</th><th>Actions</th></tr></thead>
-            <tbody id="flow-tbody"><tr><td colspan="8" class="empty">No flows yet</td></tr></tbody>
-        </table>
+        <table><thead><tr><th>ID</th><th>Library</th><th>Title</th><th>Status</th><th>Step</th><th>Progress</th><th>Retries</th><th>Time</th><th></th></tr></thead>
+        <tbody id="flow-tbody"><tr><td colspan="9" class="empty">No flows yet</td></tr></tbody></table>
     </div>
-</div>
 
-<!-- ==================== TAB: KAFKA ==================== -->
-<div id="tab-kafka" class="tab-content">
+    <!-- Kafka Ladder View -->
     <div class="card">
-        <div class="flex between center" style="margin-bottom:12px">
-            <h3 style="margin-bottom:0">Kafka Topics</h3>
-            <button class="btn btn-outline btn-sm" onclick="loadTopics()">Refresh</button>
+        <div class="flex between center" style="margin-bottom:8px">
+            <h3 style="margin-bottom:0">Kafka Topics — Retry Ladder</h3>
+            <div class="flex gap">
+                <button class="btn btn-outline btn-sm" id="ladderAutoBtn" onclick="toggleLadderAuto()">Auto: OFF</button>
+                <button class="btn btn-outline btn-sm" onclick="loadLadder()">Refresh</button>
+            </div>
         </div>
-        <div id="kafka-topics" class="dim text-sm">Loading...</div>
+        <div id="ladder-view" style="overflow-x:auto"><div class="dim text-sm">Loading...</div></div>
     </div>
-    <div class="card">
-        <h3>Topic Messages</h3>
-        <div id="kafka-messages"><div class="empty">Select a topic above</div></div>
-    </div>
-</div>
 
-<!-- ==================== TAB: MONGODB ==================== -->
-<div id="tab-data" class="tab-content">
+    <!-- MongoDB Collections -->
     <div class="card">
-        <div class="flex between center" style="margin-bottom:12px">
+        <div class="flex between center" style="margin-bottom:8px">
             <h3 style="margin-bottom:0">MongoDB Collections</h3>
             <button class="btn btn-outline btn-sm" onclick="loadCollections()">Refresh</button>
         </div>
         <div id="mongo-collections" class="dim text-sm">Loading...</div>
+        <div id="mongo-data" style="margin-top:10px;max-height:300px;overflow-y:auto"><div class="empty text-sm">Select a collection</div></div>
     </div>
+</div>
+
+<!-- ==================== ARCHITECTURE TAB ==================== -->
+<div id="tab-arch" class="tab-content">
+
+    <!-- Flow Pattern Diagram -->
     <div class="card">
-        <h3>Collection Data</h3>
-        <div id="mongo-data"><div class="empty">Select a collection above</div></div>
+        <h3>Pattern: Saga + Transactional Outbox</h3>
+        <pre style="background:var(--surface2);padding:14px;border-radius:6px;font-size:11px;line-height:1.7;overflow-x:auto">
+POST /flows → 202 Accepted + flow ID
+  │
+  ├── Save flow to MongoDB (status=IN_PROGRESS)
+  ├── Save outbox event (same DB — atomic on replica set)
+  ├── Publish to Kafka (sync, waits for broker ack)
+  ├── Return to caller (~5ms)
+  │
+  ▼ (async — Kafka consumer, possibly different pod)
+  │
+  ┌─────────────┐  command   ┌──────────────┐  reply    ┌─────────────┐
+  │ Orchestrator│ ─────────→│   Executor   │ ────────→│ Orchestrator│
+  │ (publishes  │           │ (runs step)  │          │ (advances   │
+  │  commands)  │           │              │          │  to next)   │
+  └─────────────┘           └──────────────┘          └─────────────┘
+
+  Step 1: CREATE_DOCUMENT  → vendor API → checkpoint() → reply → next command
+  Step 2: UPLOAD_ATTACHMENT → vendor API → checkpoint() → reply → next command
+  Step 3: REQUEST_SIGNATURE → vendor API → checkpoint() → reply → next command
+  Step 4: VERIFY_SIGNATURE  → vendor API (poll) → reply → next command
+  Step 5: FINALIZE_DOCUMENT → vendor API → checkpoint() → COMPLETED
+
+  On failure → retry-0 → retry-1 → retry-2 → DLT → @Compensate → FAILED
+
+  Ordering:   flowId = Kafka partition key → same partition → same consumer
+  Topics:     {command-topic} + {command-topic}.replies (each with retry chain + DLT)
+  Scaling:    executor pods scale independently, orchestrator never blocked
+  Snapshot:   reply carries full flow state → no stale DB re-read → zero data loss
+  @Version:   command consumer = full save with @Version (protects rebalancing)
+              reply consumer = $set partial update (bypasses @Version, no conflict)
+  Multi-flow: flowType in every message → routes to correct handler
+  Crash-safe: any crash at any point → recovery via outbox/Kafka/recovery service
+        </pre>
+    </div>
+
+    <!-- Performance Metrics (Live) -->
+    <div class="card">
+        <div class="flex between center" style="margin-bottom:8px">
+            <h3 style="margin-bottom:0">Performance Metrics (Live)</h3>
+            <div class="flex gap">
+                <button class="btn btn-outline btn-sm" id="metricsAutoBtn" onclick="toggleMetricsAuto()">Auto: ON</button>
+                <button class="btn btn-outline btn-sm" onclick="loadMetrics()">Refresh</button>
+            </div>
+        </div>
+        <div id="metrics-view"><div class="dim text-sm">Click Refresh to load metrics from all 3 pattern apps</div></div>
+        <div style="margin-top:8px;padding:6px 10px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:6px;font-size:10px;color:var(--dim)">
+            <strong style="color:var(--warning)">Note:</strong> SI retry is in-process (thread blocks during backoff) — if container crashes mid-retry, retry state is lost.
+            Saga retry lives in Kafka topics — survives crashes. Visible in thread count: SI holds threads during backoff, Saga releases them.
+        </div>
+    </div>
+
+    <!-- Head-to-Head Comparison Table -->
+    <div class="card">
+        <h3>Head-to-Head Comparison</h3>
+        <table>
+            <thead><tr><th>Aspect</th><th style="color:#8b5cf6">Saga+Outbox</th><th style="color:#06b6d4">Statemachine</th><th style="color:var(--primary)">Spring Integration</th></tr></thead>
+            <tbody>
+                <tr><td class="text-sm">Custom code</td><td class="text-sm">901 lines / 21 files</td><td class="text-sm">929 lines / 23 files</td><td class="text-sm" style="color:var(--success)">470 lines / 11 files</td></tr>
+                <tr><td class="text-sm">Kafka retry topics</td><td class="text-sm" style="color:var(--success)">&#10003; retry-0/1/2 + DLT</td><td class="text-sm" style="color:var(--success)">&#10003; retry-0/1/2 + DLT</td><td class="text-sm" style="color:var(--success)">&#10003; retry-0/1/2 + DLT</td></tr>
+                <tr><td class="text-sm">Exponential backoff + jitter</td><td class="text-sm" style="color:var(--success)">&#10003; configurable</td><td class="text-sm" style="color:var(--success)">&#10003; configurable</td><td class="text-sm" style="color:var(--success)">&#10003; configurable</td></tr>
+                <tr><td class="text-sm">Crash-resilient retry</td><td class="text-sm" style="color:var(--success)">&#10003; Kafka holds state</td><td class="text-sm" style="color:var(--success)">&#10003; Kafka holds state</td><td class="text-sm" style="color:var(--success)">&#10003; Kafka holds state</td></tr>
+                <tr><td class="text-sm">Atomic DB+Kafka write</td><td class="text-sm" style="color:var(--success)">&#10003; outbox pattern</td><td class="text-sm" style="color:var(--danger)">&#10007; direct publish</td><td class="text-sm" style="color:var(--danger)">&#10007; direct publish</td></tr>
+                <tr><td class="text-sm">MongoDB collections</td><td class="text-sm">4 (flows, outbox, step logs, idempotency)</td><td class="text-sm">4 (flows, SM contexts, step logs, idempotency)</td><td class="text-sm" style="color:var(--success)">2 (flows, idempotency)</td></tr>
+                <tr><td class="text-sm">State validation</td><td class="text-sm">Custom (step registry)</td><td class="text-sm" style="color:var(--success)">Framework (SM engine)</td><td class="text-sm">Custom (flow DSL)</td></tr>
+                <tr><td class="text-sm">Compensation (rollback)</td><td class="text-sm" style="color:var(--success)">&#10003; @Compensate annotation</td><td class="text-sm" style="color:var(--warning)">Manual backward transitions</td><td class="text-sm" style="color:var(--warning)">Not built-in</td></tr>
+                <tr><td class="text-sm">Step audit log</td><td class="text-sm" style="color:var(--success)">&#10003; with payloads</td><td class="text-sm">&#10003; transition log</td><td class="text-sm" style="color:var(--danger)">&#10007; not included</td></tr>
+                <tr><td class="text-sm">Kafka topics created</td><td class="text-sm">8</td><td class="text-sm">5</td><td class="text-sm" style="color:var(--success)">5</td></tr>
+                <tr><td class="text-sm">Stuck flow recovery</td><td class="text-sm">Recovery service + Kafka redeliver</td><td class="text-sm">Recovery service + Kafka redeliver</td><td class="text-sm" style="color:var(--success)">Kafka redeliver only</td></tr>
+            </tbody>
+        </table>
+        <div style="margin-top:10px;padding:10px;background:var(--surface2);border-radius:6px;font-size:11px;color:var(--dim)">
+            <strong style="color:var(--text)">Summary:</strong>
+            <strong style="color:var(--primary)">Spring Integration</strong> delivers the same resilience in half the code (470 vs ~900 lines).
+            <strong style="color:#8b5cf6">Saga+Outbox</strong> is the only pattern with atomic DB+Kafka writes and built-in compensation — safest for financial/legal workflows.
+            <strong style="color:#06b6d4">Statemachine</strong> adds state transition validation but requires the most code for MongoDB persistence.
+        </div>
+    </div>
+
+    <!-- Lines of Code -->
+    <div class="card">
+        <h3>Lines of Code (custom, excluding shared common module)</h3>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+            <div style="text-align:center;padding:14px;background:var(--surface2);border-radius:8px;border-top:3px solid #8b5cf6">
+                <div style="font-size:28px;font-weight:800;color:#8b5cf6">901</div>
+                <div style="font-size:10px;color:var(--dim)">lines / 21 files</div>
+                <div style="font-size:12px;font-weight:600;margin-top:4px">Saga+Outbox</div>
+            </div>
+            <div style="text-align:center;padding:14px;background:var(--surface2);border-radius:8px;border-top:3px solid #06b6d4">
+                <div style="font-size:28px;font-weight:800;color:#06b6d4">929</div>
+                <div style="font-size:10px;color:var(--dim)">lines / 23 files</div>
+                <div style="font-size:12px;font-weight:600;margin-top:4px">Statemachine</div>
+            </div>
+            <div style="text-align:center;padding:14px;background:var(--surface2);border-radius:8px;border-top:3px solid var(--primary)">
+                <div style="font-size:28px;font-weight:800;color:var(--primary)">470</div>
+                <div style="font-size:10px;color:var(--dim)">lines / 11 files</div>
+                <div style="font-size:12px;font-weight:600;margin-top:4px">Spring Integration</div>
+            </div>
+        </div>
+        <div style="font-size:10px;color:var(--dim);text-align:center;margin-top:6px">+ 434 lines shared common module (EnigioClient, domain entities, Kafka DTOs, idempotency)</div>
+    </div>
+
+    <!-- Crash Resilience: Dual-Write Problem -->
+    <div class="card">
+        <h3>Crash Resilience: The Dual-Write Problem</h3>
+        <div class="grid grid-2">
+            <div style="padding:12px;background:var(--surface2);border-radius:8px;border-left:3px solid var(--danger)">
+                <div style="font-size:11px;font-weight:600;color:var(--danger);margin-bottom:6px">SM & SI: Direct Kafka Publish (no outbox)</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8">
+                    <div>1. Call Enigio API <span style="color:var(--success)">&#10003; succeeds</span></div>
+                    <div>2. Save to MongoDB <span style="color:var(--success)">&#10003; succeeds</span></div>
+                    <div style="color:var(--danger);font-weight:700">&larr; CONTAINER CRASHES &rarr;</div>
+                    <div>3. Publish to Kafka <span style="color:var(--danger)">&#10007; NEVER HAPPENS</span></div>
+                </div>
+                <div style="font-size:10px;color:var(--dim);margin-top:6px"><strong style="color:var(--warning)">Result:</strong> Flow stuck until recovery service finds it.</div>
+            </div>
+            <div style="padding:12px;background:var(--surface2);border-radius:8px;border-left:3px solid var(--success)">
+                <div style="font-size:11px;font-weight:600;color:var(--success);margin-bottom:6px">Saga: Transactional Outbox Pattern</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8">
+                    <div>1. Call Enigio API <span style="color:var(--success)">&#10003; succeeds</span></div>
+                    <div>2. @Transactional { Save + Outbox event } <span style="color:var(--success)">&#10003; atomic</span></div>
+                    <div style="color:var(--danger);font-weight:700">&larr; CONTAINER CRASHES &rarr;</div>
+                    <div>3. OutboxPublisher polls &rarr; Kafka <span style="color:var(--success)">&#10003;</span></div>
+                </div>
+                <div style="font-size:10px;color:var(--dim);margin-top:6px"><strong style="color:var(--success)">Result:</strong> No flow is ever stuck. Outbox picks up unpublished events.</div>
+            </div>
+        </div>
+        <div style="margin-top:8px;padding:8px 10px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:6px;font-size:10px;color:var(--dim)">
+            <strong style="color:var(--warning)">Caveat:</strong> True atomicity requires MongoDB replica set with <code>mongo.transactions.enabled=true</code>. On standalone, the outbox write is also separate — same gap, just narrower.
+        </div>
+    </div>
+
+    <!-- Retry + Idempotency + Recovery + Rebalancing -->
+    <div class="grid grid-2">
+        <div class="card">
+            <h3>Retry with Jittered Backoff</h3>
+            <pre style="background:var(--surface2);padding:10px;border-radius:6px;font-size:10px;line-height:1.5">
+Step fails (HTTP 500)
+  ├→ commands           attempt 1  FAIL
+  ├→ commands-retry-0   2s+jitter  FAIL
+  ├→ commands-retry-1   4s+jitter  FAIL
+  ├→ commands-retry-2   8s+jitter  FAIL
+  └→ commands-dlt       Dead Letter
+       ├── flow.status = FAILED
+       └── @Compensate in reverse</pre>
+        </div>
+        <div class="card">
+            <h3>Two-Layer Idempotency</h3>
+            <pre style="background:var(--surface2);padding:10px;border-radius:6px;font-size:10px;line-height:1.5">
+Message arrives
+  Layer 1: tryProcess(eventId)
+  ├── duplicate → SKIP (fast path)
+  └── first time → proceed
+        Layer 2: completedWhen
+        ├── TRUE → skip API (safe path)
+        └── FALSE → execute step
+              API → set result → checkpoint
+              Layer 1: mark processed AFTER
+Key: marks AFTER, not before.
+Crash mid-step → redeliver → Layer 2 skips.</pre>
+        </div>
+    </div>
+
+    <div class="grid grid-2">
+        <div class="card">
+            <h3>Crash Recovery (3 paths)</h3>
+            <pre style="background:var(--surface2);padding:10px;border-radius:6px;font-size:10px;line-height:1.5">
+Pod crashes after step succeeds:
+
+Path 1 — Outbox (~500ms):
+  Publisher on any pod → polls → Kafka
+
+Path 2 — Kafka redeliver (~30s):
+  Rebalance → new pod → Layer 2 skips
+
+Path 3 — Recovery service (~5 min):
+  Scans stale IN_PROGRESS → re-publish</pre>
+        </div>
+        <div class="card">
+            <h3>Kafka Rebalancing</h3>
+            <pre style="background:var(--surface2);padding:10px;border-radius:6px;font-size:10px;line-height:1.5">
+CooperativeStickyAssignor:
+  Only moving partitions pause.
+  Others keep processing.
+
+Pod C joins:
+  A: [P0,P1,P2] → revoke P2 → [P0,P1] ✓
+  B: [P3,P4,P5] → revoke P5 → [P3,P4] ✓
+  C: gets [P2,P5]
+
+Two-layer idempotency handles
+any redelivered messages.</pre>
+        </div>
+    </div>
+
+    <!-- Jitter Pattern -->
+    <div class="card">
+        <h3>Jitter: Preventing the Thundering Herd</h3>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+            <div style="padding:10px;background:var(--surface2);border-radius:6px;border-top:3px solid var(--danger)">
+                <div style="font-size:11px;font-weight:600;color:var(--danger);margin-bottom:4px">No Jitter (factor=0.0)</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8">
+                    Flow A: 2000ms → 4000ms → 8000ms<br>
+                    Flow B: 2000ms → 4000ms → 8000ms<br>
+                    Flow C: 2000ms → 4000ms → 8000ms
+                </div>
+                <div style="font-size:9px;color:var(--danger);margin-top:4px">All retries at same time. Thundering herd.</div>
+            </div>
+            <div style="padding:10px;background:var(--surface2);border-radius:6px;border-top:3px solid var(--success)">
+                <div style="font-size:11px;font-weight:600;color:var(--success);margin-bottom:4px">Equal Jitter (factor=0.5) &#10003;</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8">
+                    Flow A: 1000+<span style="color:var(--success)">rand(0,1000)</span>ms<br>
+                    Flow B: 1000+<span style="color:var(--success)">rand(0,1000)</span>ms<br>
+                    Flow C: 1000+<span style="color:var(--success)">rand(0,1000)</span>ms
+                </div>
+                <div style="font-size:9px;color:var(--success);margin-top:4px">Minimum delay + random spread. Recommended.</div>
+            </div>
+            <div style="padding:10px;background:var(--surface2);border-radius:6px;border-top:3px solid var(--info)">
+                <div style="font-size:11px;font-weight:600;color:var(--info);margin-bottom:4px">Full Jitter (factor=1.0)</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8">
+                    Flow A: <span style="color:var(--info)">rand(0,2000)</span>ms<br>
+                    Flow B: <span style="color:var(--info)">rand(0,2000)</span>ms<br>
+                    Flow C: <span style="color:var(--info)">rand(0,2000)</span>ms
+                </div>
+                <div style="font-size:9px;color:var(--info);margin-top:4px">Maximum spread. Risk of near-0 delays.</div>
+            </div>
+        </div>
+        <div style="margin-top:6px;font-size:10px;color:var(--dim)">Formula: <code>delay = base * (1 - factor) + random(0, base * factor)</code>. Configured via <code>orchestrator.retry.jitter-factor</code>.</div>
+    </div>
+
+    <!-- Rebalancing Safety -->
+    <div class="card">
+        <h3>Kafka Rebalancing: Two-Layer Idempotency Safety</h3>
+        <div class="grid grid-2">
+            <div style="padding:10px;background:var(--surface2);border-radius:6px;border-left:3px solid var(--danger)">
+                <div style="font-size:11px;font-weight:600;color:var(--danger);margin-bottom:4px">Naive approach (unsafe)</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8">
+                    1. Mark event as processed &#10003;<br>
+                    <span style="color:var(--danger);font-weight:700">&larr; REBALANCE / CRASH &rarr;</span><br>
+                    2. Execute step &#10007; NEVER RUNS<br>
+                    3. Commit offset
+                </div>
+                <div style="font-size:9px;color:var(--danger);margin-top:4px">New consumer: "already processed" → step skipped forever.</div>
+            </div>
+            <div style="padding:10px;background:var(--surface2);border-radius:6px;border-left:3px solid var(--success)">
+                <div style="font-size:11px;font-weight:600;color:var(--success);margin-bottom:4px">Our approach (safe)</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:10px;line-height:1.8">
+                    1. Check if processed (optimization)<br>
+                    2. Execute step &#10003; (handler checks result)<br>
+                    <span style="color:var(--danger);font-weight:700">&larr; REBALANCE / CRASH &rarr;</span><br>
+                    3. Mark as processed &#10007; not yet
+                </div>
+                <div style="font-size:9px;color:var(--success);margin-top:4px">New consumer: "result already set, skip API" → completes normally.</div>
+            </div>
+        </div>
+        <div style="margin-top:8px">
+            <table>
+                <thead><tr><th>Layer</th><th>Where</th><th>How</th><th>Protects against</th></tr></thead>
+                <tbody>
+                    <tr><td class="text-sm" style="color:var(--info);font-weight:600">Layer 1: Consumer</td><td class="text-sm"><code>processed_events</code></td><td class="text-sm">tryProcess(eventId) before step, mark after</td><td class="text-sm">Duplicate Kafka messages</td></tr>
+                    <tr><td class="text-sm" style="color:var(--warning);font-weight:600">Layer 2: Handler</td><td class="text-sm">Each step handler</td><td class="text-sm">completedWhen SpEL checks result fields</td><td class="text-sm">Crash between API success and mark</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Pattern Comparison Detail -->
+    <div class="card">
+        <h3>Pattern Comparison: Framework-Managed vs Custom Code</h3>
+
+        <!-- Saga -->
+        <div style="border:1px solid #8b5cf6;border-radius:8px;padding:12px;margin-bottom:10px;background:rgba(139,92,246,.03)">
+            <div style="font-size:12px;font-weight:700;color:#8b5cf6;margin-bottom:8px">Saga + Transactional Outbox</div>
+            <div class="grid grid-2" style="margin-bottom:0">
+                <div>
+                    <div style="font-size:9px;font-weight:600;color:var(--success);text-transform:uppercase;margin-bottom:4px">Framework-managed (Spring Kafka)</div>
+                    <table><tbody>
+                        <tr><td class="text-sm">Retry topics</td><td class="text-sm dim"><code>-retry-0/1/2</code> auto-created</td></tr>
+                        <tr><td class="text-sm">Dead letter topic</td><td class="text-sm dim"><code>-dlt</code> auto-created</td></tr>
+                        <tr><td class="text-sm">Exponential backoff</td><td class="text-sm dim">Configurable via properties</td></tr>
+                        <tr><td class="text-sm">Consumer offsets</td><td class="text-sm dim">Kafka-managed crash recovery</td></tr>
+                        <tr><td class="text-sm">Rebalancing</td><td class="text-sm dim">CooperativeStickyAssignor</td></tr>
+                    </tbody></table>
+                </div>
+                <div>
+                    <div style="font-size:9px;font-weight:600;color:var(--warning);text-transform:uppercase;margin-bottom:4px">Custom code (we built)</div>
+                    <table><tbody>
+                        <tr><td class="text-sm">Outbox events</td><td class="text-sm dim">Atomic DB+Kafka guarantee</td></tr>
+                        <tr><td class="text-sm">Saga orchestrator</td><td class="text-sm dim">Step sequencing, compensation</td></tr>
+                        <tr><td class="text-sm">Outbox publisher</td><td class="text-sm dim">Polls unpublished → Kafka</td></tr>
+                        <tr><td class="text-sm">Recovery service</td><td class="text-sm dim">Stale IN_PROGRESS finder</td></tr>
+                        <tr><td class="text-sm">Idempotency guards</td><td class="text-sm dim">Check result before API call</td></tr>
+                    </tbody></table>
+                </div>
+            </div>
+        </div>
+
+        <!-- SM -->
+        <div style="border:1px solid #06b6d4;border-radius:8px;padding:12px;margin-bottom:10px;background:rgba(6,182,212,.03)">
+            <div style="font-size:12px;font-weight:700;color:#06b6d4;margin-bottom:8px">Spring Statemachine</div>
+            <div class="grid grid-2" style="margin-bottom:0">
+                <div>
+                    <div style="font-size:9px;font-weight:600;color:var(--success);text-transform:uppercase;margin-bottom:4px">Framework-managed</div>
+                    <table><tbody>
+                        <tr><td class="text-sm">State machine engine</td><td class="text-sm dim">States, transitions, guards</td></tr>
+                        <tr><td class="text-sm">Transition validation</td><td class="text-sm dim">Invalid events auto-rejected</td></tr>
+                        <tr><td class="text-sm">Retry topics</td><td class="text-sm dim">Spring Kafka @RetryableTopic</td></tr>
+                        <tr><td class="text-sm">JPA persistence</td><td class="text-sm dim" style="color:var(--warning)">SQL only — not MongoDB</td></tr>
+                    </tbody></table>
+                </div>
+                <div>
+                    <div style="font-size:9px;font-weight:600;color:var(--warning);text-transform:uppercase;margin-bottom:4px">Custom code (we built)</div>
+                    <table><tbody>
+                        <tr><td class="text-sm">MongoStateMachinePersist</td><td class="text-sm dim">Custom MongoDB persistence</td></tr>
+                        <tr><td class="text-sm">StateMachineService</td><td class="text-sm dim">Acquire/restore/persist per flow</td></tr>
+                        <tr><td class="text-sm">Recovery service</td><td class="text-sm dim">Stuck machines in transient states</td></tr>
+                        <tr><td class="text-sm">No outbox pattern</td><td class="text-sm dim" style="color:var(--danger)">Direct Kafka — no atomic guarantee</td></tr>
+                    </tbody></table>
+                </div>
+            </div>
+        </div>
+
+        <!-- SI -->
+        <div style="border:1px solid var(--primary);border-radius:8px;padding:12px;margin-bottom:10px;background:rgba(99,102,241,.03)">
+            <div style="font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px">Spring Integration (EIP)</div>
+            <div class="grid grid-2" style="margin-bottom:0">
+                <div>
+                    <div style="font-size:9px;font-weight:600;color:var(--success);text-transform:uppercase;margin-bottom:4px">Framework-managed</div>
+                    <table><tbody>
+                        <tr><td class="text-sm">IntegrationFlow DSL</td><td class="text-sm dim">Declarative .handle() per step</td></tr>
+                        <tr><td class="text-sm">RetryAdvice</td><td class="text-sm dim">Per-step exponential backoff</td></tr>
+                        <tr><td class="text-sm">Error channel</td><td class="text-sm dim">Built-in error routing</td></tr>
+                        <tr><td class="text-sm">MessagingGateway</td><td class="text-sm dim">Clean API to trigger flows</td></tr>
+                    </tbody></table>
+                </div>
+                <div>
+                    <div style="font-size:9px;font-weight:600;color:var(--info);text-transform:uppercase;margin-bottom:4px">What we DON'T need (framework handles it)</div>
+                    <table><tbody>
+                        <tr><td class="text-sm" style="text-decoration:line-through;color:var(--dim)">Outbox table</td><td class="text-sm dim">No dual-write, synchronous</td></tr>
+                        <tr><td class="text-sm" style="text-decoration:line-through;color:var(--dim)">Saga orchestrator</td><td class="text-sm dim">IntegrationFlow chains steps</td></tr>
+                        <tr><td class="text-sm" style="text-decoration:line-through;color:var(--dim)">Recovery service</td><td class="text-sm dim">Retry advice handles inline</td></tr>
+                        <tr><td class="text-sm" style="text-decoration:line-through;color:var(--dim)">Kafka retry topics</td><td class="text-sm dim">In-process RetryTemplate</td></tr>
+                    </tbody></table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Starter Library -->
+    <div class="card" style="border-color:var(--success)">
+        <h3 style="color:var(--success)">orchestrator-starter (Reusable Library)</h3>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:10px">
+            The patterns above were distilled into a Spring Boot starter. Teams add one dependency and write 2 files — the library handles everything else.
+        </div>
+        <div class="grid grid-2" style="margin-bottom:0">
+            <div>
+                <div style="font-size:9px;font-weight:600;color:var(--success);text-transform:uppercase;margin-bottom:4px">Library provides</div>
+                <table><tbody>
+                    <tr><td class="text-sm">Transactional Outbox</td><td class="text-sm dim">Atomic DB+Kafka — from Saga</td></tr>
+                    <tr><td class="text-sm">Kafka retry + jitter</td><td class="text-sm dim">retry-0/1/2 + DLT</td></tr>
+                    <tr><td class="text-sm">Two-layer idempotency</td><td class="text-sm dim">Consumer + handler guards</td></tr>
+                    <tr><td class="text-sm">@Flow/@Step annotations</td><td class="text-sm dim">Auto-discovery + validation</td></tr>
+                    <tr><td class="text-sm">Stale flow recovery</td><td class="text-sm dim">Crash safety net</td></tr>
+                    <tr><td class="text-sm">REST endpoints</td><td class="text-sm dim">POST /flows, GET /flows/{id}</td></tr>
+                </tbody></table>
+            </div>
+            <div>
+                <div style="font-size:9px;font-weight:600;color:var(--warning);text-transform:uppercase;margin-bottom:4px">User writes (2 files + config)</div>
+                <table><tbody>
+                    <tr><td class="text-sm">Flow entity</td><td class="text-sm dim">extends AbstractFlow + domain fields</td></tr>
+                    <tr><td class="text-sm">@Flow class</td><td class="text-sm dim">@Step methods with business logic</td></tr>
+                    <tr><td class="text-sm">application.yml</td><td class="text-sm dim">4 lines: topic, retry, retention</td></tr>
+                </tbody></table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Configuration -->
+    <div class="grid grid-2">
+        <div class="card">
+            <h3>Configuration Reference</h3>
+            <table>
+                <tr><th>Property</th><th>Default</th><th>Purpose</th></tr>
+                <tr><td class="mono">orchestrator.kafka.command-topic</td><td>orchestrator.commands</td><td>Kafka topic</td></tr>
+                <tr><td class="mono">orchestrator.retry.max-attempts</td><td>4</td><td>1 initial + N-1 retries</td></tr>
+                <tr><td class="mono">orchestrator.retry.initial-interval-ms</td><td>2000</td><td>First retry delay</td></tr>
+                <tr><td class="mono">orchestrator.retry.multiplier</td><td>2.0</td><td>Exponential multiplier</td></tr>
+                <tr><td class="mono">orchestrator.retry.jitter-factor</td><td>0.5</td><td>0=none, 0.5=equal, 1.0=full</td></tr>
+                <tr><td class="mono">orchestrator.retention.outbox-days</td><td>7</td><td>TTL: outbox events</td></tr>
+                <tr><td class="mono">orchestrator.retention.processed-events-days</td><td>30</td><td>TTL: idempotency records</td></tr>
+                <tr><td class="mono">orchestrator.retention.step-log-days</td><td>90</td><td>TTL: step audit logs</td></tr>
+                <tr><td class="mono">orchestrator.audit.include-flow-state</td><td>false</td><td>Full JSON in logs (expensive)</td></tr>
+            </table>
+        </div>
+        <div class="card">
+            <h3>MongoDB Collections</h3>
+            <table>
+                <tr><th>Collection</th><th>Managed by</th><th>TTL</th><th>Purpose</th></tr>
+                <tr><td>Your collection</td><td>You</td><td>—</td><td>Flow state + domain fields</td></tr>
+                <tr><td class="mono">orchestrator_outbox</td><td>Library</td><td>7d</td><td>Pending Kafka publishes</td></tr>
+                <tr><td class="mono">orchestrator_processed_events</td><td>Library</td><td>30d</td><td>Consumer idempotency</td></tr>
+                <tr><td class="mono">orchestrator_step_log</td><td>Library</td><td>90d</td><td>Step execution audit</td></tr>
+            </table>
+        </div>
     </div>
 </div>
 
 </div><!-- /main -->
 
-<!-- Detail Modal -->
-<div id="modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:none;align-items:center;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
+<!-- Modal -->
+<div id="modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;max-width:700px;width:90%;max-height:80vh;overflow-y:auto">
-        <div class="flex between center"><h3 style="color:var(--text)">Flow Details</h3><button class="btn btn-outline btn-sm" onclick="document.getElementById('modal').style.display='none'">Close</button></div>
-        <div id="modal-body" style="margin-top:12px"></div>
+        <div class="flex between center"><h3 style="color:var(--text)">Details</h3><button class="btn btn-outline btn-sm" onclick="document.getElementById('modal').style.display='none'">Close</button></div>
+        <div id="modal-body" style="margin-top:10px"></div>
     </div>
 </div>
 
 <script>
-const STEPS = ['CREATE_DOCUMENT','UPLOAD_ATTACHMENT','REQUEST_SIGNATURE','VERIFY_SIGNATURE','FINALIZE_DOCUMENT'];
-const STEP_SHORT = ['CRE','UPL','SIG','VER','FIN'];
-let allFlows = [], currentFilter = 'all', autoInterval = null;
+const STEPS=['CREATE_DOCUMENT','UPLOAD_ATTACHMENT','REQUEST_SIGNATURE','VERIFY_SIGNATURE','FINALIZE_DOCUMENT'];
+const SH=['CRE','UPL','SIG','VER','FIN'];
+let allFlows=[],curFilter='active',autoInt=null,curPage=0,pageSize=20,ladderInt=null;
 
-// ========== Tab switching ==========
-function switchTab(id, btn) {
-    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-    document.getElementById('tab-'+id).classList.add('active');
-    btn.classList.add('active');
-    if (id === 'kafka') loadTopics();
-    if (id === 'data') loadCollections();
+function switchTab(id,btn){document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));document.getElementById('tab-'+id).classList.add('active');btn.classList.add('active')}
+
+async function api(u,o={}){return(await fetch(u,{headers:{'Content-Type':'application/json'},...o})).json()}
+
+async function refreshFlows(){try{allFlows=await api('/api/dashboard/flows');renderFlows();updateStats()}catch(e){}}
+function refreshAll(){refreshFlows();loadLadder();loadCollections()}
+
+function updateStats(){
+    let c={PENDING:0,IN_PROGRESS:0,WAITING_RETRY:0,COMPLETED:0,FAILED:0};
+    allFlows.forEach(f=>c[f.status]=(c[f.status]||0)+1);
+    document.getElementById('s-total').textContent=allFlows.length;
+    document.getElementById('s-progress').textContent=(c.IN_PROGRESS||0)+(c.PENDING||0);
+    document.getElementById('s-waiting').textContent=c.WAITING_RETRY||0;
+    document.getElementById('s-completed').textContent=c.COMPLETED||0;
+    document.getElementById('s-failed').textContent=c.FAILED||0;
 }
 
-// ========== Fetch helper ==========
-async function api(url, opts={}) {
-    const res = await fetch(url, {headers:{'Content-Type':'application/json'},...opts});
-    return res.json();
-}
+function filterFlows(f){curFilter=f;curPage=0;document.querySelectorAll('.filter-btn').forEach(b=>b.classList.toggle('active',b.dataset.filter===f));renderFlows()}
+function changePage(d){curPage+=d;renderFlows()}
 
-// ========== Flows ==========
-async function refreshFlows() {
-    try {
-        allFlows = await api('/api/dashboard/flows');
-        renderFlows();
-        updateStats();
-    } catch(e) { console.error(e); }
-}
-
-function updateStats() {
-    let c = {PENDING:0,IN_PROGRESS:0,WAITING_RETRY:0,COMPLETED:0,FAILED:0,COMPENSATING:0};
-    allFlows.forEach(f => c[f.status] = (c[f.status]||0)+1);
-    document.getElementById('s-total').textContent = allFlows.length;
-    document.getElementById('s-progress').textContent = (c.IN_PROGRESS||0)+(c.PENDING||0);
-    document.getElementById('s-waiting').textContent = c.WAITING_RETRY||0;
-    document.getElementById('s-completed').textContent = c.COMPLETED||0;
-    document.getElementById('s-failed').textContent = c.FAILED||0;
-}
-
-function filterFlows(f) { currentFilter=f; renderFlows(); }
-
-function renderProgress(f) {
-    const idx = STEPS.indexOf(f.currentStep);
-    const done = f.status==='COMPLETED';
-    const fail = f.status==='FAILED';
-    let h = '<div class="steps">';
-    STEPS.forEach((s,i) => {
-        if(i>0) h += `<div class="conn ${done||i<=idx?'done':''}"></div>`;
-        let cls = 'wait';
-        if(done||i<idx) cls='done';
-        else if(i===idx&&fail) cls='fail';
-        else if(i===idx) cls='active';
-        h += `<div class="dot ${cls}" title="${s}">${STEP_SHORT[i]}</div>`;
-    });
+function renderProgress(f){
+    const fid=f._id||f.id||'';
+    const idx=STEPS.indexOf(f.currentStep),done=f.status==='COMPLETED',fail=f.status==='FAILED';
+    let h='<div class="steps">';
+    STEPS.forEach((s,i)=>{if(i>0)h+=`<div class="conn ${done||i<=idx?'done':''}"></div>`;let c='wait';if(done||i<idx)c='done';else if(i===idx&&fail)c='fail';else if(i===idx)c='active';
+        const clickable=c!=='wait';
+        h+=`<div class="dot ${c}" title="${s}" ${clickable?`style="cursor:pointer" onclick="showStepDetail('${fid}','${s}')"`:''}>${SH[i]}</div>`});
     return h+'</div>';
 }
 
-function statusBadge(s) {
-    const map = {PENDING:'pending',IN_PROGRESS:'progress',WAITING_RETRY:'waiting',COMPLETED:'completed',FAILED:'failed',COMPENSATING:'compensating'};
-    return `<span class="badge badge-${map[s]||'pending'}">${s}</span>`;
+function badge(s){const m={PENDING:'pending',IN_PROGRESS:'progress',WAITING_RETRY:'waiting',COMPLETED:'completed',FAILED:'failed',COMPENSATING:'compensating'};return`<span class="badge b-${m[s]||'pending'}">${s}</span>`}
+
+function detectLib(f){
+    const cls=f._class||'';
+    if(cls.includes('saga.outbox')||cls.includes('saga_outbox'))return'<span class="b-lib" style="background:#2e1065;color:#a78bfa">Saga</span>';
+    if(cls.includes('statemachine')||cls.includes('.sm.'))return'<span class="b-lib" style="background:#164e63;color:#22d3ee">SM</span>';
+    if(cls.includes('integration')||cls.includes('.si.'))return'<span class="b-lib" style="background:#1e1b4b;color:#818cf8">SI</span>';
+    if(cls)return'<span class="b-lib" style="background:#14532d;color:#4ade80">Starter</span>';
+    return'<span class="b-lib" style="background:#374151;color:#9ca3af">—</span>';
 }
 
-function renderFlows() {
-    const tbody = document.getElementById('flow-tbody');
-    let flows = currentFilter==='all' ? allFlows : allFlows.filter(f=>f.status===currentFilter);
-    if (!flows.length) { tbody.innerHTML='<tr><td colspan="8" class="empty">No flows</td></tr>'; return; }
-    tbody.innerHTML = flows.map(f => {
-        const id = (f._id && f._id.$oid) ? f._id.$oid : (f._id || f.id || '?');
-        const short = typeof id==='string' ? id.substring(0,8) : String(id).substring(0,8);
-        const time = f.createdAt ? new Date(f.createdAt).toLocaleTimeString() : '-';
-        const retry = f.retryCount||0;
-        const backoff = f.backoffSeconds>0&&f.status!=='COMPLETED' ? ` <span class="dim">(${f.backoffSeconds}s)</span>` : '';
-        return `<tr>
-            <td class="mono">${short}</td>
-            <td class="text-sm">${f.title||'-'}</td>
-            <td>${statusBadge(f.status)}</td>
-            <td class="text-sm">${f.currentStep||'-'}</td>
-            <td>${renderProgress(f)}</td>
-            <td class="text-sm">${retry}${backoff}</td>
-            <td class="text-sm dim">${time}</td>
-            <td>
-                ${f.status==='FAILED'?'<button class="btn btn-success btn-sm" onclick="retryFlow(\''+id+'\')">Retry</button>':''}
-                <button class="btn btn-outline btn-sm" onclick="showDetail('${id}')">...</button>
-            </td>
-        </tr>`;
+function renderFlows(){
+    const tb=document.getElementById('flow-tbody');
+    let flows;
+    if(curFilter==='all')flows=allFlows;
+    else if(curFilter==='active')flows=allFlows.filter(f=>f.status==='IN_PROGRESS'||f.status==='PENDING'||f.status==='WAITING_RETRY');
+    else flows=allFlows.filter(f=>f.status===curFilter);
+    if(!flows.length){tb.innerHTML='<tr><td colspan="9" class="empty">No flows</td></tr>';document.getElementById('pg-info').textContent='0 of 0';document.getElementById('pg-prev').disabled=true;document.getElementById('pg-next').disabled=true;return}
+    const totalPages=Math.ceil(flows.length/pageSize);
+    if(curPage>=totalPages)curPage=totalPages-1;if(curPage<0)curPage=0;
+    const start=curPage*pageSize,paged=flows.slice(start,start+pageSize);
+    document.getElementById('pg-info').textContent=`${start+1}-${start+paged.length} of ${flows.length}`;
+    document.getElementById('pg-prev').disabled=curPage===0;
+    document.getElementById('pg-next').disabled=curPage>=totalPages-1;
+    tb.innerHTML=paged.map(f=>{
+        const id=f._id||f.id||'?';
+        const short=String(id).substring(0,8);
+        const time=f.createdAt?new Date(f.createdAt).toLocaleTimeString():'-';
+        const bo=f.backoffSeconds>0&&f.status!=='COMPLETED'?` <span class="dim">(${f.backoffSeconds}s)</span>`:'';
+        return`<tr><td class="mono">${short}</td><td>${detectLib(f)}</td><td class="text-sm">${f.title||'-'}</td><td>${badge(f.status)}</td><td class="text-sm">${f.currentStep||'-'}</td><td>${renderProgress(f)}</td><td class="text-sm">${f.retryCount||0}${bo}</td><td class="text-sm dim">${time}</td><td><button class="btn btn-outline btn-sm" onclick="showDetail('${id}')">...</button></td></tr>`;
     }).join('');
 }
 
-// ========== Actions ==========
-async function startFlow() {
-    const data = {title:document.getElementById('f-title').value, content:'auto', signerEmail:document.getElementById('f-email').value};
-    try {
-        await api('/api/dashboard/flows/start',{method:'POST',body:JSON.stringify(data)});
-        toast('Flow started (async via Kafka)','success');
-        setTimeout(refreshFlows,1000);
-    } catch(e) { toast('Failed','error'); }
+async function startFlow(){
+    try{await api('/api/dashboard/flows/start',{method:'POST',body:JSON.stringify({title:document.getElementById('f-title').value,content:'auto',signerEmail:document.getElementById('f-email').value})});toast('Flow started','success');setTimeout(refreshFlows,1000)}catch(e){toast('Failed','error')}
 }
-
-async function runLoadTest() {
-    const count = parseInt(document.getElementById('lt-count').value)||10;
-    document.getElementById('lt-status').textContent = 'Launching...';
-    try {
-        const r = await api('/api/dashboard/flows/loadtest',{method:'POST',body:JSON.stringify({count})});
-        document.getElementById('lt-status').textContent = r.flowsStarted+' launched';
-        toast(r.flowsStarted+' flows launched','success');
-        if (!autoInterval) toggleAuto();
-        setTimeout(refreshFlows,1000);
-    } catch(e) { document.getElementById('lt-status').textContent='Failed'; toast('Failed','error'); }
+async function runLoadTest(){
+    const n=parseInt(document.getElementById('lt-count').value)||10;document.getElementById('lt-status').textContent='Launching...';
+    try{const r=await api('/api/dashboard/flows/loadtest',{method:'POST',body:JSON.stringify({count:n})});const pp=r.perPattern||{};const detail=Object.entries(pp).map(([k,v])=>k+':'+v).join(' ');document.getElementById('lt-status').innerHTML=`${r.flowsStarted} launched <span class="dim">(${detail})</span>`;toast(r.flowsStarted+' flows across patterns','success');if(!autoInt)toggleAuto();setTimeout(refreshFlows,1000)}catch(e){document.getElementById('lt-status').textContent='Failed'}
 }
+async function setFailure(ep,v){const c={};c[ep]=v;await api('/api/dashboard/failure-config',{method:'POST',body:JSON.stringify(c)});toast(ep+': '+v,'success')}
+async function resetFailures(){await api('/api/dashboard/failure-reset',{method:'POST'});document.querySelectorAll('[id^="fail-"]').forEach(s=>s.value='NONE');toast('Reset','success')}
 
-async function setFailure(ep,val) {
-    const c={}; c[ep]=val;
-    await api('/api/dashboard/failure-config',{method:'POST',body:JSON.stringify(c)});
-    toast(ep+': '+val,'success');
-}
-
-async function resetFailures() {
-    await api('/api/dashboard/failure-reset',{method:'POST'});
-    document.querySelectorAll('[id^="fail-"]').forEach(s=>s.value='NONE');
-    toast('Failures reset','success');
-}
-
-async function retryFlow(id) {
-    // Re-trigger via direct POST to sample app
-    toast('Manual retry not implemented yet','error');
-}
-
-function showDetail(id) {
-    const f = allFlows.find(x => {
-        const fid = (x._id&&x._id.$oid)?x._id.$oid:(x._id||x.id);
-        return fid===id || String(fid)===id;
-    });
-    if (!f) return;
-    document.getElementById('modal-body').innerHTML = `<pre style="background:var(--surface2);padding:12px;border-radius:6px;font-size:11px;overflow:auto;max-height:60vh">${JSON.stringify(f,null,2)}</pre>`;
+function showDetail(id){
+    const f=allFlows.find(x=>{const fid=(x._id&&x._id.$oid)?x._id.$oid:(x._id||x.id);return fid===id||String(fid)===id});
+    if(!f)return;document.getElementById('modal-body').innerHTML=`<pre style="background:var(--surface2);padding:10px;border-radius:6px;font-size:10px;overflow:auto;max-height:60vh">${JSON.stringify(f,null,2)}</pre>`;
     document.getElementById('modal').style.display='flex';
 }
 
-// ========== Kafka ==========
-async function loadTopics() {
-    try {
-        const topics = await api('/api/data/kafka/topics');
-        document.getElementById('kafka-topics').innerHTML = topics
-            .filter(t=>!t.internal)
-            .sort((a,b)=>a.name.localeCompare(b.name))
-            .map(t => {
-                let tag='';
-                if(t.name.includes('-retry-')) tag=' <span class="dim">[RETRY]</span>';
-                else if(t.name.includes('-dlt')) tag=' <span style="color:var(--danger)">[DLT]</span>';
-                return `<button class="btn btn-outline btn-sm" style="margin:2px" onclick="loadMessages('${t.name}')">${t.name}${tag} <span class="dim">(${t.partitions}p)</span></button>`;
-            }).join('');
-    } catch(e) { document.getElementById('kafka-topics').textContent='Error'; }
-}
-
-async function loadMessages(topic) {
-    const el = document.getElementById('kafka-messages');
-    el.innerHTML = '<div class="dim text-sm">Loading...</div>';
-    try {
-        const data = await api('/api/data/kafka/topics/'+topic+'/messages?limit=30');
-        if (!data.messages||!data.messages.length) { el.innerHTML='<div class="empty">No messages</div>'; return; }
-        let h = `<div class="dim text-sm" style="margin-bottom:8px">${topic}: ${data.count} messages</div>`;
-        h += '<table><thead><tr><th>Offset</th><th>Key</th><th>Payload</th><th>Time</th></tr></thead><tbody>';
-        data.messages.forEach(m => {
-            let val = m.value;
-            try { val = JSON.stringify(JSON.parse(val),null,0); } catch(e){}
-            if(val.length>80) val=val.substring(0,80)+'...';
-            const key = m.key?(m.key.length>10?m.key.substring(0,10)+'..':m.key):'-';
-            const time = new Date(m.timestamp).toLocaleTimeString();
-            h += `<tr><td class="mono">${m.offset}</td><td class="mono">${key}</td><td class="mono" title="${m.value.replace(/"/g,'&quot;')}">${val}</td><td class="dim text-sm">${time}</td></tr>`;
+async function showStepDetail(flowId,stepName){
+    document.getElementById('modal-body').innerHTML='<div class="dim text-sm">Loading step logs...</div>';
+    document.getElementById('modal').style.display='flex';
+    try{
+        const logs=await api('/api/dashboard/flows/'+flowId+'/steps');
+        const stepLogs=logs.filter(l=>l.stepName===stepName);
+        if(!stepLogs.length){document.getElementById('modal-body').innerHTML=`<div class="dim text-sm">No logs found for step ${stepName}</div>`;return}
+        let h=`<div style="margin-bottom:10px"><span style="font-size:13px;font-weight:600">${stepName}</span> <span class="dim text-sm">${stepLogs.length} attempt(s)</span></div>`;
+        h+='<table><thead><tr><th>#</th><th>Status</th><th>Duration</th><th>Started</th><th>Completed</th><th>Error</th></tr></thead><tbody>';
+        stepLogs.forEach(l=>{
+            const st=l.status==='COMPLETED'?'<span style="color:var(--success)">COMPLETED</span>':l.status==='FAILED'?'<span style="color:var(--danger)">FAILED</span>':`<span style="color:var(--warning)">${l.status}</span>`;
+            const started=l.startedAt?new Date(l.startedAt).toLocaleTimeString():'-';
+            const ended=l.completedAt?new Date(l.completedAt).toLocaleTimeString():'-';
+            const err=l.errorMessage?`<span style="color:var(--danger);font-size:9px">${l.errorMessage.substring(0,80)}</span>`:'—';
+            h+=`<tr><td class="text-sm">${l.attemptNumber||1}</td><td class="text-sm">${st}</td><td class="mono text-sm">${l.durationMs||0}ms</td><td class="text-sm dim">${started}</td><td class="text-sm dim">${ended}</td><td class="text-sm">${err}</td></tr>`;
         });
-        h += '</tbody></table>';
-        el.innerHTML = h;
-    } catch(e) { el.innerHTML='<div style="color:var(--danger)">Error</div>'; }
+        h+='</tbody></table>';
+
+        // Show flow state snapshot if available (audit.include-flow-state=true)
+        const lastLog=stepLogs[stepLogs.length-1];
+        if(lastLog.flowStateBefore||lastLog.flowStateAfter){
+            h+='<div style="margin-top:12px">';
+            if(lastLog.flowStateBefore)h+=`<div><div style="font-size:10px;font-weight:600;margin-bottom:4px;color:var(--dim)">REQUEST (flow state before)</div><pre style="background:var(--surface2);padding:8px;border-radius:5px;font-size:9px;overflow:auto;max-height:200px">${JSON.stringify(JSON.parse(lastLog.flowStateBefore),null,2)}</pre></div>`;
+            if(lastLog.flowStateAfter)h+=`<div style="margin-top:8px"><div style="font-size:10px;font-weight:600;margin-bottom:4px;color:var(--dim)">RESPONSE (flow state after)</div><pre style="background:var(--surface2);padding:8px;border-radius:5px;font-size:9px;overflow:auto;max-height:200px">${JSON.stringify(JSON.parse(lastLog.flowStateAfter),null,2)}</pre></div>`;
+            h+='</div>';
+        }
+
+        // Also show relevant flow fields for this step
+        const f=allFlows.find(x=>(x._id||x.id)===flowId);
+        if(f){
+            h+=`<div style="margin-top:12px"><div style="font-size:10px;font-weight:600;margin-bottom:4px;color:var(--dim)">FLOW STATE (current)</div><pre style="background:var(--surface2);padding:8px;border-radius:5px;font-size:9px;overflow:auto;max-height:200px">${JSON.stringify(f,null,2)}</pre></div>`;
+        }
+
+        document.getElementById('modal-body').innerHTML=h;
+    }catch(e){document.getElementById('modal-body').innerHTML='<div style="color:var(--danger)">Error loading step logs</div>'}
 }
 
-// ========== MongoDB ==========
-const collMeta = {
-    'enigio_flows':                    {tag:'FLOW',color:'var(--info)'},
-    'orchestrator_outbox':             {tag:'OUTBOX',color:'var(--warning)'},
-    'orchestrator_processed_events':   {tag:'IDEMPOTENCY',color:'var(--primary)'},
-    'orchestrator_step_log':           {tag:'AUDIT',color:'var(--success)'},
+// Kafka Ladder
+let ladderLoaded=false;
+async function loadLadder(){
+    const el=document.getElementById('ladder-view');
+    if(!ladderLoaded)el.innerHTML='<div class="dim text-sm" style="padding:16px;text-align:center">Loading messages from all topics...</div>';
+
+    // Discover base topic from available topics
+    let baseTopic='enigio.sample.commands';
+    try{
+        const allTopics=await api('/api/data/kafka/topics');
+        // Prefer topics with .replies counterpart (= library pattern)
+        const nonInternal=allTopics.filter(t=>!t.internal).map(t=>t.name);
+        const cmdTopics=nonInternal.filter(t=>!t.includes('-retry')&&!t.includes('-dlt')&&!t.includes('.replies'));
+        const libraryTopic=cmdTopics.find(t=>nonInternal.includes(t+'.replies'));
+        if(libraryTopic)baseTopic=libraryTopic;
+        else if(cmdTopics.length)baseTopic=cmdTopics[0];
+    }catch(e){}
+
+    const topics=[
+        {name:baseTopic,label:'Commands',type:'main',delay:null},
+        {name:baseTopic+'-retry-0',label:'Retry 0',type:'retry',delay:null},
+        {name:baseTopic+'-retry-1',label:'Retry 1',type:'retry',delay:null},
+        {name:baseTopic+'-retry-2',label:'Retry 2',type:'retry',delay:null},
+        {name:baseTopic+'-dlt',label:'DLT',type:'dlt',delay:null}
+    ];
+
+    // Fetch reply topic counts separately
+    const replyTopics=[baseTopic+'.replies',baseTopic+'.replies-retry-0',baseTopic+'.replies-retry-1',baseTopic+'.replies-retry-2',baseTopic+'.replies-dlt'];
+    const replyCounts=await Promise.all(replyTopics.map(t=>
+        api('/api/data/kafka/topics/'+t+'/messages?limit=1').then(r=>r.count||0).catch(()=>0)
+    ));
+
+    const results=await Promise.all(topics.map(t=>
+        api('/api/data/kafka/topics/'+t.name+'/messages?limit=50').catch(()=>({messages:[],count:0}))
+    ));
+
+    const allMessages=[];
+    results.forEach((result,idx)=>{
+        const topic=topics[idx];
+        (result.messages||[]).forEach(m=>{
+            let parsed={};try{parsed=JSON.parse(m.value)}catch(e){}
+            allMessages.push({
+                topic:topic.name,topicLabel:topic.label,topicType:topic.type,topicIndex:idx,
+                offset:m.offset,timestamp:m.timestamp,key:m.key||'',
+                flowId:parsed.flowId||m.key||'',step:parsed.step||'',raw:m.value
+            });
+        });
+    });
+
+    if(!allMessages.length){el.innerHTML='<div class="empty text-sm">No messages in any topic. Start some flows to see the ladder.</div>';return}
+
+    // Build flow lookup from already-loaded flows
+    const flowLookup={};allFlows.forEach(f=>{const fid=f._id||f.id;if(fid)flowLookup[fid]=f});
+
+    // Group by flowId
+    const flowGroups={};
+    allMessages.forEach(m=>{if(!flowGroups[m.flowId])flowGroups[m.flowId]=[];flowGroups[m.flowId].push(m)});
+    Object.values(flowGroups).forEach(msgs=>msgs.sort((a,b)=>a.timestamp-b.timestamp));
+
+    // Only show flows that exist in MongoDB (filter out orphaned Kafka messages from cleared data)
+    const sortedFlows=Object.entries(flowGroups).filter(([fid])=>flowLookup[fid]).sort((a,b)=>(b[1][0]?.timestamp||0)-(a[1][0]?.timestamp||0));
+    const topicCounts=topics.map((_,i)=>results[i].messages?.length||0);
+
+    // Compute observed avg delay per retry topic from actual message transitions
+    const topicDelays=topics.map(()=>({total:0,count:0}));
+    Object.values(flowGroups).forEach(msgs=>{
+        for(let i=1;i<msgs.length;i++){
+            if(msgs[i].topicIndex>msgs[i-1].topicIndex){
+                const delay=(msgs[i].timestamp-msgs[i-1].timestamp)/1000;
+                topicDelays[msgs[i].topicIndex].total+=delay;
+                topicDelays[msgs[i].topicIndex].count++;
+            }
+        }
+    });
+    topics.forEach((t,i)=>{
+        if(topicDelays[i].count>0){
+            const avg=topicDelays[i].total/topicDelays[i].count;
+            t.delay=avg>=60?`${(avg/60).toFixed(0)}m`:`${avg.toFixed(0)}s`;
+        }
+    });
+
+    const flowColors=['#818cf8','#22d3ee','#a78bfa','#34d399','#fb923c','#f472b6','#facc15','#60a5fa'];
+    let colorIdx=0;
+
+    let html='<div class="ladder-stats">';
+    topics.forEach((t,i)=>{
+        const c=t.type==='main'?'var(--info)':t.type==='retry'?'var(--warning)':'var(--danger)';
+        html+=`<div class="ladder-stat-item"><div class="ladder-stat-dot" style="background:${c}"></div><span>${t.label}: <strong>${topicCounts[i]}</strong></span></div>`;
+    });
+    html+=`<div class="ladder-stat-item" style="margin-left:auto"><span class="dim">${Object.keys(flowGroups).length} flows tracked</span></div></div>`;
+
+    html+='<div class="ladder" style="max-height:500px;overflow-y:auto">';
+    html+='<div class="ladder-header"><div class="ladder-time-col" style="font-weight:700">TIME</div>';
+    topics.forEach(t=>{
+        html+=`<div class="ladder-col-header"><div class="topic-name">${t.label}</div><div class="topic-count mono">${t.name}</div>${t.delay?`<div class="topic-delay">+${t.delay}</div>`:'<div class="topic-delay">&nbsp;</div>'}</div>`;
+    });
+    html+='</div><div class="ladder-body">';
+
+    sortedFlows.forEach(([flowId,msgs])=>{
+        const color=flowColors[colorIdx%flowColors.length];colorIdx++;
+        const fi=flowLookup[flowId];
+        const title=fi?fi.title:'Unknown';
+        const statusBadge=fi?badge(fi.status):'';
+        html+=`<div class="ladder-flow-sep" style="border-left-color:${color}">
+            <span style="font-weight:600;color:${color}">${title}</span>
+            <span class="mono dim">${flowId.substring(0,12)}...</span>
+            ${statusBadge}
+            <span class="dim" style="margin-left:auto">${msgs.length} hops</span>
+        </div>`;
+
+        msgs.forEach((msg,mi)=>{
+            const time=new Date(msg.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+            const prevMsg=mi>0?msgs[mi-1]:null;
+
+            html+='<div class="ladder-row">';
+            html+=`<div class="ladder-time-col">${time}</div>`;
+            topics.forEach((_,ci)=>{
+                html+='<div class="ladder-cell">';
+                if(ci===msg.topicIndex){
+                    html+=`<div class="ladder-node ${msg.topicType}" title="${msg.raw.replace(/"/g,'&quot;').substring(0,200)}">
+                        <div class="node-step">${msg.step||'-'}</div>
+                        <div class="node-time">off ${msg.offset}</div>
+                    </div>`;
+                }
+                html+='</div>';
+            });
+            html+='</div>';
+
+            // Arrow between columns if message moved to retry/dlt
+            if(prevMsg&&msg.topicIndex>prevMsg.topicIndex){
+                const delay=msg.timestamp-prevMsg.timestamp;
+                const delaySec=(delay/1000).toFixed(1);
+                const arrowColor=msg.topicType==='dlt'?'var(--danger)':'var(--warning)';
+                html+=`<div style="display:flex;height:16px;position:relative"><div class="ladder-time-col"></div>`;
+                topics.forEach((_,ci)=>{
+                    html+='<div class="ladder-cell" style="min-height:16px">';
+                    if(ci>prevMsg.topicIndex&&ci<=msg.topicIndex){
+                        const isFirst=ci===prevMsg.topicIndex+1,isLast=ci===msg.topicIndex;
+                        html+=`<div style="position:absolute;top:50%;left:${isFirst?'50%':'0'};right:${isLast?'50%':'0'};height:2px;background:${arrowColor};transform:translateY(-1px)">`;
+                        if(isLast)html+=`<div style="position:absolute;right:-1px;top:-4px;border:4px solid transparent;border-left-color:${arrowColor}"></div>`;
+                        html+='</div>';
+                        if(isLast)html+=`<div style="position:absolute;top:-6px;right:calc(50% + 8px);font-size:8px;color:${arrowColor};white-space:nowrap">${delaySec}s</div>`;
+                    }
+                    html+='</div>';
+                });
+                html+='</div>';
+            }
+        });
+    });
+
+    html+='</div></div>';
+    html+=`<div class="ladder-legend">
+        <div class="ladder-legend-item"><div class="ladder-stat-dot" style="background:var(--info)"></div> Initial attempt</div>
+        <div class="ladder-legend-item"><div class="ladder-stat-dot" style="background:var(--warning)"></div> Retry (exponential backoff)</div>
+        <div class="ladder-legend-item"><div class="ladder-stat-dot" style="background:var(--danger)"></div> Dead letter (retries exhausted)</div>
+    </div>`;
+
+    // Reply topic summary bar
+    const replyLabels=['Replies','Reply Retry 0','Reply Retry 1','Reply Retry 2','Reply DLT'];
+    const replyColors=['var(--success)','var(--warning)','var(--warning)','var(--warning)','var(--danger)'];
+    const replyTotal=replyCounts.reduce((a,b)=>a+b,0);
+    if(replyTotal>0){
+        html+=`<div style="margin-top:8px;padding:8px 10px;background:var(--surface2);border-radius:6px;border-left:3px solid var(--success)">
+            <div style="font-size:10px;font-weight:600;color:var(--success);margin-bottom:4px">REPLY TOPIC (orchestrator → advance flow)</div>
+            <div class="flex gap wrap">`;
+        replyLabels.forEach((l,i)=>{
+            if(replyCounts[i]>0)html+=`<span style="font-size:10px;color:${replyColors[i]}">${l}: <strong>${replyCounts[i]}</strong></span>`;
+        });
+        html+=`<span class="dim" style="font-size:10px;margin-left:auto">Total: ${replyTotal} replies</span></div></div>`;
+    }
+    // Only update DOM if content changed — prevents flicker on auto-refresh
+    const scrollEl=el.querySelector('.ladder');
+    const scrollTop=scrollEl?scrollEl.scrollTop:0;
+    if(el._lastHtml!==html){el.innerHTML=html;el._lastHtml=html}
+    const newScrollEl=el.querySelector('.ladder');
+    if(newScrollEl)newScrollEl.scrollTop=scrollTop;
+    ladderLoaded=true;
+}
+
+// MongoDB
+const COLL_GROUPS={
+    'Orchestrator Starter (Saga+Outbox)':{color:'var(--success)',collections:['orchestrator_outbox','orchestrator_processed_events','orchestrator_step_log']},
+    'Application (Your code)':{color:'var(--info)',collections:['enigio_flows']},
+    'Saga+Outbox Pattern':{color:'#a78bfa',collections:['document_flows','outbox_events','saga_step_logs','processed_events']},
+    'Statemachine Pattern':{color:'#22d3ee',collections:['state_machine_contexts','sm_step_logs']}
 };
-
-async function loadCollections() {
-    try {
-        const colls = await api('/api/data/mongo/collections');
-        document.getElementById('mongo-collections').innerHTML = colls.map(c => {
-            const m = collMeta[c]||{tag:'OTHER',color:'var(--dim)'};
-            return `<button class="btn btn-outline btn-sm" style="margin:2px;border-color:${m.color}" onclick="loadCollection('${c}')" title="${c}"><span style="font-size:9px;font-weight:700;color:${m.color};margin-right:4px">${m.tag}</span>${c}</button>`;
-        }).join('');
-    } catch(e) { document.getElementById('mongo-collections').textContent='Error'; }
+async function loadCollections(){
+    try{const colls=await api('/api/data/mongo/collections');
+    let html='';
+    const assigned=new Set();
+    for(const[group,info] of Object.entries(COLL_GROUPS)){
+        const matched=info.collections.filter(c=>colls.includes(c));
+        if(!matched.length)continue;
+        matched.forEach(c=>assigned.add(c));
+        html+=`<div style="margin-bottom:6px"><span style="font-size:9px;font-weight:600;color:${info.color};text-transform:uppercase;letter-spacing:.5px">${group}</span><br>`;
+        html+=matched.map(c=>`<button class="btn btn-outline btn-sm" style="margin:2px;border-color:${info.color}" onclick="loadColl('${c}')">${c}</button>`).join('');
+        html+='</div>';
+    }
+    const other=colls.filter(c=>!assigned.has(c));
+    if(other.length){
+        html+=`<div style="margin-bottom:6px"><span style="font-size:9px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Other</span><br>`;
+        html+=other.map(c=>`<button class="btn btn-outline btn-sm" style="margin:2px" onclick="loadColl('${c}')">${c}</button>`).join('');
+        html+='</div>';
+    }
+    document.getElementById('mongo-collections').innerHTML=html}catch(e){document.getElementById('mongo-collections').textContent='Error'}
+}
+async function loadColl(name){
+    const el=document.getElementById('mongo-data');el.innerHTML='<div class="dim text-sm">Loading...</div>';
+    try{const d=await api('/api/data/mongo/collections/'+name+'?limit=20');
+    if(!d.documents||!d.documents.length){el.innerHTML='<div class="empty text-sm">Empty</div>';return}
+    const keys=Object.keys(d.documents[0]).slice(0,7);
+    let h=`<div class="dim text-sm" style="margin-bottom:6px">${name}: ${d.total} docs</div><table><thead><tr>${keys.map(k=>'<th>'+k+'</th>').join('')}</tr></thead><tbody>`;
+    d.documents.forEach(doc=>{h+='<tr>'+keys.map(k=>{let v=doc[k];if(v&&typeof v==='object')v=JSON.stringify(v).substring(0,25);if(typeof v==='string'&&v.length>20)v=v.substring(0,20)+'..';return`<td class="mono text-sm">${v??'-'}</td>`}).join('')+'</tr>'});
+    el.innerHTML=h+'</tbody></table>'}catch(e){el.innerHTML='<div style="color:var(--danger)">Error</div>'}
 }
 
-async function loadCollection(name) {
-    const el = document.getElementById('mongo-data');
-    el.innerHTML = '<div class="dim text-sm">Loading...</div>';
-    try {
-        const data = await api('/api/data/mongo/collections/'+name+'?limit=30');
-        if (!data.documents||!data.documents.length) { el.innerHTML='<div class="empty">Empty</div>'; return; }
-        const keys = Object.keys(data.documents[0]).slice(0,8);
-        let h = `<div class="dim text-sm" style="margin-bottom:8px">${name}: ${data.total} docs</div>`;
-        h += '<table><thead><tr>'+keys.map(k=>'<th>'+k+'</th>').join('')+'</tr></thead><tbody>';
-        data.documents.forEach(doc => {
-            h += '<tr>'+keys.map(k => {
-                let v=doc[k]; if(v&&typeof v==='object') v=JSON.stringify(v).substring(0,30);
-                if(typeof v==='string'&&v.length>25) v=v.substring(0,25)+'..';
-                return `<td class="mono text-sm">${v??'-'}</td>`;
-            }).join('')+'</tr>';
+function toggleAuto(){const b=document.getElementById('autoBtn');if(autoInt){clearInterval(autoInt);autoInt=null;b.textContent='Auto: OFF'}else{autoInt=setInterval(refreshFlows,2000);b.textContent='Auto: ON'}}
+function toggleLadderAuto(){const b=document.getElementById('ladderAutoBtn');if(ladderInt){clearInterval(ladderInt);ladderInt=null;b.textContent='Auto: OFF'}else{ladderInt=setInterval(loadLadder,5000);b.textContent='Auto: ON';loadLadder()}}
+
+// Metrics
+let metricsInt=null;
+function toggleMetricsAuto(){const b=document.getElementById('metricsAutoBtn');if(metricsInt){clearInterval(metricsInt);metricsInt=null;b.textContent='Auto: OFF'}else{metricsInt=setInterval(loadMetrics,3000);b.textContent='Auto: ON';loadMetrics()}}
+// Auto-start metrics refresh
+metricsInt=setInterval(loadMetrics,3000);loadMetrics();
+async function loadMetrics(){
+    const el=document.getElementById('metrics-view');
+    try{
+        const apps=await api('/api/metrics/compare');
+        let html='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">';
+        apps.forEach(app=>{
+            const isDown=app.status==='DOWN';
+            html+=`<div style="border:1px solid ${app.color};border-radius:8px;padding:12px;background:rgba(0,0,0,.2);opacity:${isDown?0.4:1}">`;
+            html+=`<div style="font-size:12px;font-weight:700;color:${app.color};margin-bottom:8px">${app.name}</div>`;
+            if(isDown){
+                html+='<div class="dim text-sm">Service unavailable</div>';
+            }else{
+                const threadPct=app.tomcatThreadsMax>0?(app.tomcatThreadsBusy/app.tomcatThreadsMax*100):0;
+                html+=`<div style="margin-bottom:8px">
+                    <div class="flex between" style="font-size:10px;margin-bottom:2px"><span>Threads</span><span style="color:${app.color}">${Math.round(app.threadCount)} live / ${Math.round(app.threadPeak)} peak</span></div>
+                    <div style="background:var(--surface2);border-radius:4px;height:5px;overflow:hidden"><div style="background:${app.color};height:100%;width:${Math.min(threadPct,100)}%;border-radius:4px"></div></div>
+                    <div class="dim" style="font-size:9px;margin-top:1px">Tomcat: ${Math.round(app.tomcatThreadsBusy)} busy / ${Math.round(app.tomcatThreadsMax)} max</div>
+                </div>`;
+                const heapPct=app.heapMaxMB>0?(app.heapUsedMB/app.heapMaxMB*100):0;
+                html+=`<div style="margin-bottom:8px">
+                    <div class="flex between" style="font-size:10px;margin-bottom:2px"><span>Heap Memory</span><span style="color:${app.color}">${app.heapUsedMB.toFixed(0)} / ${app.heapMaxMB.toFixed(0)} MB</span></div>
+                    <div style="background:var(--surface2);border-radius:4px;height:5px;overflow:hidden"><div style="background:${heapPct>80?'var(--danger)':app.color};height:100%;width:${Math.min(heapPct,100)}%;border-radius:4px"></div></div>
+                    <div class="dim" style="font-size:9px;margin-top:1px">Non-heap: ${app.nonHeapUsedMB.toFixed(0)} MB</div>
+                </div>`;
+                const cpuPct=(app.cpuUsage*100);
+                html+=`<div style="margin-bottom:8px">
+                    <div class="flex between" style="font-size:10px;margin-bottom:2px"><span>CPU Usage</span><span style="color:${cpuPct>50?'var(--danger)':app.color}">${cpuPct.toFixed(1)}%</span></div>
+                    <div style="background:var(--surface2);border-radius:4px;height:5px;overflow:hidden"><div style="background:${cpuPct>50?'var(--danger)':app.color};height:100%;width:${Math.min(cpuPct,100)}%;border-radius:4px"></div></div>
+                </div>`;
+                html+=`<div style="font-size:10px;color:var(--dim)">GC pauses: ${Math.round(app.gcPauseCount)} (${app.gcPauseTotalMs.toFixed(0)}ms total)</div>`;
+            }
+            html+='</div>';
         });
-        h += '</tbody></table>';
-        el.innerHTML = h;
-    } catch(e) { el.innerHTML='<div style="color:var(--danger)">Error</div>'; }
+        html+='</div>';
+        el.innerHTML=html;
+    }catch(e){el.innerHTML='<div class="text-sm" style="color:var(--danger)">Error loading metrics</div>'}
 }
+function toast(m,t){const e=document.createElement('div');e.className='toast '+t;e.textContent=m;document.body.appendChild(e);setTimeout(()=>e.remove(),3000)}
 
-// ========== Utils ==========
-function refreshAll() { refreshFlows(); }
-function toggleAuto() {
-    const btn = document.getElementById('autoBtn');
-    if(autoInterval) { clearInterval(autoInterval); autoInterval=null; btn.textContent='Auto: OFF'; }
-    else { autoInterval=setInterval(refreshFlows,2000); btn.textContent='Auto: ON'; }
-}
-function toast(msg,type) {
-    const t=document.createElement('div'); t.className='toast '+type; t.textContent=msg;
-    document.body.appendChild(t); setTimeout(()=>t.remove(),3000);
-}
-
-// Init
-refreshFlows();
+refreshFlows();loadLadder();loadCollections();
 </script>
 </body>
 </html>

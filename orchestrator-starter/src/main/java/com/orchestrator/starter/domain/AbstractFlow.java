@@ -37,6 +37,10 @@ public abstract class AbstractFlow implements OrchestratorFlow {
     @Indexed(unique = true)
     private String correlationId;
 
+    /** Flow type for multi-flow routing. Set by the library at startFlow(). */
+    @org.springframework.data.mongodb.core.index.Indexed
+    private String flowType;
+
     private String currentStep;
 
     private FlowStatus status = FlowStatus.PENDING;

@@ -4,3 +4,9 @@ server:
 spring:
   application:
     name: mock-vendor
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics

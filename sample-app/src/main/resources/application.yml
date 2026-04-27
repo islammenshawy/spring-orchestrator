@@ -6,7 +6,7 @@ spring:
     name: enigio-sample
   data:
     mongodb:
-      uri: mongodb://localhost:27017/enigio_orchestrator
+    uri: mongodb://localhost:27017/enigio_orchestrator
   kafka:
     bootstrap-servers: localhost:9092
 
@@ -18,3 +18,15 @@ vendor:
 orchestrator:
   kafka:
     command-topic: enigio.sample.commands
+  retry:
+    initial-interval-ms: 5000
+    multiplier: 2.0
+    max-interval-ms: 30000
+    max-attempts: 4
+    jitter-factor: 0.5
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics

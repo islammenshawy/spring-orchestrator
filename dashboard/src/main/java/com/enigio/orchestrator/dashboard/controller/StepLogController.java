@@ -21,19 +21,20 @@ public class StepLogController {
 
     @GetMapping("/flows/{flowId}/steps")
     public ResponseEntity<List<Document>> getStepLogs(@PathVariable String flowId) {
-        // Check saga_step_logs
-        Query sagaQuery = new Query(Criteria.where("flowId").is(flowId))
-                .with(Sort.by(Sort.Direction.ASC, "startedAt"));
-        List<Document> sagaLogs = mongoTemplate.find(sagaQuery, Document.class, "saga_step_logs");
+        List<Document> allLogs = new ArrayList<>();
 
-        // Check sm_step_logs
+        // orchestrator-starter library logs
+        Query libQuery = new Query(Criteria.where("flowId").is(flowId))
+                .with(Sort.by(Sort.Direction.ASC, "startedAt"));
+        allLogs.addAll(mongoTemplate.find(libQuery, Document.class, "orchestrator_step_log"));
+
+        // Legacy saga_step_logs
+        allLogs.addAll(mongoTemplate.find(libQuery, Document.class, "saga_step_logs"));
+
+        // Legacy sm_step_logs
         Query smQuery = new Query(Criteria.where("flowId").is(flowId))
                 .with(Sort.by(Sort.Direction.ASC, "createdAt"));
-        List<Document> smLogs = mongoTemplate.find(smQuery, Document.class, "sm_step_logs");
-
-        List<Document> allLogs = new ArrayList<>();
-        allLogs.addAll(sagaLogs);
-        allLogs.addAll(smLogs);
+        allLogs.addAll(mongoTemplate.find(smQuery, Document.class, "sm_step_logs"));
 
         return ResponseEntity.ok(allLogs);
     }

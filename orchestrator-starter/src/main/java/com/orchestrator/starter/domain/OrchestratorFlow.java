@@ -56,6 +56,10 @@ public interface OrchestratorFlow {
     Instant getUpdatedAt();
     void setUpdatedAt(Instant updatedAt);
 
+    /** Flow type identifier for multi-flow routing. Set by the library at startFlow(). */
+    default String getFlowType() { return null; }
+    default void setFlowType(String flowType) {}
+
     /**
      * Tracks which steps in a parallel group have completed.
      * Managed by the library — users don't interact with this.

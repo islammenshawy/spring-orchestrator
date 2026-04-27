@@ -4,11 +4,15 @@ import com.orchestrator.starter.annotation.*;
 import com.orchestrator.starter.annotation.Compensate;
 import com.orchestrator.starter.exception.RetryableStepException;
 import com.orchestrator.starter.flow.FlowDefinition;
+import io.netty.channel.ChannelOption;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.netty.http.client.HttpClient;
 
+import java.time.Duration;
 import java.util.Map;
 
 /**
@@ -32,7 +36,13 @@ public class EnigioDocumentFlow extends FlowDefinition<EnigioFlow> {
     private final WebClient vendorClient;
 
     public EnigioDocumentFlow(@Value("${vendor.base-url}") String baseUrl) {
-        this.vendorClient = WebClient.create(baseUrl);
+        HttpClient httpClient = HttpClient.create()
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5_000)
+                .responseTimeout(Duration.ofSeconds(10));
+        this.vendorClient = WebClient.builder()
+                .baseUrl(baseUrl)
+                .clientConnector(new ReactorClientHttpConnector(httpClient))
+                .build();
     }
 
     @Step(order = 1, completedWhen = "enigioDocumentId != null")

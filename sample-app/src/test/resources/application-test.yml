@@ -1,0 +1,25 @@
+server:
+  port: 0  # random port for tests
+
+spring:
+  application:
+    name: enigio-test-${random.uuid}
+  mongodb:
+    uri: mongodb://localhost:27017/enigio_orchestrator_test
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      auto-offset-reset: latest  # ignore stale messages from previous test runs
+
+vendor:
+  base-url: http://localhost:8081/api/v1
+
+orchestrator:
+  kafka:
+    command-topic: enigio.test.commands
+  retry:
+    initial-interval-ms: 2000
+    multiplier: 2.0
+    max-interval-ms: 10000
+    max-attempts: 4
+    jitter-factor: 0.3

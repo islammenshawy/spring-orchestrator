@@ -14,4 +14,5 @@ public class StepCommandMessage {
     private String flowId;
     private String correlationId;
     private String stepName;
+    private String flowType;
 }

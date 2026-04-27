@@ -1,0 +1,454 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - heading "Orchestrator Dashboard" [level=1] [ref=e4]
+      - generic [ref=e5]: Saga + Outbox | Kafka Retry | MongoDB
+    - generic [ref=e6]:
+      - button "Refresh" [ref=e7] [cursor=pointer]
+      - 'button "Auto: OFF" [ref=e8] [cursor=pointer]'
+  - generic [ref=e9]:
+    - button "Dashboard" [ref=e10] [cursor=pointer]
+    - button "Architecture" [active] [ref=e11] [cursor=pointer]
+  - generic [ref=e3730]:
+    - generic [ref=e3731]:
+      - 'heading "Pattern: Saga + Transactional Outbox" [level=3] [ref=e3732]'
+      - generic [ref=e3733]: "POST /flows → 202 Accepted + flow ID │ ├── Save flow to MongoDB (status=IN_PROGRESS) ├── Save outbox event (same DB — atomic on replica set) ├── Publish to Kafka (sync, waits for broker ack) ├── Return to caller (~5ms) │ ▼ (async — Kafka consumer, possibly different pod) │ Step 1: CREATE_DOCUMENT → vendor API → checkpoint() → outbox → Kafka Step 2: UPLOAD_ATTACHMENT → vendor API → checkpoint() → outbox → Kafka Step 3: REQUEST_SIGNATURE → vendor API → checkpoint() → outbox → Kafka Step 4: VERIFY_SIGNATURE → vendor API (poll) → outbox → Kafka Step 5: FINALIZE_DOCUMENT → vendor API → checkpoint() → COMPLETED │ On failure → retry-0 (2s) → retry-1 (4s) → retry-2 (8s) → DLT → @Compensate in reverse → FAILED"
+    - generic [ref=e3734]:
+      - generic [ref=e3735]:
+        - heading "Performance Metrics (Live)" [level=3] [ref=e3736]
+        - generic [ref=e3737]:
+          - 'button "Auto: OFF" [ref=e3738] [cursor=pointer]'
+          - button "Refresh" [ref=e3739] [cursor=pointer]
+      - generic [ref=e3741]: Click Refresh to load metrics from all 3 pattern apps
+      - generic [ref=e3742]:
+        - strong [ref=e3743]: "Note:"
+        - text: "SI retry is in-process (thread blocks during backoff) — if container crashes mid-retry, retry state is lost. Saga retry lives in Kafka topics — survives crashes. Visible in thread count: SI holds threads during backoff, Saga releases them."
+    - generic [ref=e3744]:
+      - heading "Head-to-Head Comparison" [level=3] [ref=e3745]
+      - table [ref=e3746]:
+        - rowgroup [ref=e3747]:
+          - row "Aspect Saga+Outbox Statemachine Spring Integration" [ref=e3748]:
+            - columnheader "Aspect" [ref=e3749]
+            - columnheader "Saga+Outbox" [ref=e3750]
+            - columnheader "Statemachine" [ref=e3751]
+            - columnheader "Spring Integration" [ref=e3752]
+        - rowgroup [ref=e3753]:
+          - row "Custom code 901 lines / 21 files 929 lines / 23 files 470 lines / 11 files" [ref=e3754]:
+            - cell "Custom code" [ref=e3755]
+            - cell "901 lines / 21 files" [ref=e3756]
+            - cell "929 lines / 23 files" [ref=e3757]
+            - cell "470 lines / 11 files" [ref=e3758]
+          - row "Kafka retry topics ✓ retry-0/1/2 + DLT ✓ retry-0/1/2 + DLT ✓ retry-0/1/2 + DLT" [ref=e3759]:
+            - cell "Kafka retry topics" [ref=e3760]
+            - cell "✓ retry-0/1/2 + DLT" [ref=e3761]
+            - cell "✓ retry-0/1/2 + DLT" [ref=e3762]
+            - cell "✓ retry-0/1/2 + DLT" [ref=e3763]
+          - row "Exponential backoff + jitter ✓ configurable ✓ configurable ✓ configurable" [ref=e3764]:
+            - cell "Exponential backoff + jitter" [ref=e3765]
+            - cell "✓ configurable" [ref=e3766]
+            - cell "✓ configurable" [ref=e3767]
+            - cell "✓ configurable" [ref=e3768]
+          - row "Crash-resilient retry ✓ Kafka holds state ✓ Kafka holds state ✓ Kafka holds state" [ref=e3769]:
+            - cell "Crash-resilient retry" [ref=e3770]
+            - cell "✓ Kafka holds state" [ref=e3771]
+            - cell "✓ Kafka holds state" [ref=e3772]
+            - cell "✓ Kafka holds state" [ref=e3773]
+          - row "Atomic DB+Kafka write ✓ outbox pattern ✗ direct publish ✗ direct publish" [ref=e3774]:
+            - cell "Atomic DB+Kafka write" [ref=e3775]
+            - cell "✓ outbox pattern" [ref=e3776]
+            - cell "✗ direct publish" [ref=e3777]
+            - cell "✗ direct publish" [ref=e3778]
+          - row "MongoDB collections 4 (flows, outbox, step logs, idempotency) 4 (flows, SM contexts, step logs, idempotency) 2 (flows, idempotency)" [ref=e3779]:
+            - cell "MongoDB collections" [ref=e3780]
+            - cell "4 (flows, outbox, step logs, idempotency)" [ref=e3781]
+            - cell "4 (flows, SM contexts, step logs, idempotency)" [ref=e3782]
+            - cell "2 (flows, idempotency)" [ref=e3783]
+          - row "State validation Custom (step registry) Framework (SM engine) Custom (flow DSL)" [ref=e3784]:
+            - cell "State validation" [ref=e3785]
+            - cell "Custom (step registry)" [ref=e3786]
+            - cell "Framework (SM engine)" [ref=e3787]
+            - cell "Custom (flow DSL)" [ref=e3788]
+          - row "Compensation (rollback) ✓ @Compensate annotation Manual backward transitions Not built-in" [ref=e3789]:
+            - cell "Compensation (rollback)" [ref=e3790]
+            - cell "✓ @Compensate annotation" [ref=e3791]
+            - cell "Manual backward transitions" [ref=e3792]
+            - cell "Not built-in" [ref=e3793]
+          - row "Step audit log ✓ with payloads ✓ transition log ✗ not included" [ref=e3794]:
+            - cell "Step audit log" [ref=e3795]
+            - cell "✓ with payloads" [ref=e3796]
+            - cell "✓ transition log" [ref=e3797]
+            - cell "✗ not included" [ref=e3798]
+          - row "Kafka topics created 8 5 5" [ref=e3799]:
+            - cell "Kafka topics created" [ref=e3800]
+            - cell "8" [ref=e3801]
+            - cell "5" [ref=e3802]
+            - cell "5" [ref=e3803]
+          - row "Stuck flow recovery Recovery service + Kafka redeliver Recovery service + Kafka redeliver Kafka redeliver only" [ref=e3804]:
+            - cell "Stuck flow recovery" [ref=e3805]
+            - cell "Recovery service + Kafka redeliver" [ref=e3806]
+            - cell "Recovery service + Kafka redeliver" [ref=e3807]
+            - cell "Kafka redeliver only" [ref=e3808]
+      - generic [ref=e3809]:
+        - strong [ref=e3810]: "Summary:"
+        - strong [ref=e3811]: Spring Integration
+        - text: delivers the same resilience in half the code (470 vs ~900 lines).
+        - strong [ref=e3812]: Saga+Outbox
+        - text: is the only pattern with atomic DB+Kafka writes and built-in compensation — safest for financial/legal workflows.
+        - strong [ref=e3813]: Statemachine
+        - text: adds state transition validation but requires the most code for MongoDB persistence.
+    - generic [ref=e3814]:
+      - heading "Lines of Code (custom, excluding shared common module)" [level=3] [ref=e3815]
+      - generic [ref=e3816]:
+        - generic [ref=e3817]:
+          - generic [ref=e3818]: "901"
+          - generic [ref=e3819]: lines / 21 files
+          - generic [ref=e3820]: Saga+Outbox
+        - generic [ref=e3821]:
+          - generic [ref=e3822]: "929"
+          - generic [ref=e3823]: lines / 23 files
+          - generic [ref=e3824]: Statemachine
+        - generic [ref=e3825]:
+          - generic [ref=e3826]: "470"
+          - generic [ref=e3827]: lines / 11 files
+          - generic [ref=e3828]: Spring Integration
+      - generic [ref=e3829]: + 434 lines shared common module (EnigioClient, domain entities, Kafka DTOs, idempotency)
+    - generic [ref=e3830]:
+      - 'heading "Crash Resilience: The Dual-Write Problem" [level=3] [ref=e3831]'
+      - generic [ref=e3832]:
+        - generic [ref=e3833]:
+          - generic [ref=e3834]: "SM & SI: Direct Kafka Publish (no outbox)"
+          - generic [ref=e3835]:
+            - generic [ref=e3836]: 1. Call Enigio API ✓ succeeds
+            - generic [ref=e3837]: 2. Save to MongoDB ✓ succeeds
+            - generic [ref=e3838]: ← CONTAINER CRASHES →
+            - generic [ref=e3839]: 3. Publish to Kafka ✗ NEVER HAPPENS
+          - generic [ref=e3840]:
+            - strong [ref=e3841]: "Result:"
+            - text: Flow stuck until recovery service finds it.
+        - generic [ref=e3842]:
+          - generic [ref=e3843]: "Saga: Transactional Outbox Pattern"
+          - generic [ref=e3844]:
+            - generic [ref=e3845]: 1. Call Enigio API ✓ succeeds
+            - generic [ref=e3846]: "2. @Transactional { Save + Outbox event } ✓ atomic"
+            - generic [ref=e3847]: ← CONTAINER CRASHES →
+            - generic [ref=e3848]: 3. OutboxPublisher polls → Kafka ✓
+          - generic [ref=e3849]:
+            - strong [ref=e3850]: "Result:"
+            - text: No flow is ever stuck. Outbox picks up unpublished events.
+      - generic [ref=e3851]:
+        - strong [ref=e3852]: "Caveat:"
+        - text: True atomicity requires MongoDB replica set with
+        - code [ref=e3853]: mongo.transactions.enabled=true
+        - text: . On standalone, the outbox write is also separate — same gap, just narrower.
+    - generic [ref=e3854]:
+      - generic [ref=e3855]:
+        - heading "Retry with Jittered Backoff" [level=3] [ref=e3856]
+        - generic [ref=e3857]: Step fails (HTTP 500) ├→ commands attempt 1 FAIL ├→ commands-retry-0 2s+jitter FAIL ├→ commands-retry-1 4s+jitter FAIL ├→ commands-retry-2 8s+jitter FAIL └→ commands-dlt Dead Letter ├── flow.status = FAILED └── @Compensate in reverse
+      - generic [ref=e3858]:
+        - heading "Two-Layer Idempotency" [level=3] [ref=e3859]
+        - generic [ref=e3860]: "Message arrives Layer 1: tryProcess(eventId) ├── duplicate → SKIP (fast path) └── first time → proceed Layer 2: completedWhen ├── TRUE → skip API (safe path) └── FALSE → execute step API → set result → checkpoint Layer 1: mark processed AFTER Key: marks AFTER, not before. Crash mid-step → redeliver → Layer 2 skips."
+    - generic [ref=e3861]:
+      - generic [ref=e3862]:
+        - heading "Crash Recovery (3 paths)" [level=3] [ref=e3863]
+        - generic [ref=e3864]: "Pod crashes after step succeeds: Path 1 — Outbox (~500ms): Publisher on any pod → polls → Kafka Path 2 — Kafka redeliver (~30s): Rebalance → new pod → Layer 2 skips Path 3 — Recovery service (~5 min): Scans stale IN_PROGRESS → re-publish"
+      - generic [ref=e3865]:
+        - heading "Kafka Rebalancing" [level=3] [ref=e3866]
+        - generic [ref=e3867]: "CooperativeStickyAssignor: Only moving partitions pause. Others keep processing. Pod C joins: A: [P0,P1,P2] → revoke P2 → [P0,P1] ✓ B: [P3,P4,P5] → revoke P5 → [P3,P4] ✓ C: gets [P2,P5] Two-layer idempotency handles any redelivered messages."
+    - generic [ref=e3868]:
+      - 'heading "Jitter: Preventing the Thundering Herd" [level=3] [ref=e3869]'
+      - generic [ref=e3870]:
+        - generic [ref=e3871]:
+          - generic [ref=e3872]: No Jitter (factor=0.0)
+          - generic [ref=e3873]:
+            - text: "Flow A: 2000ms → 4000ms → 8000ms"
+            - text: "Flow B: 2000ms → 4000ms → 8000ms"
+            - text: "Flow C: 2000ms → 4000ms → 8000ms"
+          - generic [ref=e3874]: All retries at same time. Thundering herd.
+        - generic [ref=e3875]:
+          - generic [ref=e3876]: Equal Jitter (factor=0.5) ✓
+          - generic [ref=e3877]:
+            - text: "Flow A: 1000+rand(0,1000)ms"
+            - text: "Flow B: 1000+rand(0,1000)ms"
+            - text: "Flow C: 1000+rand(0,1000)ms"
+          - generic [ref=e3878]: Minimum delay + random spread. Recommended.
+        - generic [ref=e3879]:
+          - generic [ref=e3880]: Full Jitter (factor=1.0)
+          - generic [ref=e3881]:
+            - text: "Flow A: rand(0,2000)ms"
+            - text: "Flow B: rand(0,2000)ms"
+            - text: "Flow C: rand(0,2000)ms"
+          - generic [ref=e3882]: Maximum spread. Risk of near-0 delays.
+      - generic [ref=e3883]:
+        - text: "Formula:"
+        - code [ref=e3884]: delay = base * (1 - factor) + random(0, base * factor)
+        - text: . Configured via
+        - code [ref=e3885]: orchestrator.retry.jitter-factor
+        - text: .
+    - generic [ref=e3886]:
+      - 'heading "Kafka Rebalancing: Two-Layer Idempotency Safety" [level=3] [ref=e3887]'
+      - generic [ref=e3888]:
+        - generic [ref=e3889]:
+          - generic [ref=e3890]: Naive approach (unsafe)
+          - generic [ref=e3891]:
+            - text: 1. Mark event as processed ✓
+            - text: ← REBALANCE / CRASH →
+            - text: 2. Execute step ✗ NEVER RUNS
+            - text: 3. Commit offset
+          - generic [ref=e3892]: "New consumer: \"already processed\" → step skipped forever."
+        - generic [ref=e3893]:
+          - generic [ref=e3894]: Our approach (safe)
+          - generic [ref=e3895]:
+            - text: 1. Check if processed (optimization)
+            - text: 2. Execute step ✓ (handler checks result)
+            - text: ← REBALANCE / CRASH →
+            - text: 3. Mark as processed ✗ not yet
+          - generic [ref=e3896]: "New consumer: \"result already set, skip API\" → completes normally."
+      - table [ref=e3898]:
+        - rowgroup [ref=e3899]:
+          - row "Layer Where How Protects against" [ref=e3900]:
+            - columnheader "Layer" [ref=e3901]
+            - columnheader "Where" [ref=e3902]
+            - columnheader "How" [ref=e3903]
+            - columnheader "Protects against" [ref=e3904]
+        - rowgroup [ref=e3905]:
+          - 'row "Layer 1: Consumer processed_events tryProcess(eventId) before step, mark after Duplicate Kafka messages" [ref=e3906]':
+            - 'cell "Layer 1: Consumer" [ref=e3907]'
+            - cell "processed_events" [ref=e3908]:
+              - code [ref=e3909]: processed_events
+            - cell "tryProcess(eventId) before step, mark after" [ref=e3910]
+            - cell "Duplicate Kafka messages" [ref=e3911]
+          - 'row "Layer 2: Handler Each step handler completedWhen SpEL checks result fields Crash between API success and mark" [ref=e3912]':
+            - 'cell "Layer 2: Handler" [ref=e3913]'
+            - cell "Each step handler" [ref=e3914]
+            - cell "completedWhen SpEL checks result fields" [ref=e3915]
+            - cell "Crash between API success and mark" [ref=e3916]
+    - generic [ref=e3917]:
+      - 'heading "Pattern Comparison: Framework-Managed vs Custom Code" [level=3] [ref=e3918]'
+      - generic [ref=e3919]:
+        - generic [ref=e3920]: Saga + Transactional Outbox
+        - generic [ref=e3921]:
+          - generic [ref=e3922]:
+            - generic [ref=e3923]: Framework-managed (Spring Kafka)
+            - table [ref=e3924]:
+              - rowgroup [ref=e3925]:
+                - row "Retry topics -retry-0/1/2 auto-created" [ref=e3926]:
+                  - cell "Retry topics" [ref=e3927]
+                  - cell "-retry-0/1/2 auto-created" [ref=e3928]:
+                    - code [ref=e3929]: "-retry-0/1/2"
+                    - text: auto-created
+                - row "Dead letter topic -dlt auto-created" [ref=e3930]:
+                  - cell "Dead letter topic" [ref=e3931]
+                  - cell "-dlt auto-created" [ref=e3932]:
+                    - code [ref=e3933]: "-dlt"
+                    - text: auto-created
+                - row "Exponential backoff Configurable via properties" [ref=e3934]:
+                  - cell "Exponential backoff" [ref=e3935]
+                  - cell "Configurable via properties" [ref=e3936]
+                - row "Consumer offsets Kafka-managed crash recovery" [ref=e3937]:
+                  - cell "Consumer offsets" [ref=e3938]
+                  - cell "Kafka-managed crash recovery" [ref=e3939]
+                - row "Rebalancing CooperativeStickyAssignor" [ref=e3940]:
+                  - cell "Rebalancing" [ref=e3941]
+                  - cell "CooperativeStickyAssignor" [ref=e3942]
+          - generic [ref=e3943]:
+            - generic [ref=e3944]: Custom code (we built)
+            - table [ref=e3945]:
+              - rowgroup [ref=e3946]:
+                - row "Outbox events Atomic DB+Kafka guarantee" [ref=e3947]:
+                  - cell "Outbox events" [ref=e3948]
+                  - cell "Atomic DB+Kafka guarantee" [ref=e3949]
+                - row "Saga orchestrator Step sequencing, compensation" [ref=e3950]:
+                  - cell "Saga orchestrator" [ref=e3951]
+                  - cell "Step sequencing, compensation" [ref=e3952]
+                - row "Outbox publisher Polls unpublished → Kafka" [ref=e3953]:
+                  - cell "Outbox publisher" [ref=e3954]
+                  - cell "Polls unpublished → Kafka" [ref=e3955]
+                - row "Recovery service Stale IN_PROGRESS finder" [ref=e3956]:
+                  - cell "Recovery service" [ref=e3957]
+                  - cell "Stale IN_PROGRESS finder" [ref=e3958]
+                - row "Idempotency guards Check result before API call" [ref=e3959]:
+                  - cell "Idempotency guards" [ref=e3960]
+                  - cell "Check result before API call" [ref=e3961]
+      - generic [ref=e3962]:
+        - generic [ref=e3963]: Spring Statemachine
+        - generic [ref=e3964]:
+          - generic [ref=e3965]:
+            - generic [ref=e3966]: Framework-managed
+            - table [ref=e3967]:
+              - rowgroup [ref=e3968]:
+                - row "State machine engine States, transitions, guards" [ref=e3969]:
+                  - cell "State machine engine" [ref=e3970]
+                  - cell "States, transitions, guards" [ref=e3971]
+                - row "Transition validation Invalid events auto-rejected" [ref=e3972]:
+                  - cell "Transition validation" [ref=e3973]
+                  - cell "Invalid events auto-rejected" [ref=e3974]
+                - row "Retry topics Spring Kafka @RetryableTopic" [ref=e3975]:
+                  - cell "Retry topics" [ref=e3976]
+                  - cell "Spring Kafka @RetryableTopic" [ref=e3977]
+                - row "JPA persistence SQL only — not MongoDB" [ref=e3978]:
+                  - cell "JPA persistence" [ref=e3979]
+                  - cell "SQL only — not MongoDB" [ref=e3980]
+          - generic [ref=e3981]:
+            - generic [ref=e3982]: Custom code (we built)
+            - table [ref=e3983]:
+              - rowgroup [ref=e3984]:
+                - row "MongoStateMachinePersist Custom MongoDB persistence" [ref=e3985]:
+                  - cell "MongoStateMachinePersist" [ref=e3986]
+                  - cell "Custom MongoDB persistence" [ref=e3987]
+                - row "StateMachineService Acquire/restore/persist per flow" [ref=e3988]:
+                  - cell "StateMachineService" [ref=e3989]
+                  - cell "Acquire/restore/persist per flow" [ref=e3990]
+                - row "Recovery service Stuck machines in transient states" [ref=e3991]:
+                  - cell "Recovery service" [ref=e3992]
+                  - cell "Stuck machines in transient states" [ref=e3993]
+                - row "No outbox pattern Direct Kafka — no atomic guarantee" [ref=e3994]:
+                  - cell "No outbox pattern" [ref=e3995]
+                  - cell "Direct Kafka — no atomic guarantee" [ref=e3996]
+      - generic [ref=e3997]:
+        - generic [ref=e3998]: Spring Integration (EIP)
+        - generic [ref=e3999]:
+          - generic [ref=e4000]:
+            - generic [ref=e4001]: Framework-managed
+            - table [ref=e4002]:
+              - rowgroup [ref=e4003]:
+                - row "IntegrationFlow DSL Declarative .handle() per step" [ref=e4004]:
+                  - cell "IntegrationFlow DSL" [ref=e4005]
+                  - cell "Declarative .handle() per step" [ref=e4006]
+                - row "RetryAdvice Per-step exponential backoff" [ref=e4007]:
+                  - cell "RetryAdvice" [ref=e4008]
+                  - cell "Per-step exponential backoff" [ref=e4009]
+                - row "Error channel Built-in error routing" [ref=e4010]:
+                  - cell "Error channel" [ref=e4011]
+                  - cell "Built-in error routing" [ref=e4012]
+                - row "MessagingGateway Clean API to trigger flows" [ref=e4013]:
+                  - cell "MessagingGateway" [ref=e4014]
+                  - cell "Clean API to trigger flows" [ref=e4015]
+          - generic [ref=e4016]:
+            - generic [ref=e4017]: What we DON'T need (framework handles it)
+            - table [ref=e4018]:
+              - rowgroup [ref=e4019]:
+                - row "Outbox table No dual-write, synchronous" [ref=e4020]:
+                  - cell "Outbox table" [ref=e4021]
+                  - cell "No dual-write, synchronous" [ref=e4022]
+                - row "Saga orchestrator IntegrationFlow chains steps" [ref=e4023]:
+                  - cell "Saga orchestrator" [ref=e4024]
+                  - cell "IntegrationFlow chains steps" [ref=e4025]
+                - row "Recovery service Retry advice handles inline" [ref=e4026]:
+                  - cell "Recovery service" [ref=e4027]
+                  - cell "Retry advice handles inline" [ref=e4028]
+                - row "Kafka retry topics In-process RetryTemplate" [ref=e4029]:
+                  - cell "Kafka retry topics" [ref=e4030]
+                  - cell "In-process RetryTemplate" [ref=e4031]
+    - generic [ref=e4032]:
+      - heading "orchestrator-starter (Reusable Library)" [level=3] [ref=e4033]
+      - generic [ref=e4034]: The patterns above were distilled into a Spring Boot starter. Teams add one dependency and write 2 files — the library handles everything else.
+      - generic [ref=e4035]:
+        - generic [ref=e4036]:
+          - generic [ref=e4037]: Library provides
+          - table [ref=e4038]:
+            - rowgroup [ref=e4039]:
+              - row "Transactional Outbox Atomic DB+Kafka — from Saga" [ref=e4040]:
+                - cell "Transactional Outbox" [ref=e4041]
+                - cell "Atomic DB+Kafka — from Saga" [ref=e4042]
+              - row "Kafka retry + jitter retry-0/1/2 + DLT" [ref=e4043]:
+                - cell "Kafka retry + jitter" [ref=e4044]
+                - cell "retry-0/1/2 + DLT" [ref=e4045]
+              - row "Two-layer idempotency Consumer + handler guards" [ref=e4046]:
+                - cell "Two-layer idempotency" [ref=e4047]
+                - cell "Consumer + handler guards" [ref=e4048]
+              - row "@Flow/@Step annotations Auto-discovery + validation" [ref=e4049]:
+                - cell "@Flow/@Step annotations" [ref=e4050]
+                - cell "Auto-discovery + validation" [ref=e4051]
+              - row "Stale flow recovery Crash safety net" [ref=e4052]:
+                - cell "Stale flow recovery" [ref=e4053]
+                - cell "Crash safety net" [ref=e4054]
+              - 'row "REST endpoints POST /flows, GET /flows/{id}" [ref=e4055]':
+                - cell "REST endpoints" [ref=e4056]
+                - 'cell "POST /flows, GET /flows/{id}" [ref=e4057]'
+        - generic [ref=e4058]:
+          - generic [ref=e4059]: User writes (2 files + config)
+          - table [ref=e4060]:
+            - rowgroup [ref=e4061]:
+              - row "Flow entity extends AbstractFlow + domain fields" [ref=e4062]:
+                - cell "Flow entity" [ref=e4063]
+                - cell "extends AbstractFlow + domain fields" [ref=e4064]
+              - row "@Flow class @Step methods with business logic" [ref=e4065]:
+                - cell "@Flow class" [ref=e4066]
+                - cell "@Step methods with business logic" [ref=e4067]
+              - 'row "application.yml 4 lines: topic, retry, retention" [ref=e4068]':
+                - cell "application.yml" [ref=e4069]
+                - 'cell "4 lines: topic, retry, retention" [ref=e4070]'
+    - generic [ref=e4071]:
+      - generic [ref=e4072]:
+        - heading "Configuration Reference" [level=3] [ref=e4073]
+        - table [ref=e4074]:
+          - rowgroup [ref=e4075]:
+            - row "Property Default Purpose" [ref=e4076]:
+              - columnheader "Property" [ref=e4077]
+              - columnheader "Default" [ref=e4078]
+              - columnheader "Purpose" [ref=e4079]
+            - row "orchestrator.kafka.command-topic orchestrator.commands Kafka topic" [ref=e4080]:
+              - cell "orchestrator.kafka.command-topic" [ref=e4081]
+              - cell "orchestrator.commands" [ref=e4082]
+              - cell "Kafka topic" [ref=e4083]
+            - row "orchestrator.retry.max-attempts 4 1 initial + N-1 retries" [ref=e4084]:
+              - cell "orchestrator.retry.max-attempts" [ref=e4085]
+              - cell "4" [ref=e4086]
+              - cell "1 initial + N-1 retries" [ref=e4087]
+            - row "orchestrator.retry.initial-interval-ms 2000 First retry delay" [ref=e4088]:
+              - cell "orchestrator.retry.initial-interval-ms" [ref=e4089]
+              - cell "2000" [ref=e4090]
+              - cell "First retry delay" [ref=e4091]
+            - row "orchestrator.retry.multiplier 2.0 Exponential multiplier" [ref=e4092]:
+              - cell "orchestrator.retry.multiplier" [ref=e4093]
+              - cell "2.0" [ref=e4094]
+              - cell "Exponential multiplier" [ref=e4095]
+            - row "orchestrator.retry.jitter-factor 0.5 0=none, 0.5=equal, 1.0=full" [ref=e4096]:
+              - cell "orchestrator.retry.jitter-factor" [ref=e4097]
+              - cell "0.5" [ref=e4098]
+              - cell "0=none, 0.5=equal, 1.0=full" [ref=e4099]
+            - 'row "orchestrator.retention.outbox-days 7 TTL: outbox events" [ref=e4100]':
+              - cell "orchestrator.retention.outbox-days" [ref=e4101]
+              - cell "7" [ref=e4102]
+              - 'cell "TTL: outbox events" [ref=e4103]'
+            - 'row "orchestrator.retention.processed-events-days 30 TTL: idempotency records" [ref=e4104]':
+              - cell "orchestrator.retention.processed-events-days" [ref=e4105]
+              - cell "30" [ref=e4106]
+              - 'cell "TTL: idempotency records" [ref=e4107]'
+            - 'row "orchestrator.retention.step-log-days 90 TTL: step audit logs" [ref=e4108]':
+              - cell "orchestrator.retention.step-log-days" [ref=e4109]
+              - cell "90" [ref=e4110]
+              - 'cell "TTL: step audit logs" [ref=e4111]'
+            - row "orchestrator.audit.include-flow-state false Full JSON in logs (expensive)" [ref=e4112]:
+              - cell "orchestrator.audit.include-flow-state" [ref=e4113]
+              - cell "false" [ref=e4114]
+              - cell "Full JSON in logs (expensive)" [ref=e4115]
+      - generic [ref=e4116]:
+        - heading "MongoDB Collections" [level=3] [ref=e4117]
+        - table [ref=e4118]:
+          - rowgroup [ref=e4119]:
+            - row "Collection Managed by TTL Purpose" [ref=e4120]:
+              - columnheader "Collection" [ref=e4121]
+              - columnheader "Managed by" [ref=e4122]
+              - columnheader "TTL" [ref=e4123]
+              - columnheader "Purpose" [ref=e4124]
+            - row "Your collection You — Flow state + domain fields" [ref=e4125]:
+              - cell "Your collection" [ref=e4126]
+              - cell "You" [ref=e4127]
+              - cell "—" [ref=e4128]
+              - cell "Flow state + domain fields" [ref=e4129]
+            - row "orchestrator_outbox Library 7d Pending Kafka publishes" [ref=e4130]:
+              - cell "orchestrator_outbox" [ref=e4131]
+              - cell "Library" [ref=e4132]
+              - cell "7d" [ref=e4133]
+              - cell "Pending Kafka publishes" [ref=e4134]
+            - row "orchestrator_processed_events Library 30d Consumer idempotency" [ref=e4135]:
+              - cell "orchestrator_processed_events" [ref=e4136]
+              - cell "Library" [ref=e4137]
+              - cell "30d" [ref=e4138]
+              - cell "Consumer idempotency" [ref=e4139]
+            - row "orchestrator_step_log Library 90d Step execution audit" [ref=e4140]:
+              - cell "orchestrator_step_log" [ref=e4141]
+              - cell "Library" [ref=e4142]
+              - cell "90d" [ref=e4143]
+              - cell "Step execution audit" [ref=e4144]

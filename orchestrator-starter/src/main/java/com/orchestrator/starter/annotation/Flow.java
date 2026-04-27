@@ -36,6 +36,11 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Flow {
 
-    /** Kafka topic for step commands. Overrides orchestrator.kafka.command-topic. */
+    /** Flow type name. Used as routing key in Kafka messages and YAML config key.
+     *  Defaults to class name → kebab-case (minus "Flow" suffix).
+     *  E.g., EnigioDocumentFlow → "enigio-document" */
+    String name() default "";
+
+    /** Kafka command topic override. Empty = use orchestrator.kafka.command-topic. */
     String topic() default "";
 }

@@ -54,8 +54,9 @@ Your Application                     Library (auto-configured)
   @Step methods      ──────────►       ├── Step Registry (discovers @Step methods)
   @Compensate                          ├── Outbox Writer (atomic with flow save)
   @RecoverOn                           ├── Outbox Publisher (polls → Kafka)
-  @Parallel                            ├── Kafka Consumer (one step per message)
-  @JoinOn                              ├── Retry Topic Config (jittered backoff)
+  @Parallel                            ├── Executor Consumer (executes steps)
+  @JoinOn                              ├── Orchestrator Consumer (advances flows)
+                                       ├── Retry Topic Config (jittered backoff)
                                        ├── Idempotency Service (two-layer dedup)
                                        ├── Step Audit Logger (before/after snapshots)
                                        ├── Stale Flow Recovery (crash safety net)
@@ -68,11 +69,36 @@ Flow Entity          ──────────►     MongoDB
                                        └── orchestrator_step_log
 
                                      Kafka Topics (auto-created)
-                                       ├── {topic}           (step commands)
-                                       ├── {topic}-retry-0   (2s + jitter)
-                                       ├── {topic}-retry-1   (4s + jitter)
-                                       ├── {topic}-retry-2   (8s + jitter)
-                                       └── {topic}-dlt       (dead letter)
+                                       ├── {command-topic}            (step commands)
+                                       ├── {command-topic}-retry-0/1/2 + -dlt
+                                       ├── {command-topic}.replies     (step results)
+                                       └── {command-topic}.replies-retry-0/1/2 + -dlt
+
+Decoupled Executor / Orchestrator (default):
+────────────────────────────────────────────
+
+  ┌─────────────┐  command   ┌──────────────┐  reply+snapshot  ┌─────────────┐
+  │ Orchestrator│ ─────────→ │   Executor   │ ───────────────→ │ Orchestrator│
+  │  (publish   │            │  (executes   │                  │  (advances  │
+  │   command)  │            │   the step)  │                  │   to next)  │
+  └─────────────┘            └──────────────┘                  └─────────────┘
+                                   │
+                              1. Calls vendor API (30s timeout)
+                              2. Saves flow with domain fields
+                              3. Publishes reply WITH flow snapshot
+                              4. Orchestrator uses snapshot (no DB re-read)
+
+  Zero race condition: reply carries complete flow state.
+  Executor thread: blocked during API call.
+  Orchestrator thread: NEVER blocked — sub-ms processing.
+  Scaling: add executor pods for throughput.
+
+  Multi-flow: multiple @Flow classes share one topic (default).
+  Per-flow overrides via YAML: topic, DLT, retry config.
+  Routing: flowType field in every message → correct orchestrator.
+
+  To disable reply mode (inline — single thread does both):
+    orchestrator.kafka.reply-topic: ""
 ```
 
 ---
@@ -304,7 +330,7 @@ public void chargePayment(OrderFlow flow) {
 }
 // Library runs after your method:
 //   save flow to MongoDB           ← CRASH POINT D
-//   save outbox event              ← CRASH POINT E
+//   publish reply to Kafka         ← CRASH POINT E (reply mode)
 //   mark processed (Layer 1)       ← CRASH POINT F
 ```
 
@@ -312,7 +338,7 @@ public void chargePayment(OrderFlow flow) {
 ```
 State: API never called, paymentId = null, processed_events = empty
 Redelivery:
-  Layer 1: tryProcess(eventId) → first time → proceed
+  Layer 1: isProcessed(eventId) → not yet → proceed
   Layer 2: completedWhen("paymentId != null") → false → execute
   → calls API normally → no duplicate
 ✅ Safe
@@ -322,7 +348,7 @@ Redelivery:
 ```
 State: vendor charged $100, paymentId = null (not set yet), processed_events = empty
 Redelivery:
-  Layer 1: tryProcess(eventId) → first time → proceed
+  Layer 1: isProcessed(eventId) → not yet → proceed
   Layer 2: completedWhen("paymentId != null") → false → execute
   → calls API AGAIN
 ⚠️ DOUBLE CHARGE — unless vendor has idempotency (see strategies below)
@@ -332,7 +358,7 @@ Redelivery:
 ```
 State: paymentId = "pay-123" (saved by checkpoint), processed_events = empty
 Redelivery:
-  Layer 1: tryProcess(eventId) → first time → proceed
+  Layer 1: isProcessed(eventId) → not yet → proceed
   Layer 2: completedWhen("paymentId != null") → TRUE → SKIP API
   → advances to next step without calling vendor again
 ✅ Safe — checkpoint saved the result
@@ -503,6 +529,34 @@ WITHOUT outbox:                         WITH outbox (this library):
 ```
 
 Enable `orchestrator.mongodb.transactions-enabled=true` on replica sets for fully atomic writes.
+
+### Outbox vs Two-Phase Commit (2PC)
+
+Traditional distributed transactions using 2PC guarantee ACID properties across multiple systems, but with significant trade-offs:
+
+| | Outbox Pattern (this library) | Two-Phase Commit (2PC) |
+|---|---|---|
+| **Consistency** | Eventual (async) | Strong (synchronous) |
+| **Availability** | High — if Kafka is down, outbox queues | Low — if any participant is down, all block |
+| **Coupling** | Loose — services communicate via events | Tight — all participants must be available |
+| **Latency** | Sub-ms for the write, async for delivery | Blocks until all participants commit |
+| **Failure mode** | Outbox publisher retries until delivered | Coordinator failure can leave transactions in doubt |
+
+The outbox pattern trades immediate consistency for better availability and scalability. In microservices where services should remain independent, the outbox is the standard choice.
+
+### Outbox vs Event Sourcing
+
+Event Sourcing stores all state changes as a sequence of events, making the event log the source of truth. The outbox pattern stores business data in traditional documents and uses events only for inter-service communication.
+
+| | Outbox Pattern (this library) | Event Sourcing |
+|---|---|---|
+| **Storage model** | Traditional documents + event notifications | Event log is the primary storage |
+| **State derivation** | Current state in MongoDB, events are side effects | State derived by replaying events |
+| **Audit trail** | Step logs (opt-in `include-flow-state`) | Complete by design |
+| **Complexity** | Standard CRUD + outbox poller | Projections, snapshots, eventual consistency everywhere |
+| **When to choose** | Standard workflows with reliable event publishing | Complete audit history and time-travel as core requirements |
+
+This library uses the outbox pattern because workflows need traditional CRUD semantics (update flow state, read current step) with reliable Kafka delivery as a side effect.
 
 ---
 
@@ -732,6 +786,96 @@ Client → Load Balancer → API Pods (×2)
 
 ---
 
+## Kafka Topic Architecture
+
+The library uses two Kafka topic chains by default (decoupled mode):
+
+```
+Command chain (step execution):
+  {command-topic}              ← orchestrator publishes "execute step X"
+  {command-topic}-retry-0/1/2  ← failed steps retried with backoff
+  {command-topic}-dlt          ← permanently failed steps
+
+Reply chain (flow advancement):
+  {command-topic}.replies              ← executor publishes "step X completed"
+  {command-topic}.replies-retry-0/1/2  ← failed advancement retried
+  {command-topic}.replies-dlt          ← permanently failed advancement
+
+Consumer groups:
+  {app-name}-executor      ← picks up commands, executes steps, publishes replies
+  {app-name}-orchestrator  ← picks up replies, advances flows, publishes next command
+  {app-name}-dlt           ← handles dead-lettered commands
+  {app-name}-reply-dlt     ← handles dead-lettered replies
+```
+
+**Why two topics?** The executor thread is blocked during API calls (up to 30s). With a single topic, the orchestrator (which just reads replies and publishes commands) would share threads with slow API calls. With two topics:
+- **Executor pods** can scale independently for throughput
+- **Orchestrator** is never blocked — sub-millisecond processing
+- **Different retry configs** per chain (e.g., aggressive retry for replies, conservative for commands)
+
+**Topic optimization**: Reply retries are optional — reply processing is lightweight (~5ms DB read + publish). The recovery service already catches stuck flows. To reduce from 10 to 7 topics, disable reply retries in Spring Kafka config.
+
+**Inline mode** (`orchestrator.kafka.reply-topic: ""`): uses only the command chain (5 topics). Step execution and flow advancement happen in the same thread. Simpler but blocks the consumer during API calls. Suitable for low-volume flows or when all steps are fast.
+
+### Step Ordering Guarantee
+
+**Ordering is guaranteed by the Kafka partition key.** Every command and reply message uses `flowId` as the key:
+
+```java
+kafkaTemplate.send(commandTopic, flowId, payload);  // flowId = partition key
+kafkaTemplate.send(replyTopic,   flowId, payload);   // same key
+```
+
+Kafka guarantees: same key → same partition → same consumer. So for any given flow:
+
+```
+With 10 executor pods and 5 orchestrator pods:
+
+  Flow abc-123 → partition P3 → always executor Pod-B, orchestrator Pod-A
+  Flow def-456 → partition P7 → always executor Pod-E, orchestrator Pod-C
+
+  Step 1 command → executor runs step 1 → publishes reply
+  Reply → orchestrator advances → publishes step 2 command
+  Step 2 command → same executor → step 2 → reply
+  ...
+
+  No race condition. Next command only exists AFTER previous reply is processed.
+  Different flows run in parallel. Same flow runs sequentially.
+```
+
+### Multi-Flow Per App
+
+Multiple `@Flow` classes in one app, sharing topics by default:
+
+```java
+@Flow(name = "enigio")
+class EnigioDocumentFlow extends FlowDefinition<EnigioFlow> { ... }
+
+@Flow(name = "payment")
+class PaymentFlow extends FlowDefinition<PaymentEntity> { ... }
+```
+
+**Default: shared topics.** Both flows use the global `orchestrator.kafka.command-topic`. The `flowType` field in every Kafka message routes to the correct handler. No topic proliferation.
+
+**Optional: per-flow overrides via YAML:**
+
+```yaml
+orchestrator:
+  kafka:
+    command-topic: orchestrator.commands  # shared default
+  flows:
+    payment:
+      topic: payment.commands            # own topic (isolation)
+      dlt-topic: payment.critical-dlt    # custom DLT
+    enigio:
+      retry:
+        max-attempts: 6                  # per-flow retry config
+```
+
+Each `@Flow` gets: per-flow `StepRegistry`, `FlowOrchestrator`, `GenericFlowRepository`. Routing is via `FlowTypeRegistry` — a `Map<flowType, descriptor>` lookup. Backward compatible: single `@Flow` apps need zero config changes.
+
+---
+
 ## Kafka Rebalancing
 
 When you run multiple containers (pods), Kafka distributes partitions across them. When a container joins, leaves, or crashes, Kafka **rebalances** — reassigns partitions. How this happens determines whether your flows pause or keep processing.
@@ -825,7 +969,8 @@ Only works with Kubernetes **StatefulSet** (stable hostnames). Regular Deploymen
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `orchestrator.kafka.command-topic` | `orchestrator.commands` | Kafka topic |
+| `orchestrator.kafka.command-topic` | `orchestrator.commands` | Kafka topic for step commands |
+| `orchestrator.kafka.reply-topic` | `{command-topic}.replies` | Kafka topic for step results. Set to `""` for inline mode |
 | `orchestrator.retry.max-attempts` | `4` | 1 initial + N-1 retries. **Determines how many retry topics are created.** |
 | `orchestrator.retry.initial-interval-ms` | `2000` | First retry delay (ms) |
 | `orchestrator.retry.multiplier` | `2.0` | Each retry multiplies the delay |
@@ -1051,6 +1196,38 @@ Compensation is also logged:
   "attemptNumber": 1,
   "durationMs": 120
 }
+```
+
+---
+
+## Concurrency Guarantees
+
+The library ensures zero data loss under any failure scenario:
+
+| Guarantee | Mechanism |
+|---|---|
+| **No duplicate API calls** | Two-layer idempotency: Layer 1 (check before, mark after), Layer 2 (completedWhen SpEL) |
+| **No lost messages** | Kafka consumer offsets committed after success. Failed → retry topic, not lost |
+| **No stuck flows** | Three recovery paths: outbox (~500ms), Kafka redeliver (~30s), recovery service (~5min) |
+| **No overwritten domain fields** | Reply carries flow snapshot — reply consumer deserializes from message, never re-reads stale MongoDB data |
+| **No @Version conflicts** | Reply consumer uses `$set` partial updates (only `currentStep`, `status`). Command consumer uses full save with `@Version`. No conflict. |
+| **Step ordering** | flowId as Kafka partition key → same partition → same consumer → sequential |
+| **Infrastructure errors retried** | All non-typed exceptions wrapped as `RetryableStepException` → Kafka retry topics |
+| **DLT captures exception** | `kafka_dlt-exception-message` header extracted and saved to flow + step log |
+
+### Crash at any point
+
+Every crash scenario is covered. The library guarantees: **either the step completes and the flow advances, or the step is retried until it does.**
+
+```
+Crash during API call     → Kafka redelivers → Layer 2 skips if already done
+Crash after API, no save  → Kafka redelivers → API called again (use vendor idempotency keys)
+Crash after save           → Outbox publisher picks up → reply delivered → flow advances
+Crash after reply          → Reply consumer processes → flow advances
+Crash during advancement   → Recovery service re-publishes after 5 min
+Container dies completely  → Kafka rebalance → new pod picks up → all layers protect
+MongoDB down temporarily  → Infrastructure error → retry via Kafka → recovers when DB returns
+Kafka down temporarily    → Outbox queues events → publishes when Kafka returns
 ```
 
 ---

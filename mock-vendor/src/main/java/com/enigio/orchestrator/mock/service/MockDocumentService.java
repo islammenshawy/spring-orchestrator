@@ -101,7 +101,7 @@ public class MockDocumentService {
         switch (scenario) {
             case TIMEOUT -> {
                 try {
-                    Thread.sleep(30_000);
+                    Thread.sleep(120_000); // 2 min — exceeds WebClient's 30s responseTimeout
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 }

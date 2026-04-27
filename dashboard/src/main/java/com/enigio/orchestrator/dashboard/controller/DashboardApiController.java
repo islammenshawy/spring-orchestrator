@@ -2,6 +2,7 @@ package com.enigio.orchestrator.dashboard.controller;
 
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
+import org.bson.types.ObjectId;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -27,21 +28,21 @@ public class DashboardApiController {
     public ResponseEntity<List<Document>> getAllFlows(
             @RequestParam(defaultValue = "enigio_flows") String collection) {
         Query query = new Query().with(Sort.by(Sort.Direction.DESC, "createdAt")).limit(100);
-        return ResponseEntity.ok(mongoTemplate.find(query, Document.class, collection));
+        return ResponseEntity.ok(normalizeIds(mongoTemplate.find(query, Document.class, collection)));
     }
 
     @GetMapping("/flows/{id}")
     public ResponseEntity<?> getFlow(@PathVariable String id,
             @RequestParam(defaultValue = "enigio_flows") String collection) {
         Document doc = mongoTemplate.findById(id, Document.class, collection);
-        return doc != null ? ResponseEntity.ok(doc) : ResponseEntity.notFound().build();
+        return doc != null ? ResponseEntity.ok(normalizeId(doc)) : ResponseEntity.notFound().build();
     }
 
     @GetMapping("/flows/status/{status}")
     public ResponseEntity<List<Document>> getFlowsByStatus(@PathVariable String status,
             @RequestParam(defaultValue = "enigio_flows") String collection) {
         Query query = new Query(Criteria.where("status").is(status));
-        return ResponseEntity.ok(mongoTemplate.find(query, Document.class, collection));
+        return ResponseEntity.ok(normalizeIds(mongoTemplate.find(query, Document.class, collection)));
     }
 
     // ========== Start flows (library sample-app on port 8085) ==========
@@ -118,34 +119,47 @@ public class DashboardApiController {
         }
     }
 
-    // ========== Load test (hits library sample-app async API) ==========
+    // ========== Load test (hits all pattern apps simultaneously) ==========
+
+    private record PatternTarget(String name, String baseUrl, String path) {}
+
+    private static final List<PatternTarget> LOAD_TEST_TARGETS = List.of(
+            new PatternTarget("library", "http://localhost:8085", "/flows"),
+            new PatternTarget("saga", "http://localhost:8082", "/saga/flows"),
+            new PatternTarget("statemachine", "http://localhost:8083", "/sm/flows"),
+            new PatternTarget("spring-integration", "http://localhost:8084", "/si/flows")
+    );
 
     @PostMapping("/flows/loadtest")
     public ResponseEntity<Map<String, Object>> loadTest(@RequestBody Map<String, Object> request) {
         int count = (int) request.getOrDefault("count", 10);
-        int started = 0;
+        Map<String, Integer> results = new java.util.LinkedHashMap<>();
 
-        WebClient client = WebClient.create("http://localhost:8085");
-
-        for (int i = 0; i < count; i++) {
-            Map<String, String> flowReq = Map.of(
-                    "title", "Load Test #" + (i + 1),
-                    "content", "Auto-generated content",
-                    "signerEmail", "loadtest" + i + "@example.com"
-            );
-            try {
-                client.post().uri("/flows").bodyValue(flowReq)
-                        .retrieve().bodyToMono(String.class).subscribe();
-                started++;
-            } catch (Exception e) {
-                // Continue
+        for (PatternTarget target : LOAD_TEST_TARGETS) {
+            int started = 0;
+            WebClient client = WebClient.create(target.baseUrl());
+            for (int i = 0; i < count; i++) {
+                Map<String, String> flowReq = Map.of(
+                        "title", "Load Test #" + (i + 1),
+                        "content", "Auto-generated content",
+                        "signerEmail", "loadtest" + i + "@example.com"
+                );
+                try {
+                    client.post().uri(target.path()).bodyValue(flowReq)
+                            .retrieve().bodyToMono(String.class).subscribe();
+                    started++;
+                } catch (Exception e) {
+                    // Target app may not be running — skip
+                }
             }
+            results.put(target.name(), started);
         }
 
+        int total = results.values().stream().mapToInt(Integer::intValue).sum();
         return ResponseEntity.ok(Map.of(
                 "status", "launched",
-                "flowsStarted", started,
-                "target", "library (port 8085)"
+                "flowsStarted", total,
+                "perPattern", results
         ));
     }
 
@@ -161,5 +175,19 @@ public class DashboardApiController {
             return ResponseEntity.internalServerError()
                     .body(Map.of("status", "error", "message", e.getMessage()));
         }
+    }
+
+    /** Convert ObjectId _id to hex string so JSON serialization works correctly. */
+    private List<Document> normalizeIds(List<Document> docs) {
+        docs.forEach(this::normalizeId);
+        return docs;
+    }
+
+    private Document normalizeId(Document doc) {
+        Object id = doc.get("_id");
+        if (id instanceof ObjectId oid) {
+            doc.put("_id", oid.toHexString());
+        }
+        return doc;
     }
 }

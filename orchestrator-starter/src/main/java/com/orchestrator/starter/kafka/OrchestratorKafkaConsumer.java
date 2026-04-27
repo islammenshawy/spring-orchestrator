@@ -1,33 +1,41 @@
 package com.orchestrator.starter.kafka;
 
 import com.orchestrator.starter.domain.OrchestratorFlow;
-import com.orchestrator.starter.exception.RetryableStepException;
 import com.orchestrator.starter.flow.FlowOrchestrator;
+import com.orchestrator.starter.flow.FlowTypeDescriptor;
+import com.orchestrator.starter.flow.FlowTypeRegistry;
 import com.orchestrator.starter.idempotency.IdempotencyService;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.kafka.support.KafkaHeaders;
-import org.springframework.messaging.handler.annotation.Header;
 
 /**
- * Generic Kafka consumer for orchestrated flows.
- * Handles: deserialization, Layer 1 idempotency, step execution, Layer 1 post-mark.
+ * Kafka consumer for step commands and replies.
+ * Routes messages to the correct FlowOrchestrator by reading flowType from the message.
  *
- * Not a @Component — instantiated by auto-configuration with the right
- * topic name and flow type. Users don't touch this class.
+ * Layer 1 idempotency: check BEFORE, mark AFTER.
+ * Failed steps are NOT marked — retries work correctly via Kafka retry topics.
  */
 @Slf4j
-@RequiredArgsConstructor
 public class OrchestratorKafkaConsumer<F extends OrchestratorFlow> {
 
-    private final FlowOrchestrator<F> orchestrator;
+    private final FlowTypeRegistry registry;
     private final IdempotencyService idempotencyService;
     private final ObjectMapper objectMapper;
+    private final boolean replyMode;
+
+    public OrchestratorKafkaConsumer(FlowTypeRegistry registry,
+                                     IdempotencyService idempotencyService,
+                                     ObjectMapper objectMapper,
+                                     boolean replyMode) {
+        this.registry = registry;
+        this.idempotencyService = idempotencyService;
+        this.objectMapper = objectMapper;
+        this.replyMode = replyMode;
+    }
 
     /**
-     * Process a step command message.
-     * Called by the @KafkaListener configured in auto-config.
+     * Process a step command: execute the step.
+     * Routes to the correct FlowOrchestrator by flowType in the message.
      */
     public void onStepCommand(String payload, String topic, long offset) {
         StepCommandMessage command;
@@ -38,30 +46,77 @@ public class OrchestratorKafkaConsumer<F extends OrchestratorFlow> {
             throw new RuntimeException("Deserialization failed", e);
         }
 
-        // Layer 1: single try-insert (1 query instead of 2)
-        // Returns false if already processed → skip
-        if (!idempotencyService.tryProcess(command.getEventId())) {
+        if (idempotencyService.isProcessed(command.getEventId())) {
+            log.debug("[topic={}][offset={}] Event {} already processed, skipping",
+                    topic, offset, command.getEventId());
             return;
         }
 
-        log.info("[topic={}][offset={}] Step {} for flow {}",
-                topic, offset, command.getStepName(), command.getFlowId());
+        // Route by flowType — backward compat: null flowType → single flow
+        FlowTypeDescriptor descriptor = registry.resolve(command.getFlowType());
+        FlowOrchestrator<?> orchestrator = descriptor.getOrchestrator();
 
-        // Execute — passes step name from message (supports parallel steps)
-        orchestrator.executeStep(command.getFlowId(), command.getStepName());
+        log.info("[topic={}][offset={}] Step {} for flow {} (type={})",
+                topic, offset, command.getStepName(), command.getFlowId(),
+                command.getFlowType() != null ? command.getFlowType() : "default");
+
+        if (replyMode && descriptor.isReplyEnabled()) {
+            orchestrator.executeStepOnly(command.getFlowId(), command.getStepName());
+        } else {
+            orchestrator.executeStep(command.getFlowId(), command.getStepName());
+        }
+
+        idempotencyService.tryProcess(command.getEventId());
     }
 
     /**
-     * Handle dead-lettered messages after all retries exhausted.
+     * Process a step reply: advance the flow to the next step.
      */
-    public void onDlt(String payload, String topic, long offset) {
-        log.error("[DLT][topic={}][offset={}] Dead letter received", topic, offset);
+    public void onStepReply(String payload, String topic, long offset) {
+        StepReplyMessage reply;
+        try {
+            reply = objectMapper.readValue(payload, StepReplyMessage.class);
+        } catch (Exception e) {
+            log.error("[reply][topic={}][offset={}] Deserialization failed", topic, offset);
+            throw new RuntimeException("Reply deserialization failed", e);
+        }
+
+        if (idempotencyService.isProcessed(reply.getEventId())) {
+            return;
+        }
+
+        FlowTypeDescriptor descriptor = registry.resolve(reply.getFlowType());
+
+        log.info("[reply][topic={}][offset={}] Step {} {} for flow {} (type={})",
+                topic, offset, reply.getStepName(), reply.getStatus(), reply.getFlowId(),
+                reply.getFlowType() != null ? reply.getFlowType() : "default");
+
+        if ("COMPLETED".equals(reply.getStatus()) || "RECOVERED".equals(reply.getStatus())) {
+            descriptor.getOrchestrator().advanceAfterReply(
+                    reply.getFlowId(), reply.getStepName(), reply.getFlowSnapshot());
+        }
+
+        idempotencyService.tryProcess(reply.getEventId());
+    }
+
+    /**
+     * Handle dead-lettered messages.
+     */
+    public void onDlt(String payload, String topic, long offset, String exceptionMessage) {
+        log.error("[DLT][topic={}][offset={}] Dead letter: {}", topic, offset, exceptionMessage);
         try {
             StepCommandMessage command = objectMapper.readValue(payload, StepCommandMessage.class);
-            orchestrator.markDeadLettered(command.getFlowId());
+            FlowTypeDescriptor descriptor = registry.resolve(command.getFlowType());
+            String reason = exceptionMessage != null ? exceptionMessage : "unknown";
+            descriptor.getOrchestrator().markDeadLettered(
+                    command.getFlowId(), command.getStepName(), reason);
             idempotencyService.tryProcess(command.getEventId());
         } catch (Exception e) {
             log.error("DLT processing failed: {}", e.getMessage());
         }
+    }
+
+    public void onDlt(String payload, String topic, long offset) {
+        onDlt(payload, topic, offset, null);
     }
 }
