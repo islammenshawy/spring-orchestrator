@@ -5,7 +5,7 @@ import com.orchestrator.starter.flow.FlowOrchestrator;
 import com.orchestrator.starter.flow.FlowTypeDescriptor;
 import com.orchestrator.starter.flow.FlowTypeRegistry;
 import com.orchestrator.starter.idempotency.IdempotencyService;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 
 /**

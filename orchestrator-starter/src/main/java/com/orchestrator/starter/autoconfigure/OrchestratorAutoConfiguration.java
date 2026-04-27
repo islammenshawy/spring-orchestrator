@@ -12,7 +12,7 @@ import com.orchestrator.starter.outbox.OutboxEventRepository;
 import com.orchestrator.starter.outbox.OutboxPublisher;
 import com.orchestrator.starter.recovery.StaleFlowRecoveryService;
 import com.orchestrator.starter.retry.JitteredExponentialBackOffPolicy;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -82,7 +82,7 @@ public class OrchestratorAutoConfiguration {
     @ConditionalOnMissingBean
     public OutboxPublisher orchestratorOutboxPublisher(
             OutboxEventRepository outboxRepository,
-            KafkaTemplate<String, String> kafkaTemplate) {
+            KafkaTemplate kafkaTemplate) {
         return new OutboxPublisher(outboxRepository, kafkaTemplate);
     }
 
@@ -97,7 +97,7 @@ public class OrchestratorAutoConfiguration {
             StepExecutionLogRepository stepLogRepository,
             ObjectMapper objectMapper,
             OrchestratorProperties props,
-            KafkaTemplate<String, String> kafkaTemplate,
+            KafkaTemplate kafkaTemplate,
             @Autowired(required = false) TransactionTemplate transactionTemplate) {
 
         // Scan all @Flow classes
@@ -146,7 +146,7 @@ public class OrchestratorAutoConfiguration {
             OrchestratorProperties props, MongoTemplate mongoTemplate,
             OutboxEventRepository outboxRepository,
             StepExecutionLogRepository stepLogRepository,
-            ObjectMapper objectMapper, KafkaTemplate<String, String> kafkaTemplate,
+            ObjectMapper objectMapper, KafkaTemplate kafkaTemplate,
             TransactionTemplate transactionTemplate) {
 
         // Resolve topics: @Flow(topic=...) > YAML flows.{name}.topic > global
@@ -260,7 +260,7 @@ public class OrchestratorAutoConfiguration {
             FlowTypeRegistry registry,
             OrchestratorKafkaConsumer<?> consumer,
             ConcurrentKafkaListenerContainerFactory<String, String> containerFactory,
-            KafkaTemplate<String, String> kafkaTemplate,
+            KafkaTemplate kafkaTemplate,
             OrchestratorProperties props) {
 
         List<ConcurrentMessageListenerContainer<String, String>> containers = new ArrayList<>();
@@ -355,7 +355,7 @@ public class OrchestratorAutoConfiguration {
 
     @Bean
     public RetryTopicConfiguration orchestratorCommandRetryConfig(
-            KafkaTemplate<String, String> template,
+            KafkaTemplate template,
             OrchestratorProperties props) {
         OrchestratorProperties.RetryConfig retry = props.getRetry();
         log.info("Non-blocking retry: topic={}, attempts={}, delay={}ms, jitter={}",
@@ -388,7 +388,7 @@ public class OrchestratorAutoConfiguration {
     @SuppressWarnings("unchecked")
     public StaleFlowRecoveryService<?> orchestratorRecoveryService(
             FlowTypeRegistry registry,
-            KafkaTemplate<String, String> kafkaTemplate,
+            KafkaTemplate kafkaTemplate,
             ObjectMapper objectMapper,
             OrchestratorProperties props) {
         // Use first flow type's repo/topic for backward compat

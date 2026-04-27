@@ -22,7 +22,7 @@ import java.util.List;
 public class OutboxPublisher {
 
     private final OutboxEventRepository repository;
-    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final KafkaTemplate kafkaTemplate;
 
     @Scheduled(fixedDelayString = "${orchestrator.outbox.poll-interval-ms:500}")
     public void publishPendingEvents() {

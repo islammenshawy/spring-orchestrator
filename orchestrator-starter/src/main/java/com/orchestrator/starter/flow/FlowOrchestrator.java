@@ -11,7 +11,7 @@ import com.orchestrator.starter.kafka.StepCommandMessage;
 import com.orchestrator.starter.kafka.StepReplyMessage;
 import com.orchestrator.starter.outbox.OutboxEvent;
 import com.orchestrator.starter.outbox.OutboxEventRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -40,7 +40,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private final boolean replyEnabled;
     private final TransactionTemplate txTemplate;
     private final boolean includeFlowStateInLogs;
-    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final KafkaTemplate kafkaTemplate;
     private Class<F> entityClass;
     private org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
 
@@ -55,7 +55,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             boolean replyEnabled,
             TransactionTemplate txTemplate,
             boolean includeFlowStateInLogs,
-            KafkaTemplate<String, String> kafkaTemplate) {
+            KafkaTemplate kafkaTemplate) {
         this(flowRepository, stepRegistry, outboxRepository, stepLogRepository,
                 objectMapper, null, commandTopic, replyTopic, replyEnabled,
                 txTemplate, includeFlowStateInLogs, kafkaTemplate);
@@ -73,7 +73,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             boolean replyEnabled,
             TransactionTemplate txTemplate,
             boolean includeFlowStateInLogs,
-            KafkaTemplate<String, String> kafkaTemplate) {
+            KafkaTemplate kafkaTemplate) {
         this.flowRepository = flowRepository;
         this.stepRegistry = stepRegistry;
         this.outboxRepository = outboxRepository;

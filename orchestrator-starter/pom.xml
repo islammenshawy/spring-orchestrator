@@ -27,8 +27,8 @@
 
         <!-- Kafka for step commands, retry topics, DLT -->
         <dependency>
-            <groupId>org.springframework.kafka</groupId>
-            <artifactId>spring-kafka</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-kafka</artifactId>
         </dependency>
 
         <!-- Auto-configuration support -->
@@ -47,6 +47,7 @@
         <dependency>
             <groupId>org.springframework.retry</groupId>
             <artifactId>spring-retry</artifactId>
+            <version>2.0.12</version>
         </dependency>
 
         <!-- Web support for auto-exposed flow endpoints (optional) -->
@@ -58,7 +59,7 @@
 
         <!-- Jackson for message serialization (provided by consumer app) -->
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
+            <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
             <scope>provided</scope>
         </dependency>

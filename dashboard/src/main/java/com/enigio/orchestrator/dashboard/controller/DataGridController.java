@@ -100,7 +100,7 @@ public class DataGridController {
             ListTopicsResult topics = admin.listTopics();
             Set<String> topicNames = topics.names().get();
 
-            Map<String, TopicDescription> descriptions = admin.describeTopics(topicNames).all().get();
+            Map<String, TopicDescription> descriptions = admin.describeTopics(topicNames).allTopicNames().get();
 
             List<Map<String, Object>> result = new ArrayList<>();
             for (Map.Entry<String, TopicDescription> entry : descriptions.entrySet()) {

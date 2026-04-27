@@ -11,7 +11,7 @@ import com.orchestrator.starter.flow.FlowOrchestrator;
 import com.orchestrator.starter.flow.StepHandler;
 import com.orchestrator.starter.flow.StepRegistry;
 import com.orchestrator.starter.outbox.OutboxEventRepository;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,7 +34,7 @@ class FlowOrchestratorTest {
     private StepRegistry<TestFlow> stepRegistry;
     private OutboxEventRepository outboxRepo;
     private StepExecutionLogRepository stepLogRepo;
-    private KafkaTemplate<String, String> kafkaTemplate;
+    private KafkaTemplate kafkaTemplate;
     private FlowOrchestrator<TestFlow> orchestrator;
 
     @Data

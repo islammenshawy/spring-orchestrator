@@ -4,7 +4,7 @@ import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.kafka.StepCommandMessage;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -25,7 +25,7 @@ import java.util.UUID;
 public class StaleFlowRecoveryService<F extends OrchestratorFlow> {
 
     private final OrchestratorFlowRepository<F> flowRepository;
-    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final KafkaTemplate kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final String commandTopic;
     private final int staleThresholdMinutes;

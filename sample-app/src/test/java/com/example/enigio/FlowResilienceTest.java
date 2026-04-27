@@ -6,11 +6,9 @@ import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.web.client.RestClient;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Duration;
@@ -43,7 +41,7 @@ class FlowResilienceTest {
     @Autowired
     private MongoTemplate mongoTemplate;
 
-    private TestRestTemplate rest;
+    private RestClient rest;
     private WebClient vendorAdmin;
 
     @BeforeAll
@@ -57,7 +55,7 @@ class FlowResilienceTest {
 
     @BeforeEach
     void setUp() {
-        rest = new TestRestTemplate();
+        rest = RestClient.create("http://localhost:" + port);
         vendorAdmin = WebClient.create("http://localhost:8081");
         try {
             vendorAdmin.post().uri("/admin/reset").retrieve().bodyToMono(String.class).block();
@@ -71,12 +69,11 @@ class FlowResilienceTest {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> startFlow(String title) {
-        var response = rest.postForEntity(baseUrl() + "/flows",
-                Map.of("title", title, "content", "test", "signerEmail", "test@test.com"),
-                Map.class);
-        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode(),
-                "Flow should return 202 Accepted");
-        return response.getBody();
+        return rest.post().uri("/flows")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .body(Map.of("title", title, "content", "test", "signerEmail", "test@test.com"))
+                .retrieve()
+                .body(Map.class);
     }
 
     private EnigioFlow waitForStatus(String flowId, FlowStatus expected, Duration timeout) {

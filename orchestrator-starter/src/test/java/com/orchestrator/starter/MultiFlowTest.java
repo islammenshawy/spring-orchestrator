@@ -4,7 +4,7 @@ import com.orchestrator.starter.autoconfigure.OrchestratorProperties;
 import com.orchestrator.starter.flow.*;
 import com.orchestrator.starter.kafka.OrchestratorKafkaConsumer;
 import com.orchestrator.starter.idempotency.IdempotencyService;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
