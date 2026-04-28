@@ -1,6 +1,7 @@
 package com.example.enigio;
 
 import com.example.enigio.flow.EnigioFlow;
+import com.example.enigio.flow.ParallelFlow;
 import com.orchestrator.starter.domain.FlowStatus;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -69,9 +70,18 @@ class FlowResilienceTest {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> startFlow(String title) {
-        return rest.post().uri("/flows")
+        return rest.post().uri("/flows/enigio-document")
                 .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                 .body(Map.of("title", title, "content", "test", "signerEmail", "test@test.com"))
+                .retrieve()
+                .body(Map.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> startParallelFlow(String title) {
+        return rest.post().uri("/flows/parallel-document")
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                .body(Map.of("title", title))
                 .retrieve()
                 .body(Map.class);
     }
@@ -249,6 +259,69 @@ class FlowResilienceTest {
         for (String flowId : flowIds) {
             EnigioFlow completed = waitForStatus(flowId, FlowStatus.COMPLETED, Duration.ofMinutes(2));
             assertNotNull(completed.getFinalDocumentUrl());
+        }
+    }
+
+    // ========== Parallel/Join Flow Tests ==========
+
+    private ParallelFlow waitForParallelStatus(String flowId, FlowStatus expected, Duration timeout) {
+        long deadline = System.currentTimeMillis() + timeout.toMillis();
+        while (System.currentTimeMillis() < deadline) {
+            ParallelFlow flow = mongoTemplate.findById(flowId, ParallelFlow.class, "parallel_flows");
+            if (flow != null && flow.getStatus() == expected) return flow;
+            try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
+        }
+        ParallelFlow flow = mongoTemplate.findById(flowId, ParallelFlow.class, "parallel_flows");
+        fail("Parallel flow " + flowId + " did not reach " + expected + " within " + timeout +
+             ". Current: " + (flow != null ? flow.getStatus() + " at " + flow.getCurrentStep() : "NOT FOUND"));
+        return null;
+    }
+
+    @Test
+    @Order(9)
+    void parallelFlow_completesWithJoins() {
+        var result = startParallelFlow("Parallel Join Test");
+        String flowId = (String) result.get("id");
+        assertNotNull(flowId);
+        assertEquals("parallel-document", result.get("flowType"));
+
+        ParallelFlow completed = waitForParallelStatus(flowId, FlowStatus.COMPLETED, Duration.ofMinutes(2));
+
+        // All steps completed
+        assertNotNull(completed.getInitResult(), "Init step should complete");
+        assertNotNull(completed.getValidationResult(), "Validate step should complete");
+        assertNotNull(completed.getEnrichmentResult(), "Enrich step should complete");
+        assertNotNull(completed.getMergedResult(), "Merge (join) step should complete");
+        assertTrue(completed.getMergedResult().contains("+"), "Merge should combine validate + enrich");
+        assertNotNull(completed.getNotificationResult(), "Notify step should complete");
+        assertNotNull(completed.getArchiveResult(), "Archive step should complete");
+        assertNotNull(completed.getFinalResult(), "Finalize (join) step should complete");
+        assertNotNull(completed.getFlowType(), "flowType should be set");
+    }
+
+    @Test
+    @Order(10)
+    void parallelFlow_concurrentWithSequential() {
+        // Start both flow types simultaneously — tests multi-flow on shared topic
+        List<String> enigioIds = new java.util.ArrayList<>();
+        List<String> parallelIds = new java.util.ArrayList<>();
+
+        for (int i = 0; i < 3; i++) {
+            enigioIds.add((String) startFlow("Mixed Sequential #" + (i + 1)).get("id"));
+            parallelIds.add((String) startParallelFlow("Mixed Parallel #" + (i + 1)).get("id"));
+        }
+
+        // All sequential flows complete
+        for (String id : enigioIds) {
+            EnigioFlow f = waitForStatus(id, FlowStatus.COMPLETED, Duration.ofMinutes(2));
+            assertNotNull(f.getFinalDocumentUrl());
+        }
+
+        // All parallel flows complete
+        for (String id : parallelIds) {
+            ParallelFlow f = waitForParallelStatus(id, FlowStatus.COMPLETED, Duration.ofMinutes(2));
+            assertNotNull(f.getFinalResult());
+            assertNotNull(f.getMergedResult());
         }
     }
 }

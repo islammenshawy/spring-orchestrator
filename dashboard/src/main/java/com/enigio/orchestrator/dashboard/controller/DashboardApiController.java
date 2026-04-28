@@ -124,10 +124,8 @@ public class DashboardApiController {
     private record PatternTarget(String name, String baseUrl, String path) {}
 
     private static final List<PatternTarget> LOAD_TEST_TARGETS = List.of(
-            new PatternTarget("library", "http://localhost:8085", "/flows"),
-            new PatternTarget("saga", "http://localhost:8082", "/saga/flows"),
-            new PatternTarget("statemachine", "http://localhost:8083", "/sm/flows"),
-            new PatternTarget("spring-integration", "http://localhost:8084", "/si/flows")
+            new PatternTarget("sequential", "http://localhost:8085", "/flows/enigio-document"),
+            new PatternTarget("parallel", "http://localhost:8085", "/flows/parallel-document")
     );
 
     @PostMapping("/flows/loadtest")
@@ -139,11 +137,14 @@ public class DashboardApiController {
             int started = 0;
             WebClient client = WebClient.create(target.baseUrl());
             for (int i = 0; i < count; i++) {
-                Map<String, String> flowReq = Map.of(
-                        "title", "Load Test #" + (i + 1),
-                        "content", "Auto-generated content",
-                        "signerEmail", "loadtest" + i + "@example.com"
-                );
+                Map<String, String> flowReq = new java.util.HashMap<>(Map.of(
+                        "title", target.name() + " #" + (i + 1)
+                ));
+                // Sequential flows need extra fields
+                if ("sequential".equals(target.name())) {
+                    flowReq.put("content", "Auto-generated");
+                    flowReq.put("signerEmail", "load" + i + "@test.com");
+                }
                 try {
                     client.post().uri(target.path()).bodyValue(flowReq)
                             .retrieve().bodyToMono(String.class).subscribe();
