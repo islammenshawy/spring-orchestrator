@@ -7,22 +7,112 @@ spring:
 
   mongodb:
     uri: mongodb://localhost:27017/enigio_orchestrator
+
   kafka:
     bootstrap-servers: localhost:9092
+
+    # ========== Producer (recommended for production) ==========
+    producer:
+      # Idempotent producer — dedup at broker level, prevents duplicate
+      # messages on producer retry after network timeout
+      # enable-idempotence: true
+
+      # Wait for all in-sync replicas to acknowledge — strongest durability
+      # acks: all
+
+      # Producer retries on transient network errors
+      # retries: 3
+
+      # Connection pool: max idle connections kept open to brokers
+      # properties:
+      #   connections.max.idle.ms: 540000    # 9 min (default)
+      #   metadata.max.age.ms: 300000       # 5 min — refresh broker metadata
+
+    # ========== Consumer (recommended for production) ==========
+    consumer:
+      # Incremental rebalancing — only moving partitions pause, others continue.
+      # Without this, ALL consumers stop during rebalance (30s of zero processing).
+      # properties:
+      #   partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
+
+      # Crash detection: session timeout = how long before broker declares consumer dead.
+      # Too low (10s) = GC pauses trigger false rebalances.
+      # Too high (60s) = slow crash detection, stuck flows wait longer.
+      # properties:
+      #   session.timeout.ms: 30000       # 30s (recommended)
+      #   heartbeat.interval.ms: 10000    # 10s (must be < session.timeout / 3)
+
+      # Max records per poll — limits batch size to prevent long processing.
+      # If step execution takes 1s, 50 records = 50s per poll cycle.
+      # properties:
+      #   max.poll.records: 50
+
+      # Max time between polls before consumer is considered dead.
+      # Must be > (max step execution time × max.poll.records).
+      # With 30s vendor timeout × 50 records = 1500s, but steps run sequentially.
+      # properties:
+      #   max.poll.interval.ms: 300000    # 5 min
+
+      # Static group membership (Kubernetes StatefulSet only):
+      # Prevents rebalance on pod restart — broker recognizes the same member.
+      # Requires stable pod names (StatefulSet, not Deployment).
+      # properties:
+      #   group.instance.id: ${HOSTNAME}
+
+      # Rack-aware consumer (multi-AZ/multi-region):
+      # Prefers reading from replicas in the same rack/AZ — reduces cross-AZ traffic.
+      # properties:
+      #   client.rack: ${KAFKA_RACK:rack-1}
+
+    # ========== Connection pool (shared by producer + consumer) ==========
+    # Spring Kafka uses a single KafkaProducer per KafkaTemplate (connection pooled internally).
+    # Consumers are managed by listener containers (one per partition assignment).
+    # No manual connection pool needed — Kafka clients handle connections internally.
+    #
+    # Key tuning parameters:
+    # properties:
+    #   reconnect.backoff.ms: 50           # initial reconnect delay
+    #   reconnect.backoff.max.ms: 1000     # max reconnect delay
+    #   socket.connection.setup.timeout.ms: 10000  # TCP connect timeout
+    #   connections.max.idle.ms: 540000    # close idle connections after 9 min
+
 # Vendor API
 vendor:
   base-url: http://localhost:8081/api/v1
 
-# Orchestrator — only the topic name is required, everything else has defaults
+# ========== Orchestrator Library ==========
 orchestrator:
   kafka:
     command-topic: enigio.sample.commands
+    # reply-topic: ""                     # set to "" to disable reply mode (inline)
+
   retry:
-    initial-interval-ms: 5000
-    multiplier: 2.0
-    max-interval-ms: 30000
-    max-attempts: 4
-    jitter-factor: 0.5
+    initial-interval-ms: 5000             # first retry delay
+    multiplier: 2.0                       # exponential: 5s → 10s → 20s
+    max-interval-ms: 30000                # cap at 30s
+    max-attempts: 4                       # 1 initial + 3 retries → DLT
+    jitter-factor: 0.5                    # 0=none, 0.5=equal, 1.0=full
+
+  # recovery:
+  #   scan-interval-ms: 30000             # stale flow scan every 30s
+  #   stale-threshold-minutes: 5          # re-publish after 5 min stuck
+
+  # retention:
+  #   outbox-days: 7                      # auto-delete published outbox events
+  #   processed-events-days: 30           # auto-delete idempotency records
+  #   step-log-days: 90                   # auto-delete step audit logs
+
+  # audit:
+  #   include-flow-state: false           # full JSON snapshots in step logs (expensive)
+  #                                       # OFF: ~2.5KB/flow, ON: ~20KB/flow
+
+  # Multi-flow overrides (optional):
+  # flows:
+  #   payment:
+  #     topic: payment.commands            # own topic (isolation)
+  #     dlt-topic: payment.critical-dlt    # custom DLT
+  #     retry:
+  #       max-attempts: 6                  # per-flow retry config
 
 management:
   endpoints:
