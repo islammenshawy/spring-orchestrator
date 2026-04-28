@@ -132,7 +132,7 @@ public class DataGridController {
 
         Properties props = new Properties();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, "dashboard-reader-" + UUID.randomUUID());
+        // No group ID — use manual partition assignment (no group coordinator overhead)
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
@@ -148,41 +148,13 @@ public class DataGridController {
 
             consumer.assign(partitions);
 
-            // Get committed offsets for the executor consumer group
-            if ("pending".equals(mode)) {
-                String consumerGroup = group.isEmpty() ? resolveConsumerGroup(name) : group;
-                if (consumerGroup != null) {
-                    try (var admin = org.apache.kafka.clients.admin.AdminClient.create(
-                            Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
-                        var offsets = admin.listConsumerGroupOffsets(consumerGroup)
-                                .partitionsToOffsetAndMetadata().get(3, java.util.concurrent.TimeUnit.SECONDS);
-                        for (var entry : offsets.entrySet()) {
-                            if (entry.getKey().topic().equals(name)) {
-                                committedOffsets.put(entry.getKey().partition(),
-                                        entry.getValue().offset());
-                            }
-                        }
-                    } catch (Exception e) {
-                        // Fall back to showing all
-                    }
-                }
-            }
-
-            // Seek to start position
-            if ("pending".equals(mode) && !committedOffsets.isEmpty()) {
-                // Start from committed offset (only unconsumed messages)
-                for (TopicPartition tp : partitions) {
-                    long committed = committedOffsets.getOrDefault(tp.partition(), 0L);
-                    consumer.seek(tp, committed);
-                }
-            } else {
-                // Show last N messages
-                consumer.seekToEnd(partitions);
-                for (TopicPartition tp : partitions) {
-                    long endOffset = consumer.position(tp);
-                    long startOffset = Math.max(0, endOffset - limit);
-                    consumer.seek(tp, startOffset);
-                }
+            // Seek — always show last N for now (offset filtering via group
+            // causes rebalancing issues, so we filter in the response instead)
+            consumer.seekToEnd(partitions);
+            for (TopicPartition tp : partitions) {
+                long endOffset = consumer.position(tp);
+                long startOffset = Math.max(0, endOffset - limit);
+                consumer.seek(tp, startOffset);
             }
 
             ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(3));
