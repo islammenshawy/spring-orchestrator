@@ -123,10 +123,22 @@
         </div>
         <div class="card">
             <h3>Load Test</h3>
-            <div class="form-group"><label>Count</label><input type="number" id="lt-count" value="10" min="1" max="500"/></div>
-            <button class="btn btn-primary" onclick="runLoadTest()">Run Load Test</button>
-            <span class="dim text-sm" id="lt-status"></span>
-            <div class="dim" style="font-size:9px;margin-top:4px">Set failures first → load test triggers retries. Reply mode (decoupled).</div>
+            <div style="display:flex;gap:6px;margin-bottom:6px">
+                <label style="font-size:10px;display:flex;align-items:center;gap:3px">
+                    <input type="checkbox" id="lt-seq" checked/> Sequential</label>
+                <label style="font-size:10px;display:flex;align-items:center;gap:3px">
+                    <input type="checkbox" id="lt-par" checked/> Parallel</label>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:6px">
+                <div class="form-group" style="flex:1;margin:0"><label>Duration (s)</label><input type="number" id="lt-duration" value="30" min="5" max="300"/></div>
+                <div class="form-group" style="flex:1;margin:0"><label>Rate/sec</label><input type="number" id="lt-rate" value="2" min="1" max="20"/></div>
+            </div>
+            <div style="display:flex;gap:4px">
+                <button class="btn btn-primary" onclick="startSustainedLoad()">Start</button>
+                <button class="btn btn-danger" onclick="stopSustainedLoad()">Stop</button>
+                <button class="btn btn-outline btn-sm" onclick="runBurstLoad()">Burst</button>
+            </div>
+            <div class="dim text-sm mt" id="lt-status"></div>
         </div>
         <div class="card">
             <h3>Failure Simulation</h3>
@@ -680,9 +692,55 @@ function renderFlows(){
 async function startFlow(){
     try{await api('/api/dashboard/flows/start',{method:'POST',body:JSON.stringify({title:document.getElementById('f-title').value,content:'auto',signerEmail:document.getElementById('f-email').value})});toast('Flow started','success');setTimeout(refreshFlows,1000)}catch(e){toast('Failed','error')}
 }
-async function runLoadTest(){
-    const n=parseInt(document.getElementById('lt-count').value)||10;document.getElementById('lt-status').textContent='Launching...';
-    try{const r=await api('/api/dashboard/flows/loadtest',{method:'POST',body:JSON.stringify({count:n})});const pp=r.perPattern||{};const detail=Object.entries(pp).map(([k,v])=>k+':'+v).join(' ');document.getElementById('lt-status').innerHTML=`${r.flowsStarted} launched <span class="dim">(${detail})</span>`;toast(r.flowsStarted+' flows across patterns','success');if(!autoInt)toggleAuto();setTimeout(refreshFlows,1000)}catch(e){document.getElementById('lt-status').textContent='Failed'}
+function getSelectedFlowTypes(){
+    const types=[];
+    if(document.getElementById('lt-seq').checked)types.push('sequential');
+    if(document.getElementById('lt-par').checked)types.push('parallel');
+    return types;
+}
+
+let sustainedPollInt=null;
+async function startSustainedLoad(){
+    const dur=parseInt(document.getElementById('lt-duration').value)||30;
+    const rate=parseInt(document.getElementById('lt-rate').value)||2;
+    const types=getSelectedFlowTypes();
+    if(!types.length){toast('Select at least one flow type','error');return}
+    document.getElementById('lt-status').textContent='Starting sustained load...';
+    try{
+        const r=await api('/api/dashboard/flows/loadtest/sustained',{method:'POST',body:JSON.stringify({durationSeconds:dur,ratePerSecond:rate,flowTypes:types})});
+        if(r.status==='already_running'){toast('Load test already running','error');return}
+        toast(`Sustained: ${rate}/sec for ${dur}s (${types.join('+')})`, 'success');
+        if(!autoInt)toggleAuto();
+        // Poll status every 2s
+        sustainedPollInt=setInterval(async()=>{
+            const s=await api('/api/dashboard/flows/loadtest/status');
+            document.getElementById('lt-status').innerHTML=`<span style="color:${s.running?'var(--success)':'var(--dim)'}">●</span> ${s.launched} launched, ${s.errors} errors${s.running?' (running)':' (done)'}`;
+            if(!s.running){clearInterval(sustainedPollInt);sustainedPollInt=null}
+        },2000);
+    }catch(e){document.getElementById('lt-status').textContent='Failed'}
+}
+
+async function stopSustainedLoad(){
+    try{
+        const r=await api('/api/dashboard/flows/loadtest/stop',{method:'POST'});
+        document.getElementById('lt-status').textContent=`Stopped: ${r.totalLaunched} launched`;
+        if(sustainedPollInt){clearInterval(sustainedPollInt);sustainedPollInt=null}
+        toast('Load test stopped','success');
+    }catch(e){toast('Failed to stop','error')}
+}
+
+async function runBurstLoad(){
+    const types=getSelectedFlowTypes();
+    if(!types.length){toast('Select at least one flow type','error');return}
+    document.getElementById('lt-status').textContent='Burst launching...';
+    try{
+        const r=await api('/api/dashboard/flows/loadtest',{method:'POST',body:JSON.stringify({count:10,flowTypes:types})});
+        const pp=r.perPattern||{};
+        const detail=Object.entries(pp).map(([k,v])=>k+':'+v).join(' ');
+        document.getElementById('lt-status').innerHTML=`${r.flowsStarted} burst <span class="dim">(${detail})</span>`;
+        toast(r.flowsStarted+' burst','success');
+        if(!autoInt)toggleAuto();
+    }catch(e){document.getElementById('lt-status').textContent='Failed'}
 }
 async function setFailure(ep,v){const c={};c[ep]=v;await api('/api/dashboard/failure-config',{method:'POST',body:JSON.stringify(c)});toast(ep+': '+v,'success')}
 async function resetFailures(){await api('/api/dashboard/failure-reset',{method:'POST'});document.querySelectorAll('[id^="fail-"]').forEach(s=>s.value='NONE');toast('Reset','success')}

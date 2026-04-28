@@ -119,41 +119,44 @@ public class DashboardApiController {
         }
     }
 
-    // ========== Load test (hits all pattern apps simultaneously) ==========
+    // ========== Load test ==========
 
-    private record PatternTarget(String name, String baseUrl, String path) {}
+    private record FlowTarget(String name, String baseUrl, String path) {}
 
-    private static final List<PatternTarget> LOAD_TEST_TARGETS = List.of(
-            new PatternTarget("sequential", "http://localhost:8085", "/flows/enigio-document"),
-            new PatternTarget("parallel", "http://localhost:8085", "/flows/parallel-document")
+    private static final Map<String, FlowTarget> FLOW_TARGETS = Map.of(
+            "sequential", new FlowTarget("sequential", "http://localhost:8085", "/flows/enigio-document"),
+            "parallel", new FlowTarget("parallel", "http://localhost:8085", "/flows/parallel-document")
     );
 
+    // Sustained load state
+    private volatile boolean sustainedRunning = false;
+    private volatile int sustainedLaunched = 0;
+    private volatile int sustainedErrors = 0;
+
+    /** Burst load test — launch N flows immediately */
     @PostMapping("/flows/loadtest")
     public ResponseEntity<Map<String, Object>> loadTest(@RequestBody Map<String, Object> request) {
         int count = (int) request.getOrDefault("count", 10);
-        Map<String, Integer> results = new java.util.LinkedHashMap<>();
+        @SuppressWarnings("unchecked")
+        List<String> flowTypes = (List<String>) request.getOrDefault("flowTypes",
+                List.of("sequential", "parallel"));
 
-        for (PatternTarget target : LOAD_TEST_TARGETS) {
+        Map<String, Integer> results = new java.util.LinkedHashMap<>();
+        WebClient client = WebClient.create("http://localhost:8085");
+
+        for (String type : flowTypes) {
+            FlowTarget target = FLOW_TARGETS.get(type);
+            if (target == null) continue;
             int started = 0;
-            WebClient client = WebClient.create(target.baseUrl());
             for (int i = 0; i < count; i++) {
-                Map<String, String> flowReq = new java.util.HashMap<>(Map.of(
-                        "title", target.name() + " #" + (i + 1)
-                ));
-                // Sequential flows need extra fields
-                if ("sequential".equals(target.name())) {
-                    flowReq.put("content", "Auto-generated");
-                    flowReq.put("signerEmail", "load" + i + "@test.com");
-                }
                 try {
-                    client.post().uri(target.path()).bodyValue(flowReq)
+                    client.post().uri(target.path())
+                            .bodyValue(buildFlowRequest(type, i))
                             .retrieve().bodyToMono(String.class).subscribe();
                     started++;
-                } catch (Exception e) {
-                    // Target app may not be running — skip
-                }
+                } catch (Exception e) { /* skip */ }
             }
-            results.put(target.name(), started);
+            results.put(type, started);
         }
 
         int total = results.values().stream().mapToInt(Integer::intValue).sum();
@@ -162,6 +165,87 @@ public class DashboardApiController {
                 "flowsStarted", total,
                 "perPattern", results
         ));
+    }
+
+    /** Sustained load — constant rate for a duration */
+    @PostMapping("/flows/loadtest/sustained")
+    public ResponseEntity<Map<String, Object>> startSustainedLoad(@RequestBody Map<String, Object> request) {
+        if (sustainedRunning) {
+            return ResponseEntity.ok(Map.of("status", "already_running",
+                    "launched", sustainedLaunched, "errors", sustainedErrors));
+        }
+
+        int durationSec = (int) request.getOrDefault("durationSeconds", 60);
+        int ratePerSec = (int) request.getOrDefault("ratePerSecond", 2);
+        @SuppressWarnings("unchecked")
+        List<String> flowTypes = (List<String>) request.getOrDefault("flowTypes",
+                List.of("sequential", "parallel"));
+
+        sustainedRunning = true;
+        sustainedLaunched = 0;
+        sustainedErrors = 0;
+
+        Thread.startVirtualThread(() -> {
+            WebClient client = WebClient.create("http://localhost:8085");
+            long endTime = System.currentTimeMillis() + (durationSec * 1000L);
+            int counter = 0;
+
+            while (System.currentTimeMillis() < endTime && sustainedRunning) {
+                for (int r = 0; r < ratePerSec && sustainedRunning; r++) {
+                    String type = flowTypes.get(counter % flowTypes.size());
+                    FlowTarget target = FLOW_TARGETS.get(type);
+                    if (target == null) continue;
+                    try {
+                        client.post().uri(target.path())
+                                .bodyValue(buildFlowRequest(type, counter))
+                                .retrieve().bodyToMono(String.class).subscribe();
+                        sustainedLaunched++;
+                    } catch (Exception e) {
+                        sustainedErrors++;
+                    }
+                    counter++;
+                }
+                try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
+            }
+            sustainedRunning = false;
+        });
+
+        return ResponseEntity.ok(Map.of(
+                "status", "started",
+                "durationSeconds", durationSec,
+                "ratePerSecond", ratePerSec,
+                "flowTypes", flowTypes
+        ));
+    }
+
+    @PostMapping("/flows/loadtest/stop")
+    public ResponseEntity<Map<String, Object>> stopSustainedLoad() {
+        sustainedRunning = false;
+        return ResponseEntity.ok(Map.of(
+                "status", "stopped",
+                "totalLaunched", sustainedLaunched,
+                "errors", sustainedErrors
+        ));
+    }
+
+    @GetMapping("/flows/loadtest/status")
+    public ResponseEntity<Map<String, Object>> getSustainedStatus() {
+        return ResponseEntity.ok(Map.of(
+                "running", sustainedRunning,
+                "launched", sustainedLaunched,
+                "errors", sustainedErrors
+        ));
+    }
+
+    private Map<String, String> buildFlowRequest(String type, int index) {
+        Map<String, String> req = new java.util.HashMap<>(Map.of(
+                "title", type + " #" + (index + 1)
+        ));
+        if ("sequential".equals(type)) {
+            req.put("content", "Auto-generated");
+            req.put("signerEmail", "load" + index + "@test.com");
+        }
+        return req;
     }
 
     // ========== Helpers ==========
