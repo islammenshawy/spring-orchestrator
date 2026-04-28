@@ -53,6 +53,7 @@ import java.util.stream.Collectors;
 @Slf4j
 @AutoConfiguration
 @EnableScheduling
+@org.springframework.kafka.annotation.EnableKafkaRetryTopic
 @org.springframework.boot.autoconfigure.AutoConfigurationPackage
 @org.springframework.data.mongodb.repository.config.EnableMongoRepositories(basePackages = "com.orchestrator.starter")
 @EnableConfigurationProperties(OrchestratorProperties.class)
