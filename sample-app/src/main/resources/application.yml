@@ -9,8 +9,6 @@ spring:
     uri: mongodb://localhost:27017/enigio_orchestrator
   kafka:
     bootstrap-servers: localhost:9092
-    listener:
-      ack-mode: record
 # Vendor API
 vendor:
   base-url: http://localhost:8081/api/v1
