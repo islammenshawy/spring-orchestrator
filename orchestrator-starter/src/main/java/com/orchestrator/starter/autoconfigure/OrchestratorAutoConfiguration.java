@@ -262,10 +262,11 @@ public class OrchestratorAutoConfiguration {
             OrchestratorKafkaConsumer<?> consumer,
             ConcurrentKafkaListenerContainerFactory<String, String> containerFactory,
             KafkaTemplate kafkaTemplate,
-            OrchestratorProperties props) {
+            OrchestratorProperties props,
+            org.springframework.core.env.Environment env) {
 
         List<ConcurrentMessageListenerContainer<String, String>> containers = new ArrayList<>();
-        String appName = System.getProperty("spring.application.name", "orchestrator");
+        String appName = env.getProperty("spring.application.name", "orchestrator");
 
         // Command listeners — use @KafkaListener via adapter bean (supports RetryTopicConfiguration)
         // Programmatic containers here are ONLY for reply and DLT topics.

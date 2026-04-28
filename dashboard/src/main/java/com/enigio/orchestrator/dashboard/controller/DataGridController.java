@@ -216,12 +216,17 @@ public class DataGridController {
      *  Uses the Spring application name pattern: {app-name}-{role} */
     private String resolveConsumerGroup(String topicName) {
         // The library uses: {spring.application.name}-executor for commands,
-        // {spring.application.name}-orchestrator for replies
+        // {spring.application.name}-orchestrator for replies,
+        // {spring.application.name}-executor-retry-N for retry topics
         String appName = "enigio-sample"; // TODO: make configurable
-        if (topicName.contains(".replies")) {
+        if (topicName.contains(".replies") && !topicName.contains("-dlt")) {
             return appName + "-orchestrator";
         } else if (topicName.contains("-dlt")) {
-            return appName + "-dlt";
+            return appName + "-executor-dlt";
+        } else if (topicName.contains("-retry-")) {
+            // Extract retry index: enigio.sample.commands-retry-0 → retry-0
+            String suffix = topicName.substring(topicName.lastIndexOf("-retry"));
+            return appName + "-executor" + suffix;
         } else {
             return appName + "-executor";
         }
