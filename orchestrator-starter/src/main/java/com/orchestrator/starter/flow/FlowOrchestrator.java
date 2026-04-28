@@ -222,20 +222,34 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
-        // Step succeeded — save domain fields + clear retry state.
+        // Step succeeded — clear retry state via $set (no @Version conflict).
+        // Domain fields are already persisted by checkpoint() in the step handler.
         flow.setRetryCount(0);
         flow.setBackoffSeconds(0);
         flow.setNextRetryAt(null);
         flow.setErrorMessage(null);
         flow.setUpdatedAt(Instant.now());
 
-        // Save flow — persists domain fields set by the step handler.
-        saveFlow(flow);
+        // Save flow with version conflict retry.
+        // The reply consumer may have incremented the version via $set.
+        // On conflict: re-read latest version, copy it to our flow object, retry save.
+        // This preserves all domain fields set by the step handler.
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                saveFlow(flow);
+                break;
+            } catch (org.springframework.dao.OptimisticLockingFailureException e) {
+                log.debug("[Saga] Version conflict saving flow {} (attempt {}), retrying", flowId, attempt + 1);
+                F fresh = flowRepository.findById(flowId).orElse(null);
+                if (fresh instanceof com.orchestrator.starter.domain.AbstractFlow af
+                        && flow instanceof com.orchestrator.starter.domain.AbstractFlow afFlow) {
+                    afFlow.setVersion(af.getVersion());
+                    afFlow.setCurrentStep(af.getCurrentStep()); // reply may have advanced
+                }
+            }
+        }
 
         if (replyEnabled) {
-            // Reply mode: include full flow snapshot in the reply message.
-            // The reply consumer uses this snapshot instead of re-reading from
-            // MongoDB, eliminating race conditions between consumers.
             publishReply(flowId, stepName, "COMPLETED", null, serialize(flow));
         } else {
             // Inline mode: advance in same thread
@@ -457,22 +471,43 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     }
 
     private void handleRetryableFailure(F flow, RetryableStepException e) {
-        flow.setRetryCount(flow.getRetryCount() + 1);
-        int backoff = (int) Math.min(Math.pow(2, flow.getRetryCount()), 60);
-        flow.setBackoffSeconds(backoff);
-        flow.setNextRetryAt(Instant.now().plusSeconds(backoff));
-        flow.setStatus(FlowStatus.WAITING_RETRY);
-        flow.setErrorMessage(e.getMessage());
-        flow.setUpdatedAt(Instant.now());
-        saveFlow(flow);
+        int retryCount = flow.getRetryCount() + 1;
+        int backoff = (int) Math.min(Math.pow(2, retryCount), 60);
+        Instant nextRetry = Instant.now().plusSeconds(backoff);
+        String errorMsg = e.getMessage() != null ? e.getMessage() : "retryable error";
+        // Use $set to avoid @Version conflict
+        if (mongoTemplate != null && entityClass != null) {
+            updateFlowPartial(flow.getId(), java.util.Map.of(
+                    "retryCount", retryCount,
+                    "backoffSeconds", backoff,
+                    "nextRetryAt", nextRetry,
+                    "status", FlowStatus.WAITING_RETRY.name(),
+                    "errorMessage", errorMsg,
+                    "updatedAt", Instant.now()));
+        } else {
+            flow.setRetryCount(retryCount);
+            flow.setBackoffSeconds(backoff);
+            flow.setNextRetryAt(nextRetry);
+            flow.setStatus(FlowStatus.WAITING_RETRY);
+            flow.setErrorMessage(errorMsg);
+            flow.setUpdatedAt(Instant.now());
+            saveFlow(flow);
+        }
     }
 
     private void handlePermanentFailure(F flow, NonRetryableStepException e) {
-        flow.setStatus(FlowStatus.FAILED);
-        flow.setErrorMessage(e.getMessage());
-        flow.setUpdatedAt(Instant.now());
-        saveFlow(flow);
-
+        String errorMsg = e.getMessage() != null ? e.getMessage() : "permanent failure";
+        if (mongoTemplate != null && entityClass != null) {
+            updateFlowPartial(flow.getId(), java.util.Map.of(
+                    "status", FlowStatus.FAILED.name(),
+                    "errorMessage", errorMsg,
+                    "updatedAt", Instant.now()));
+        } else {
+            flow.setStatus(FlowStatus.FAILED);
+            flow.setErrorMessage(errorMsg);
+            flow.setUpdatedAt(Instant.now());
+            saveFlow(flow);
+        }
         // Saga compensation — undo completed steps in reverse
         runCompensation(flow);
     }
