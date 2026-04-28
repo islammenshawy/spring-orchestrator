@@ -212,21 +212,25 @@ public class DataGridController {
         ));
     }
 
-    /** Resolve the likely consumer group for a topic based on naming convention */
+    /** Resolve the consumer group for a topic */
     private String resolveConsumerGroup(String topicName) {
-        // Try common group names used by the orchestrator
-        String[] suffixes = {"-executor", "-orchestrator", "-dlt"};
-        String baseName = topicName.contains("-retry") || topicName.contains("-dlt")
-                ? topicName.substring(0, topicName.indexOf("-retry") > 0 ? topicName.indexOf("-retry") : topicName.indexOf("-dlt"))
-                : topicName;
+        // Determine which suffix to look for based on topic type
+        String targetSuffix;
+        if (topicName.contains(".replies")) {
+            targetSuffix = "-orchestrator";
+        } else if (topicName.contains("-dlt")) {
+            targetSuffix = "-dlt";
+        } else if (topicName.contains("-retry")) {
+            targetSuffix = "-executor-retry";
+        } else {
+            targetSuffix = "-executor";
+        }
 
         try (var admin = org.apache.kafka.clients.admin.AdminClient.create(
                 Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
             var groups = admin.listConsumerGroups().all().get(3, java.util.concurrent.TimeUnit.SECONDS);
             for (var g : groups) {
-                for (String suffix : suffixes) {
-                    if (g.groupId().endsWith(suffix)) return g.groupId();
-                }
+                if (g.groupId().endsWith(targetSuffix)) return g.groupId();
             }
         } catch (Exception e) { /* ignore */ }
         return null;
