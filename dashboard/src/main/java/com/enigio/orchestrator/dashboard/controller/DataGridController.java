@@ -212,27 +212,18 @@ public class DataGridController {
         ));
     }
 
-    /** Resolve the consumer group for a topic */
+    /** Resolve the consumer group for a topic.
+     *  Uses the Spring application name pattern: {app-name}-{role} */
     private String resolveConsumerGroup(String topicName) {
-        // Determine which suffix to look for based on topic type
-        String targetSuffix;
+        // The library uses: {spring.application.name}-executor for commands,
+        // {spring.application.name}-orchestrator for replies
+        String appName = "enigio-sample"; // TODO: make configurable
         if (topicName.contains(".replies")) {
-            targetSuffix = "-orchestrator";
+            return appName + "-orchestrator";
         } else if (topicName.contains("-dlt")) {
-            targetSuffix = "-dlt";
-        } else if (topicName.contains("-retry")) {
-            targetSuffix = "-executor-retry";
+            return appName + "-dlt";
         } else {
-            targetSuffix = "-executor";
+            return appName + "-executor";
         }
-
-        try (var admin = org.apache.kafka.clients.admin.AdminClient.create(
-                Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
-            var groups = admin.listConsumerGroups().all().get(3, java.util.concurrent.TimeUnit.SECONDS);
-            for (var g : groups) {
-                if (g.groupId().endsWith(targetSuffix)) return g.groupId();
-            }
-        } catch (Exception e) { /* ignore */ }
-        return null;
     }
 }
