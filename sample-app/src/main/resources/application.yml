@@ -93,6 +93,11 @@ orchestrator:
     max-attempts: 4                       # 1 initial + 3 retries → DLT
     jitter-factor: 0.5                    # 0=none, 0.5=equal, 1.0=full
 
+  # outbox:
+  #   poll-interval-ms: 500               # outbox publisher poll frequency (default 500ms)
+  #                                       # lower = faster step transitions, higher CPU
+  #                                       # 100ms for low-latency, 1000ms for high-volume
+
   # recovery:
   #   scan-interval-ms: 30000             # stale flow scan every 30s
   #   stale-threshold-minutes: 5          # re-publish after 5 min stuck
