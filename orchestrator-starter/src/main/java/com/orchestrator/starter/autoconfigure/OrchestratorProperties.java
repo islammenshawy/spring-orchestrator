@@ -19,6 +19,7 @@ public class OrchestratorProperties {
     private KafkaConfig kafka = new KafkaConfig();
     private RetryConfig retry = new RetryConfig();
     private RecoveryConfig recovery = new RecoveryConfig();
+    private OutboxConfig outbox = new OutboxConfig();
     private EndpointsConfig endpoints = new EndpointsConfig();
     private RetentionConfig retention = new RetentionConfig();
 
@@ -59,6 +60,15 @@ public class OrchestratorProperties {
     public static class RecoveryConfig {
         private long scanIntervalMs = 30000;
         private int staleThresholdMinutes = 5;
+    }
+
+    @Data
+    public static class OutboxConfig {
+        /** Outbox publisher poll interval in ms. Lower = faster step transitions.
+         *  500ms (default): ~500ms latency between steps, low CPU
+         *  100ms: ~100ms latency, moderate CPU
+         *  50ms: ~50ms latency, higher CPU — use for low-latency requirements */
+        private long pollIntervalMs = 500;
     }
 
     @Data
