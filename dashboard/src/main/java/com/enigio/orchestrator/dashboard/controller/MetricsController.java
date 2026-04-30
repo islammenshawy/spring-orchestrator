@@ -1,6 +1,7 @@
 package com.enigio.orchestrator.dashboard.controller;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -16,19 +17,24 @@ public class MetricsController {
 
     private record AppInfo(String name, String pattern, String baseUrl, String color) {}
 
-    private static final List<AppInfo> APPS = List.of(
-            new AppInfo("Starter Library", "library", "http://localhost:8085", "#22c55e"),
-            new AppInfo("Digital Instrument", "dis", "http://localhost:8087", "#f97316"),
-            new AppInfo("Saga+Outbox", "saga", "http://localhost:8082", "#a78bfa"),
-            new AppInfo("Statemachine", "statemachine", "http://localhost:8083", "#22d3ee"),
-            new AppInfo("Spring Integration", "spring-integration", "http://localhost:8084", "#818cf8")
-    );
+    @Value("${dis.base-url:http://localhost:8087}")
+    private String disBaseUrl;
+
+    private List<AppInfo> getApps() {
+        return List.of(
+                new AppInfo("Starter Library", "library", "http://localhost:8085", "#22c55e"),
+                new AppInfo("Digital Instrument", "dis", disBaseUrl, "#f97316"),
+                new AppInfo("Saga+Outbox", "saga", "http://localhost:8082", "#a78bfa"),
+                new AppInfo("Statemachine", "statemachine", "http://localhost:8083", "#22d3ee"),
+                new AppInfo("Spring Integration", "spring-integration", "http://localhost:8084", "#818cf8")
+        );
+    }
 
     @GetMapping("/compare")
     public ResponseEntity<List<Map<String, Object>>> compareMetrics() {
         List<Map<String, Object>> results = new ArrayList<>();
 
-        for (AppInfo app : APPS) {
+        for (AppInfo app : getApps()) {
             Map<String, Object> metrics = new LinkedHashMap<>();
             metrics.put("name", app.name);
             metrics.put("pattern", app.pattern);
