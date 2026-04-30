@@ -1,0 +1,5125 @@
+openapi: 3.1.0
+info:
+  description: |+
+    Available API versions: &nbsp;<a href="#" onclick="initRedoc('trace-original-fullnode-api-specification-2.6.2.24-59d064d7.yaml', event)">2.6</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#" onclick="initRedoc('trace-original-fullnode-api-specification-2.7.0.7-1a537ae2.yaml', event)">2.7</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#" onclick="initRedoc('trace-original-fullnode-api-specification-3.0.0.28-aba5ea5a.yaml', event)">3.0</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#" onclick="initRedoc('trace-original-fullnode-api-specification-3.1.0.59-294d6b53.yaml', event)">3.1</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#" onclick="initLatest(event)">3.3&nbsp;(latest)</a>
+    # Overview
+    This documentation aims to provide all the information needed to easily integrate with the trace:original
+    fullnode API including a list of all endpoints with description, request and response samples and API
+    collections. The trace:original fullnode API is based on REST principles, accepts requests and returns
+    responses in JSON format, uses standard HTTP response codes and supports GET, POST, PUT and
+    DELETE HTTP methods.
+
+    The API provides a range of endpoints which allows customers to integrate their application to be
+    able to create and manage trace:original documents. These documents are digital original documents
+    whose creation, possession, amendments, transfer, invalidations and integrity are securely logged in a
+    public immutable distributed ledger. Only the holder, the one in possession, of the original can amend or
+    invalidate a trace:original document or transfer ownership to another party. The primary use case are for
+    any kind of negotiable document or document of title such as Promissory Notes, Bills of Exchange, Bills of
+    Lading, Guarantees, Standby Letters of Credit and others. But as the documents are not limited to any
+    specific content, in fact any PDF draft or a PDF draft form can be used to create a digital original. Thus
+    the documents can also be used for Registry documents and regular Agreements such as Certificates of
+    Origin, Student grades, Contracts and others.
+
+    A document can be issued as a unique trace:original document with a unique trace:original ID recorded in
+    the ledger by using the <strong>Create</strong> endpoint. This will generate a new record in the trace:original ledger.
+    Nothing from the content of the document file will be logged in the public ledger, only cryptographic
+    references, digital signatures and cryptographic keys. Via API it is possible to call <strong>Amend</strong> to add a new
+    increment to the end of the document creating new versions. It is possible to add required signers that
+    can electronically sign the document via a signing link. It is possible to <strong>Transfer</strong> the document to a holder
+    in due course. It is possible to <strong>Invalidate</strong> the document when it should no longer give the holder any legal
+    rights. The document can always be validated as the current correct, un-manipulated original, via
+    <strong>Validate</strong> or at a public notary web-application verifying against the trace:original ledger like https://
+    traceoriginal.com.
+
+    ## Basic concepts
+
+    ### trace:original ID
+    Each trace:original document is identified by a unique trace:original ID. This id cannot be modified and will identify the document during its lifetime. 
+
+    ### Version key
+    Each version of the document is also identified by a version key which will be needed to be able to perform operations on the document which modify the document's state in the ledger. After each operation the new version key is returned in the response. It can also be retrieved later by calling the ```/api/v1/documents/{traceOriginalId}/technical-details/latest``` endpoint.
+
+    ## Authentication
+    The trace:original API uses Basic authentication and JSON Web Tokens (JWT) to authenticate requests.
+
+    For Basic Authentication a username and password must be provided in the authentication header following the Basic Auth standard.
+
+    For authentication using JSON Web Token the OAuth 2.0 flow is used to grant an access token for service integrations. Ensure that the token is securely stored on the client side and refresh JWT tokens regularly to enhance security and mitigate the risk of unauthorised access. Please note that for JWT Bearer Token authentication, the token’s expiration and renewal mechanisms might apply. Ensure proper handling and renewal of tokens for continued access to the application.
+
+    All communication with the API must be over HTTPS, HTTP is not supported.
+
+    ## Versioning
+    The trace:original API is version controlled. Versioning is done through a version suffix in the URL using the format ```vX``` e.g. ```/api/v1/documents```. The current major version is v1. Each major backwards incompatible change will result in a new version for the affected endpoint to avoid breaking your integration. Minor changes which are backward compatible will be added to the API without versioning. All changes to the API will be documented in the [changelog](#changelog) section.
+
+    ## Error handling
+
+    trace:original API uses conventional HTTP response codes to indicate the success or failure of an API request. In general: Codes in the ```2xx``` range indicate success. Codes in the ```4xx``` range indicate an error that failed given the information provided (e.g., a required parameter was omitted, incorrect parameter was specified, etc.). Codes in the ```5xx``` range indicate an error with the servers (these are rare).
+
+    Some ```4xx``` errors that could be handled programmatically (e.g., a resource was not found) include an error code that briefly explains the error reported.
+
+    The following sample error response indicates that the version key was missing from the request:
+
+
+    ```
+    {
+        "timestamp": "2023-03-09T10:08:56.246Z",
+        "message": "Validation of input failed",
+        "code": 3500,
+        "details": [
+            {
+                "fieldName": "versionKey",
+                "errorMessage": "must not be null"
+            }
+        ]
+    }
+    ```
+    <br>
+
+    | Property      | Description                                                                                                  |
+    | :---        |:-------------------------------------------------------------------------------------------------------------|
+    | timestamp      | UTC timestamp when the error occured                                                                         |
+    | message   | A more informative description of the error                                                                  |
+    | code   | An internal error code that can point to a certain issue and where that issue occurred                       |
+    | details   | (Optional)  A more specific description of the error. It also shows which exact field that caused the error. |
+
+
+    ## Changelog
+    This section is used to list the changes which have been made to the trace:original API.
+
+    ## Examples
+
+    Enigio provides a Postman collection to make it easy for customers to try out the API without any implementation. 
+    In order to be able to run the Postman collection you only need to fill in the server base URL, the username and the password.
+    </br></br>
+    <a href="trace_original_Fullnode_API.postman_collection.json" target="_blank" download>Download Postman collection</a>
+
+  title: trace:original Fullnode API reference
+  version: '3.3'
+  summary: 'Enigio Support: support@enigio.com  |  Enigio home: https://www.enigio.com  |  Public notary: https://traceoriginal.com'
+servers:
+  - url: https://example.com
+    description: Server URL
+tags:
+  - description: These endpoints are for creating and managing trace:original documents.
+    name: Documents
+    x-displayName: Documents
+  - description: These endpoints are for creating new key-pairs and using current key-pairs in the fullnode's keystore for signing.
+    name: Keys
+    x-displayName: Keys
+  - description: The envelope endpoints are for creating and managing trace:original envelopes. The purpose of an envelope is to securely transferring a selected set of documents to any recipient via email transfer. An envelope can contain both trace:original documents and other types of additional documents (PDF, JPG, etc.). When preparing an envelope, trace:original documents can be added as either originals or verifiable copies. The control of an original (possession) will transfer to the receiver after the envelope has been received and opened. Verifiable copies of originals will not change possession. To create an envelope, you must first generate a draft, which must then be sealed to produce the final envelope that should be sent. Until the draft is sealed, it remains editable, allowing updates and the inclusion or removal of trace:original and additional documents. The total number of documents in original documents, copies and additional documents must not exceed the limit of 25.
+    name: Envelopes
+    x-displayName: Envelopes
+  - description: These endpoints are used to manage required signatures and signatures fields on the documents.
+    name: Required signatures
+    x-displayName: Required signatures
+  - description: These endpoints can be used to check the entries available in this fullnode local ledger.
+    name: Ledger
+    x-displayName: Ledger
+  - description: These endpoints are meant to help with creating reports that keep track of trace:original documents managed by this fullnode, and the users who have managed the documents.
+    name: Reports
+    x-displayName: Reports
+  - name: E-mail notifications
+    description: These endpoints are for managing notification recipients for trace:original.
+    x-displayName: E-mail notifications
+  - name: Webhooks
+    description: |
+      These endpoints are used to manage API webhooks.
+      A webhook can only be registered once per URL. Whenever an operation is performed on a document within
+      this node’s document store, all registered webhook URLs subscribed to that specific event will receive
+      an HTTP POST request containing the following payload:
+
+      Example payload for webhook message sent without signatures in the payload if signature method is set to ```NONE```:
+
+      Payload delivered as plain JSON with Content-Type: ```application/json```
+
+      ```
+      {
+          "messageId":"019a36a9-b031-7001-8348-2cc71e288d4a",
+          "traceOriginalId":"1ff401aa69d511402c452c100cfa63afe9bbf029d1b216303f779e09508118f7",
+          "draftId":"draft_558915817d501e2487381d769572a49e22ab8cb0b84bab1137107f3421",
+          "eventType":"CREATE",
+          "documentCode":"ENV",
+          "reference":"Ref 0123456789",
+          "documentType":"Envelope"
+      }
+      ```
+
+      Example payload for webhook message signed using JSON Web Signature (JWS) standard (RFC 7515)
+      if signature method is set to ```JWS```:
+
+      Payload delivered as JWT with Content-Type: ```application/jwt```
+
+      ```
+      eyJraWQiOiIwMTlhMDVkMS0wNWUxLTc3ODctOTMwYS0zOGZkYjdlMTk5MDEiLCJhbGciOiJFUzI1NiJ9.eyJtZXNzYWdlSWQiOiI
+      wMTlhMzZhOS1iMDMxLTcwMDEtODM0OC0yY2M3MWUyODhkNGEiLCJ0cmFjZU9yaWdpbmFsSWQiOiIxZmY0MDFhYTY5ZDUxMTQwMmM
+      0NTJjMTAwY2ZhNjNhZmU5YmJmMDI5ZDFiMjE2MzAzZjc3OWUwOTUwODExOGY3IiwiZHJhZnRJZCI6ImRyYWZ0XzU1ODkxNTgxN2Q
+      1MDFlMjQ4NzM4MWQ3Njk1NzJhNDllMjJhYjhjYjBiODRiYWIxMTM3MTA3ZjM0MjEiLCJldmVudFR5cGUiOiJDUkVBVEUiLCJkb2N
+      1bWVudENvZGUiOiJFTlYiLCJyZWZlcmVuY2UiOiJSZWYgMDEyMzQ1Njc4OSIsImRvY3VtZW50VHlwZSI6IkVudmVsb3BlIn0.q7F
+      Avk9T8hBsaaUMzBkoVUgiqGKo5Pu3QNE8-l_1zGTHwvNOSYl26tuaYwpnRvJY5T0oZLsW-_dCTBearonaSA
+      ```
+
+      The JWT follows the JWS Compact Serialization format, consisting of three dot-separated, Base64URL-encoded components: header, payload, and signature.
+
+      - Header: Contains ```'alg'``` which is always set to ```ES256``` and ```'kid'``` (key ID) e.g. ```4029a646-9fb2-42a5-8e03-66c336461ac2```
+      - Payload: Contains webhook event data
+      - Signature: ```ES256``` signature of header and payload
+
+      Receivers should verify the signature using the JWKS endpoint. Public keys for signature verification are
+      available at: `https://example.com/.well-known/jwks.json`
+
+      Example response:
+
+      ```
+      {
+          "keys": [
+              {
+                  "kty":"EC",
+                  "use":"sig",
+                  "crv":"P-256",
+                  "kid":"019a05d1-05e1-7787-930a-38fdb7e19901",
+                  "x":"oh9xQ8uqNVz7wvhrN2fsWG5IPHgruOJg52chzZIr-q4",
+                  "y":"TdbfXOjeR16sJnubBeH4ZvVHgMIaWF_n7Dng0onBnP4",
+                  "iat":1761034175
+              }
+          ]
+      }
+      ```
+
+      List of event types using webhook API:
+
+      - ```CREATE``` - Document or envelope created.
+      - ```AMENDMENT``` - Document amended.
+      - ```TRANSFER_INITIATED``` - Transfer initiated for document or envelope.
+      - ```TRANSFER``` - Document transferred.
+      - ```TRANSFER_CANCELLED``` - Transfer cancelled by the transferer.
+      - ```TRANSFER_REJECTED``` - Transfer rejected by the transferee.
+      - ```INVALIDATE``` - Document or envelope invalidated.
+      - ```FULLY_SIGNED``` - All pending signatures for this document have been signed.
+      - ```PARTIALLY_SIGNED``` - One of the pending signatures has been signed but there are still pending signatures for the document.
+      - ```SIGNATURE_REJECTED``` - Signature rejected by the signer.
+      - ```SIGNATURE``` - A signature is added to the document but the document is not owned by this node so it isn't possible to determine more specific event.
+      - ```CHANGE_TO_PAPER``` - Document changed to other electronic original medium using secure MLETR compliant process. The trace:original document is no longer the current original the new electronic medium is the current original.
+      - ```CREATE_FROM_PAPER``` - Document created from paper using secure MLETR compliant process, the paper is no longer the original the trace:original document is now the current original.
+      - ```CHANGE_TO_MEDIUM``` - Document changed to other electronic original medium using secure MLETR compliant process. The trace:original document is no longer the current original the new electronic medium is the current original.
+      - ```CREATE_FROM_MEDIUM``` - Document created from other electronic original medium using secure MLETR compliant process. The other electronic medium is no longer the current original, the created trace:original document is the current original.
+      - ```WITHDRAW``` - Document withdrawn from the document storage of this node.
+      - ```UPLOAD``` - Document uploaded to the document storage of this node.
+    x-displayName: Webhooks
+  - name: API callbacks (Deprecated)
+    description: |
+      These endpoints are deprecated and will not be supported after 2026-11-01.
+
+      These endpoints are for managing API callback URLs. The callback URLs only need to be registered once
+      and every time an operation has been done on any document in the document store of this node the
+      callback URLs will be called with POST method and the following payload:
+
+      ```
+          {
+            "messageId": "f223b9c2-9a01-4705-b385-7aa5132434f1",
+            "eventList": [
+              {
+                  "traceOriginalId": "f108965b08209baf365b6c538b7452dd5163ed440d4af78bb2a44be1b18759e7",
+                  "eventType": "SIGNATURE_FULLY"
+              }
+            ]
+          }
+      ```
+
+      List of event types:
+        AMENDMENT, TRANSFER, INVALIDATE, SIGNATURE_REJECTED, SIGNATURE_FULLY, SIGNATURE_PARTIAL
+    x-displayName: API callbacks (Deprecated)
+paths:
+  /api/v1/documents:
+    post:
+      description: This endpoint creates a new digital original document. The content for the created document should always follow the schemas provided in the request.
+      operationId: createDocument
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDocumentRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentOperationResponse'
+          description: Document created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Create a new document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/metadata:
+    get:
+      description: Returns a list of the document metadata for documents stored in the document store of this node. The list is sorted by version creation date, with the most recently created or updated documents appearing first and paginated with a default page size of 20.
+      operationId: getDocumentMetadataList
+      parameters:
+        - in: query
+          name: perPage
+          required: false
+          schema:
+            type: integer
+            format: int32
+            default: 20
+            maximum: 100
+        - in: query
+          name: page
+          required: true
+          schema:
+            type: integer
+            format: int32
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedDocumentMetadataResponse'
+          description: Returns a list of document metadata
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Retrieve a list of document metadata
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/upload:
+    post:
+      description: Upload a trace:original document which will be stored in the document store of this fullnode. The document has to be a current valid original.
+      operationId: uploadDocument
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadDocumentRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/DocumentOperationResponse'
+          description: Document uploaded
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Upload a document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/validate:
+    post:
+      description: |-
+        The original document or proof of ownership document to be validated is provided in the request body.
+        A validation result and optional details are returned in the response body. Result can be one of the following:
+        - VALID: The validation of the document has been verified successfully with the fullnode local ledger. This is a current original.
+        - NOT_VALID: The document is not valid.
+        - OUTDATED: The document is not up to date. There is a later version of the document
+        - CANNOT_VALIDATE: The document has data which is not in the fullnode copy of the public ledger.
+        details (optional): If the result is not valid, a string specifying the error will be returned here.
+      operationId: validateDocument
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateDocumentRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateDocumentResponse'
+          description: Validation result
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Validate a document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}:
+    delete:
+      description: This endpoint is called to withdraw a trace:original document from the document store of this node. The document is still an original, but to not lose this original it is critical to fetch and store the document somewhere else if it should be possible to upload it later and continue to manage it at the node. If the document is withdrawn without making a backup the original will be lost.
+      operationId: withdrawDocument
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Document withdrawn
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Document was not found
+      summary: Withdraw a document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+    get:
+      description: A call to this endpoint will return the latest version of a trace:original document corresponding to the given id.
+      operationId: downloadDocument
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DownloadDocumentResponse'
+          description: Returns the document
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+        '404':
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/DownloadDocumentResponse'
+          description: Document was not found
+      summary: Retrieve a document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/amend:
+    post:
+      description: This endpoint adds new content as an amendment to the end of the current latest version of an existing trace:original document.
+      operationId: amendDocument
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AmendDocumentRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentOperationResponse'
+          description: Document amended
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Document was not found
+      summary: Amend a document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/attachments:
+    get:
+      description: This endpoint will get all attachment metadata for the document.
+      operationId: getAttachmentsForOriginal
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AttachmentShortResponse'
+          description: Attachments fetched.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get all attachment metadata for the document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/attachments/{attachmentHash}:
+    get:
+      description: This endpoint will get the given attachment from that document.
+      operationId: getAttachmentForDocument
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+        - description: The attachment hash of the attachment in that document.
+          in: path
+          name: attachmentHash
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetAttachmentResponse'
+          description: Attachments fetched.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get a single attachment for the document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/content:
+    get:
+      description: 'A call to this endpoint will return all content for the given document. '
+      operationId: getContent
+      parameters:
+        - description: The trace:original ID of an existing document
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ContentResponse'
+          description: List of content returned
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Document was not found
+      summary: Get all content for a document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/custom-data:
+    get:
+      description: 'A call to this endpoint will return all custom data for the given document. '
+      operationId: getCustomData
+      parameters:
+        - description: The trace:original ID of an existing document
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CustomDataResponse'
+          description: List of custom data returned
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Document was not found
+      summary: Get all custom data for a document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/invalidate:
+    post:
+      description: This endpoint will invalidate the legal current stature of the document and put it in its end state. No one is in possession, no one can add or update anymore. But the last version of the document is still possible to validate against the ledger.
+      operationId: invalidateDocument
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvalidateDocumentRequest'
+        required: true
+      responses:
+        '200':
+          description: Document invalidated
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Document was not found
+      summary: Invalidate a document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/metadata:
+    get:
+      description: A call to this endpoint will return the metadata for a document corresponding to the given id.
+      operationId: getDocumentMetadata
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentMetadataResponse'
+          description: Returns the metadata for a document
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+        '404':
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/DocumentMetadataResponse'
+          description: Document was not found
+      summary: Retrieve metadata for a document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/proof-of-possession:
+    post:
+      description: This method returns a proof of possession document which can be used by others to validate ownership of a specific trace:original document. The proof of possession will be generated in YAML format corresponding to the current proof of ownership schema published at https://schema.traceoriginal.com in the language based on the locale in the request which can either be "en" or "sv".
+      operationId: createProofOfPossession
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProofOfPossessionRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateProofOfPossessionResponse'
+          description: Proof of possession created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Create a proof of possession
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/send:
+    post:
+      description: This endpoint is called to send a trace:original document to an other Fullnode. The receiving node should have created a Fullnode user with which this node can login to send a document. This endpoint can be used when you want to transfer in two steps with first transfer so the receiver can verify the transfer and then send the document.
+      operationId: sendDocument
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendDocumentRequest'
+        required: true
+      responses:
+        '200':
+          description: Document sent
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Document was not found
+      summary: Send a document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/structured-data:
+    get:
+      description: 'A call to this endpoint will return the structured data in YAML format for the given document. '
+      operationId: getStructuredData
+      parameters:
+        - description: The trace:original ID of an existing document
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetStructuredDataResponse'
+          description: Structured data returned
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Document was not found
+      summary: Get structured data for a document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/technical-details:
+    get:
+      description: 'A call to this endpoint will return a list of all the technical details for the given document. '
+      operationId: getAllTechnicalDetails
+      parameters:
+        - description: The trace:original ID of an existing document
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TechnicalDetailsResponse'
+          description: List of technical details returned
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Document was not found
+      summary: Get all technical details for a document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/technical-details/latest:
+    get:
+      description: 'A call to this endpoint will return the latest technical details for the given original. '
+      operationId: getLatestTechnicalDetails
+      parameters:
+        - description: The trace:original ID of an existing original
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TechnicalDetailsDTO'
+          description: Latest technical details returned
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get latest technical details for an original
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/transfer:
+    post:
+      description: This endpoint is called to transfer a trace:original document to a new owner key.
+      operationId: transferDocument
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferDocumentRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentOperationResponse'
+          description: Document transferred
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+        '404':
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/DocumentOperationResponse'
+          description: Document was not found
+      summary: Transfer a document
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/transfer-by-email:
+    get:
+      description: This endpoint gets the transfer entity from the document store that is in progress.
+      operationId: getTransferByTraceOriginalId
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+          description: Transfer returned.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get the transfer in progress.
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+    post:
+      description: This endpoint will initiate the transfer of the original document to the stated recipient via email ceremony.
+      operationId: transferByEmail
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferByEmailRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json: {}
+          description: Transfer initiated.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Initiate transfer of document original via email
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{traceOriginalId}/transfer-handover:
+    post:
+      description: This endpoint transfers the ownership for the original to another node. A so called "node to node" transfer. The receiver node needs to have provided you with a Fullnode user to access direct transfer into the node.
+      operationId: transferHandover
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferHandoverRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferOwnershipRestResponse'
+          description: Transfer completed.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Transfer ownership of original to a public key belonging to another node.
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/documents/{transferId}/transfer-by-email:
+    delete:
+      description: This endpoint will cancel the initiated transfer of document via email if the recipient has not already accepted and opened the Envelope. In the latter case the cancel will fail.
+      operationId: cancelTransfer
+      parameters:
+        - description: The transfer ID that was created when initiating transfer ownership.
+          in: path
+          name: transferId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json: {}
+          description: Transfer cancelled.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Cancel a document transfer in progress.
+      tags:
+        - Documents
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/envelopes/additional-documents/{fileId}/download:
+    get:
+      description: This endpoint will return the additional document.
+      operationId: downloadAdditionalDocument
+      parameters:
+        - description: The file identifier of an additional document.
+          example: c410f92c-4c75-4467-a93a-e1152d694ee5
+          in: path
+          name: fileId
+          required: true
+          schema:
+            type: string
+            example: 3f11cc28-4e4c-4976-8b4b-7f212ae812e5
+      responses:
+        '200':
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          description: Additional document downloaded.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Download additional document
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/envelopes/additional-documents/{fileId}/metadata:
+    get:
+      description: This endpoint will return metadata for an additional document.
+      operationId: getAdditionalDocumentMetadata
+      parameters:
+        - description: The file identifier of an additional document.
+          example: c410f92c-4c75-4467-a93a-e1152d694ee5
+          in: path
+          name: fileId
+          required: true
+          schema:
+            type: string
+            example: 3f11cc28-4e4c-4976-8b4b-7f212ae812e5
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdditionalDocumentResponse'
+          description: Additional document metadata fetched.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get additional document metadata
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/envelopes/drafts:
+    post:
+      description: 'This endpoint prepares a new trace:original envelope draft. An envelope can contain both trace:original documents and other types of additional documents (PDF, JPG, etc.). The trace:original documents can be added as either originals or verifiable copies. The control of an original (possession) will transfer to the receiver after the envelope has been received and opened. Verifiable copies of originals will not change possession. Non original documents can be added by using the additional document endpoints. <b>Note: Additional documents need to be added before the envelope is sealed.</b>'
+      operationId: createEnvelopeDraft
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnvelopeDraftRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeDraftResponse'
+          description: Envelope draft created
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Create a new envelope draft
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/envelopes/drafts/{draftId}:
+    delete:
+      description: This endpoint will delete an envelope draft.
+      operationId: deleteEnvelopeDraft
+      parameters:
+        - description: The envelope draft ID.
+          in: path
+          name: draftId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Envelope draft removed
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Delete an envelope draft
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+    get:
+      description: This endpoint retrieves a trace:original envelope draft.
+      operationId: getEnvelopeDraft
+      parameters:
+        - description: The envelope draft ID.
+          in: path
+          name: draftId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeDraft'
+          description: Envelope draft retrieved
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get an envelope draft
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+    post:
+      description: This endpoint updates a trace:original envelope draft.
+      operationId: updateEnvelopeDraft
+      parameters:
+        - description: The envelope draft ID.
+          in: path
+          name: draftId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnvelopeDraftRequest'
+        required: true
+      responses:
+        '200':
+          description: Envelope draft updated
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Update an envelope draft
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/envelopes/drafts/{draftId}/additional-documents:
+    post:
+      description: 'This endpoint adds an additional document to an envelope draft. Note: Additional documents cannot be added once the envelope is sealed. The total number of documents in original documents, copies and additional documents must not exceed the limit of 25.'
+      operationId: uploadAdditionalDocumentForDraft
+      parameters:
+        - description: The file name of the additional document
+          in: header
+          name: File-Name
+          required: true
+          schema:
+            type: string
+            description: The file name of the additional document
+        - description: The SHA-256 hash of the additional document
+          in: header
+          name: File-Hash
+          required: true
+          schema:
+            type: string
+            description: The SHA-256 hash of the additional document
+        - description: Specifies the size of the request body in bytes
+          in: header
+          name: Content-Length
+          required: true
+          schema:
+            type: integer
+            format: int64
+            description: Specifies the size of the request body in bytes
+        - description: The envelope draft ID.
+          in: path
+          name: draftId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+        description: Binary file data
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadAdditionalDocumentResponse'
+          description: Additional document added
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Add an additional document to an envelope draft
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/envelopes/drafts/{draftId}/additional-documents/metadata:
+    get:
+      description: This endpoint will return metadata for all additional document associated with an envelope.
+      operationId: getAdditionalDocumentMetadataListForDraft
+      parameters:
+        - description: The envelope draft ID.
+          in: path
+          name: draftId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdditionalDocumentResponse'
+          description: List of additional document metadata fetched.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get metadata for all additional document associated with an envelope
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/envelopes/drafts/{draftId}/additional-documents/{fileId}:
+    delete:
+      description: This endpoint will remove an additional document from an envelope draft.
+      operationId: deleteAdditionalDocument
+      parameters:
+        - description: The envelope draft ID.
+          in: path
+          name: draftId
+          required: true
+          schema:
+            type: string
+        - description: The file identifier of an additional document.
+          example: c410f92c-4c75-4467-a93a-e1152d694ee5
+          in: path
+          name: fileId
+          required: true
+          schema:
+            type: string
+            example: 3f11cc28-4e4c-4976-8b4b-7f212ae812e5
+      responses:
+        '200':
+          description: Additional document removed.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Remove additional document from an envelope draft
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/envelopes/drafts/{draftId}/seal:
+    post:
+      description: This endpoint finalizes an envelope draft by creating an envelope original. A new trace:original ID will be returned in the response which needs to be used for further operations. The draft ID becomes invalid after this operation and cannot be used anymore.
+      operationId: createEnvelopeFromDraft
+      parameters:
+        - description: The envelope draft ID.
+          in: path
+          name: draftId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentOperationResponse'
+          description: Envelope sealed
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Seal an envelope draft
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/envelopes/{traceOriginalId}/metadata:
+    get:
+      description: A call to this endpoint will return the metadata for an envelope corresponding to the given id.
+      operationId: getEnvelopeMetadata
+      parameters:
+        - description: The trace:original ID of the envelope.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnvelopeMetadataResponse'
+          description: Envelope metadata retrieved
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Retrieve metadata for an envelope
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/envelopes/{traceOriginalId}/transfer-by-email:
+    get:
+      description: This endpoint retrieves the receiver entity of an envelope transfer that is in progress
+      operationId: getEnvelopeTransferByTraceOriginalId
+      parameters:
+        - description: The trace:original ID of the envelope.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferEnvelopeResponse'
+          description: Transfer returned.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get recipient of envelope transfer in progress
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+    post:
+      description: This endpoint will initiate the send of the envelope to the stated recipient via email ceremony.
+      operationId: transferEnvelopeByEmail
+      parameters:
+        - description: The trace:original ID of the document.
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferEnvelopeByEmailRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferEnvelopeByEmailResponse'
+          description: Transfer initiated.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Initiate envelope transfer via email
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/envelopes/{transferId}/transfer-by-email:
+    delete:
+      description: This endpoint will cancel the initiated transfer of Envelope via email if the recipient has not already accepted and opened the Envelope. In the latter case the cancel will fail.
+      operationId: cancelEnvelopeTransfer
+      parameters:
+        - description: The transfer ID that was created when initiating transfer ownership.
+          example: 7fa926d3-59ed-4294-a7f0-06024a57a6db
+          in: path
+          name: transferId
+          required: true
+          schema:
+            type: string
+            example: 3f11cc28-4e4c-4976-8b4b-7f212ae812e5
+      responses:
+        '200':
+          content:
+            application/json: {}
+          description: Transfer cancelled.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Cancel an envelope transfer in progress
+      tags:
+        - Envelopes
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/keys:
+    post:
+      description: This endpoint creates a new key pair in the key store and then returns the public key. This can then be used to sign data and public keys.
+      operationId: createKeyPair
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateKeyPairAndSignResponse'
+          description: Public key and public key signed with private key
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Create a new public key pair to sign data with.
+      tags:
+        - Keys
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/keys/sign/data:
+    post:
+      description: This endpoint signs the data using the private key paired with the public key. Returns both the signature and the public key of the private key that was used.
+      operationId: signDataWithPrivateKey
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignatureDataRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignedDataResponse'
+          description: Public key and signature
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Sign the data using private key.
+      tags:
+        - Keys
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/keys/sign/public-key:
+    post:
+      description: This endpoint signs the public key using the private key paired with the public key. Returns both the signature and the public key of the used private key.
+      operationId: signPublicKeyWithPrivateKey
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignaturePublicKeyRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignedDataResponse'
+          description: Public key and signature
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Sign the public key using the private key.
+      tags:
+        - Keys
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/ledger/entries/{traceOriginalId}:
+    get:
+      description: A call to this endpoint will return all ledger entries for the given ID
+      operationId: getLedgerEntries
+      parameters:
+        - description: The trace:original ID of an existing trace:original
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LedgerEntryDTO'
+          description: A list of ledger entries returned
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get all ledger entries for the given trace:original ID
+      tags:
+        - Ledger
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/ledger/entries/{traceOriginalId}/latest:
+    get:
+      description: A call to this endpoint will return the latest ledger entry for this trace:original.
+      operationId: getLatestLedgerEntry
+      parameters:
+        - description: The trace:original ID of an existing trace:original
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerEntryDTO'
+          description: A single ledger entry
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get only latest ledger entry of this trace:original
+      tags:
+        - Ledger
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/ledger/entries/{traceOriginalId}/operations:
+    get:
+      description: A call to this endpoint will return all ledger opertation type entries for the given ID
+      operationId: getLedgerOperationEntriesLookup
+      parameters:
+        - description: The trace:original ID of an existing trace:original
+          in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LedgerEntryOperationLookup'
+          description: A list of ledger operation entries.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get all ledger operation type entries for the given trace:original ID
+      tags:
+        - Ledger
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/reports/copies:
+    get:
+      description: By utilising this endpoint, a report can be generated that is derived from the metadata of all copies stored in this document store. Copies are documents that are possessed by a key that is not present in the keystore of this node. Additionally, the report provides information on the user who executed the most recent operation on the document on this node.
+      operationId: getCopiesReport
+      parameters:
+        - description: Start date of copies in report.
+          example: '2023-01-01'
+          in: query
+          name: fromDate
+          required: false
+          schema:
+            type: string
+            format: date
+        - description: End date of copies in report.
+          example: '2023-01-10'
+          in: query
+          name: toDate
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OriginalReportResponse'
+          description: List of copies
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get a report of copy documents
+      tags:
+        - Reports
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/reports/drafts:
+    get:
+      description: The output of this endpoint displays a report that presents metadata and user actions performed on drafts that are currently accessible in the document store of this particular node.
+      operationId: getDraftsReport
+      parameters:
+        - description: Start date of drafts in report.
+          example: '2023-01-01'
+          in: query
+          name: fromDate
+          required: false
+          schema:
+            type: string
+            format: date
+        - description: End date of drafts in report.
+          example: '2023-01-10'
+          in: query
+          name: toDate
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DraftReportResponse'
+          description: List of drafts
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get a report of draft documents
+      tags:
+        - Reports
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/reports/invalidated:
+    get:
+      description: Upon accessing this endpoint, a report is generated that is based on the metadata of all invalidated documents stored in this document store. Documents are considered invalidated if they have been marked as such on the ledger, indicating that no further operations can be performed on the original document. The report also includes information on the user who invalidated the document on the node.
+      operationId: getInvalidatedReport
+      parameters:
+        - description: Start date of invalidated documents in report.
+          example: '2023-01-01'
+          in: query
+          name: fromDate
+          required: false
+          schema:
+            type: string
+            format: date
+        - description: End date of invalidated documents in report.
+          example: '2023-01-10'
+          in: query
+          name: toDate
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OriginalReportResponse'
+          description: List of invalidated documents
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get a report of invalidated documents
+      tags:
+        - Reports
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/reports/originals:
+    get:
+      description: Accessing this endpoint generates a report that is created using metadata from all documents that are possessed by a key present in this node's keystore, and have not been marked as invalidated. Furthermore, the report indicates the user who created the document, in case it was originally created on this node.
+      operationId: getOriginalsReport
+      parameters:
+        - description: Start date of documents in report.
+          example: '2023-01-01'
+          in: query
+          name: fromDate
+          required: false
+          schema:
+            type: string
+            format: date
+        - description: End date of documents in report.
+          example: '2023-01-10'
+          in: query
+          name: toDate
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OriginalReportResponse'
+          description: List of documents
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get a report of documents
+      tags:
+        - Reports
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/reports/transfers:
+    get:
+      description: By accessing this endpoint, a report is generated that provides details regarding the documents and the involved parties in transfers that have occurred on this node. The report includes information on the initiator of the transfer, as well as the name and owner key of the receiving party, who could be located on this node or a different one.
+      operationId: getTransfersReport
+      parameters:
+        - description: Start date of transfers in report.
+          example: '2023-01-01'
+          in: query
+          name: fromDate
+          required: false
+          schema:
+            type: string
+            format: date
+        - description: End date of transfers in report.
+          example: '2023-01-10'
+          in: query
+          name: toDate
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TransferReportResponse'
+          description: List of transfers
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get a report of transferred documents
+      tags:
+        - Reports
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/reports/user-operations:
+    get:
+      description: By utilising this endpoint, a list can be obtained that displays the users who have executed a specific type of user operation during the requested time period.
+      operationId: getUserOperationsByTypeAndTimePeriod
+      parameters:
+        - description: Start date of user operations in the report.
+          example: '2023-01-01'
+          in: query
+          name: fromDate
+          required: true
+          schema:
+            type: string
+            format: date
+        - description: End date of user operations in the report.
+          example: '2023-01-10'
+          in: query
+          name: toDate
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserOperationResponse'
+          description: List of withdrawn documents
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get a report of user operations by type between two dates
+      tags:
+        - Reports
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/reports/withdrawals:
+    get:
+      description: Upon calling this endpoint, a list is returned that contains details on documents that have been withdrawn from this document store, along with information on the user who withdrew them.
+      operationId: getWithdrawalsReport
+      parameters:
+        - description: Start date of withdrawals in report.
+          example: '2023-01-01'
+          in: query
+          name: fromDate
+          required: false
+          schema:
+            type: string
+            format: date
+        - description: End date of withdrawals in report.
+          example: '2023-01-10'
+          in: query
+          name: toDate
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WithdrawnReportResponse'
+          description: List of withdrawn documents
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get a report of withdrawn documents
+      tags:
+        - Reports
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/link/default-expires-in-days:
+    get:
+      description: This endpoint is used to return the number of days the link is valid after it is created depending on the configuration of this node.
+      operationId: getDefaultLengthOfValidityInDaysForSignatureLinks
+      responses:
+        '200':
+          content:
+            '*/*':
+              schema:
+                type: integer
+                format: int32
+          description: Number of days returned ok.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get the default number of days a required signature link is valid for
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/link/disable/{requiredSignatureLink}:
+    put:
+      description: This endpoint is used to disable a required signature link.
+      operationId: disableRequiredSignature
+      parameters:
+        - in: path
+          name: requiredSignatureLink
+          required: true
+          schema:
+            type: string
+            example: 3f11cc28-4e4c-4976-8b4b-7f212ae812e5
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequiredSignatureDTO'
+          description: Required signature disabled.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Disable a required signature
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/link/renew/{requiredSignatureLink}:
+    put:
+      description: This endpoint is used to renew an expired required signature link by creating a new unique signing link and setting a new optional expiration time.
+      operationId: renewRequiredSignature
+      parameters:
+        - in: path
+          name: requiredSignatureLink
+          required: true
+          schema:
+            type: string
+            example: 3f11cc28-4e4c-4976-8b4b-7f212ae812e5
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenewRequiredSignature'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequiredSignatureDTO'
+          description: Required signature returned.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Renew a required signature
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/link/{requiredSignatureLink}:
+    get:
+      description: This endpoint is used to get a required signature for a unique signing link. There is an optional parameter status, if for example only required signatures with only a certain status is wanted. If left empty default is to fetch all.
+      operationId: getRequiredSignatureForLink
+      parameters:
+        - in: path
+          name: requiredSignatureLink
+          required: true
+          schema:
+            type: string
+            example: 3f11cc28-4e4c-4976-8b4b-7f212ae812e5
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            enum:
+              - PENDING
+              - SIGNED
+              - REJECTED
+              - NO_SIGNATURE
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequiredSignatureDTO'
+          description: Required signature returned ok.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get a required signature by unique signing link id
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/original/{traceOriginalId}:
+    get:
+      description: This endpoint is used to get all required signatures for a document. There is a optional parameter status, if for example only required signatures with a certain status is wanted. If left empty default is to fetch all.
+      operationId: getRequiredSignaturesForDocument_1
+      parameters:
+        - in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            enum:
+              - PENDING
+              - SIGNED
+              - REJECTED
+              - NO_SIGNATURE
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RequiredSignatureDTO'
+          description: A set of all required signatures.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get required signatures for document
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+    post:
+      description: This endpoint is called to add a set of required signatures to an original.All of these signatures have to be signed for the original to be considered signed.
+      operationId: addRequiredSignatures_1
+      parameters:
+        - in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/AddRequiredSignature'
+        required: true
+      responses:
+        '200':
+          description: Required signature added.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Add required signatures
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/original/{traceOriginalId}/status:
+    get:
+      description: This endpoint is used to get the signing status for a document. If all required signatures are signed then this endpoint will return status SIGNED. If there is any pending required signature, the response will be PENDING. If there is any rejected required signature, the response will be REJECTED. If there is no signature added to the document then the status will be NO_SIGNATURE.
+      operationId: getStatusForDocument
+      parameters:
+        - in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: string
+                enum:
+                  - PENDING
+                  - SIGNED
+                  - REJECTED
+                  - NO_SIGNATURE
+          description: Status returned ok.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get signing status for document
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/send-bulk-sign-emails:
+    post:
+      description: 'This endpoint will send a bulk sign email to the email addresses provided as an array of string. It returns email addresses that the service failed sending to as a string array. '
+      operationId: sendBulkSignEmails_1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendBulkEmailRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  type: string
+                uniqueItems: true
+          description: Emails sent ok.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Send bulk sign e-mail for an array of email addresses
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/send-bulk-sign-emails-for-pending:
+    post:
+      description: 'This endpoint will send a bulk sign email to all email addresses found for signers in the document store with the given status. It returns email addresses that the service failed sending to as a string array. '
+      operationId: sendBulkSignEmailToRequiredSignatureSignersEmailsWithSignatureStatus_1
+      responses:
+        '200':
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  type: string
+                uniqueItems: true
+          description: Emails sent ok.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Send bulk sign e-mail for required signatures with status
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/send-sign-email:
+    post:
+      description: |-
+        Send signing link emails to the potential signers of the given required signature which have not yet received any signing link email.
+        The flag force can be set to true to resend signing-link emails to all potential signers of the required signature.
+        Locale is set to decide the desired language, currently only available in Swedish and English, for the signing-link email.
+      operationId: sendSignEmailForSigningLink
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendSignEmailByLinkIdRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  type: string
+                uniqueItems: true
+          description: Emails sent ok.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: 'Send a signing email to the potential signers of the provided signing link id. '
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/send-sign-emails:
+    post:
+      description: |-
+        Send signing link emails to the potential signers of the given trace:original which have not yet received any signing link email.
+        The flag force can be set to true to resend signing-link emails to all potential signers of the original.
+        Locale is set to decide the desired language, currently only available in Swedish and English, for the signing-link email.
+      operationId: sendSignEmailForTraceOriginal_1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendSignEmailRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  type: string
+                uniqueItems: true
+          description: Email sent ok.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: 'Send a signing email to the potential signers of the provided trace:original ID. '
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/sign/{traceOriginalId}:
+    get:
+      description: This endpoint will return all signatures that have been signed onto required signatures for a certain document. The signatures will therefore only exist where the required signature status is SIGNED or REJECTED.
+      operationId: getSignaturesForOriginal
+      parameters:
+        - in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Signature'
+          description: Signatures returned ok.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get signatures for original
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/signer-emails:
+    get:
+      description: This endpoint will return all email addresses for signers in the document store that have the same status as given status. It shows the email address as an array of strings.
+      operationId: getRequiredSignatureSignersEmailsWithSignatureStatus
+      parameters:
+        - in: query
+          name: status
+          required: true
+          schema:
+            type: string
+            enum:
+              - PENDING
+              - SIGNED
+              - REJECTED
+              - NO_SIGNATURE
+      responses:
+        '200':
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  type: string
+          description: Emails returned ok.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get e-mails for required signatures with status
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/signer/{eid}:
+    get:
+      description: This endpoint will get all documents where a signer with eID has a required signature where they could sign. There is an optional parameter status to only show those documents where the required signature has certain required signature status.
+      operationId: getDocumentIdsForSigner
+      parameters:
+        - in: path
+          name: eid
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            enum:
+              - PENDING
+              - SIGNED
+              - REJECTED
+              - NO_SIGNATURE
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+          description: trace:original IDs returned ok.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get all document IDs for a signer
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/signers:
+    get:
+      description: 'This endpoint will return all signers in the document store that have the same status as given status. It shows the signers according to the response structure. '
+      operationId: getSigners_1
+      parameters:
+        - in: query
+          name: status
+          required: false
+          schema:
+            type: string
+            enum:
+              - PENDING
+              - SIGNED
+              - REJECTED
+              - NO_SIGNATURE
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SignerNameIdentification'
+          description: Signers returned ok.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Get all signers with status
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/{traceOriginalId}:
+    delete:
+      description: This endpoint will clear all unsigned (pending) required signatures that are currently present on an original.
+      operationId: clearPendingRequiredSignatures_1
+      parameters:
+        - in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: All pending required signatures removed from document.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Clear pending required signatures
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/required-signatures/{traceOriginalId}/{requiredSignatureId}:
+    delete:
+      description: 'This endpoint is used to completely remove a required signature from an original. '
+      operationId: deleteRequiredSignature
+      parameters:
+        - in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: requiredSignatureId
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Required signature removed ok.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Delete a required signature
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+    put:
+      description: This endpoint is called to update one single required signature with the matching requiredSignatureId.The required signature has to be a required signature that is made for the matching trace:original ID sent in.The required signature data should follow the corresponding RequiredSignatureDTO. It will completelyoverwrite previous values so old values that are wanted need to be included.
+      operationId: updateRequiredSignature
+      parameters:
+        - in: path
+          name: traceOriginalId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: requiredSignatureId
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRequiredSignature'
+        required: true
+      responses:
+        '200':
+          description: Required signature updated ok.
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Error with description
+      summary: Update a required signature
+      tags:
+        - Required signatures
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/notifications/webhooks/{id}:
+    get:
+      tags:
+        - Webhooks
+      summary: Get webhook by ID
+      description: Retrieves the details of a specific webhook registration
+      operationId: getWebhookById
+      parameters:
+        - name: id
+          in: path
+          description: Unique identifier of the webhook
+          required: true
+          schema:
+            type: string
+            description: Unique identifier of the webhook
+            example: 0199e335-a8a8-7ba3-a08a-8a1648589790
+          example: 0199e335-a8a8-7ba3-a08a-8a1648589790
+      responses:
+        '200':
+          description: Webhook found and returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookResponse'
+        '400':
+          description: Failed to retrieve webhook
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+    put:
+      tags:
+        - Webhooks
+      summary: Update webhook
+      description: Updates an existing webhook registration.
+      operationId: updateWebhook
+      parameters:
+        - name: id
+          in: path
+          description: Unique identifier of the webhook
+          required: true
+          schema:
+            type: string
+            description: Unique identifier of the webhook
+            example: 0199e335-a8a8-7ba3-a08a-8a1648589790
+          example: 0199e335-a8a8-7ba3-a08a-8a1648589790
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookUpdateRequest'
+        required: true
+      responses:
+        '200':
+          description: Webhook successfully updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookResponse'
+        '400':
+          description: Failed to update webhook
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+    delete:
+      tags:
+        - Webhooks
+      summary: Delete webhook
+      description: Permanently deletes a webhook registration. Once deleted, no further events will be sent to this webhook
+      operationId: deleteWebhook
+      parameters:
+        - name: id
+          in: path
+          description: Unique identifier of the webhook to delete
+          required: true
+          schema:
+            type: string
+            description: Unique identifier of the webhook to delete
+            example: 0199e335-a8a8-7ba3-a08a-8a1648589790
+          example: 0199e335-a8a8-7ba3-a08a-8a1648589790
+      responses:
+        '200':
+          description: Webhook deleted
+        '400':
+          description: Failed to delete webhook
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Webhook not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/notifications/webhooks:
+    get:
+      tags:
+        - Webhooks
+      summary: Fetch all registered webhooks
+      description: Retrieves a list of all registered webhooks. If no webhook is registered it will respond with no content.
+      operationId: getWebhooks
+      responses:
+        '200':
+          description: List of webhooks retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                $ref: '#/components/schemas/WebhookResponse'
+        '204':
+          description: No webhooks registered
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WebhookResponse'
+        '400':
+          description: Bad Request
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+    post:
+      tags:
+        - Webhooks
+      summary: Register a new webhook
+      description: Creates a new webhook subscription for receiving event notifications when an update is made to a trace:original document which exists in the document storage of this node.
+      operationId: registerWebhook
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookRegistrationRequest'
+        required: true
+      responses:
+        '200':
+          description: Webhook successfully registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookResponse'
+        '400':
+          description: Failed to register webhook
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Webhook with the same URL is already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/notifications/email/{traceOriginalId}:
+    get:
+      tags:
+        - E-mail notifications
+      summary: Get all emails for active recipients on trace:original
+      description: Calling this endpoint will return all registered notification recipients for this trace:original
+      operationId: getAllEmailWatchers_1
+      parameters:
+        - name: traceOriginalId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Found registered watchers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationWatchers'
+        '204':
+          description: Did not find any watchers
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/NotificationWatchers'
+        '400':
+          description: Bad Request
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+    post:
+      tags:
+        - E-mail notifications
+      summary: Update notification recipients for trace:original
+      description: Calling this endpoint will update the notification recipients for the trace:original. All emails and events in the body will be updated or created if it does not exists. It will also handle removing any notification recipients not included in this list, but which do exist in the notification list. Calling this endpoint with empty list has the same effect as calling with delete, also including no event for the recipient will trigger removal from the list of watchers.
+      operationId: registerEmailWatchers_1
+      parameters:
+        - name: traceOriginalId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationWatchers'
+        required: true
+      responses:
+        '200':
+          description: Request processed without error
+        '400':
+          description: Bad Request
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+    delete:
+      tags:
+        - E-mail notifications
+      summary: DEPRECATED - Remove notification recipients for trace:original
+      description: Deprecated endpoint, please switch to POST endpoint /api/v1/notifications/email/delete/{traceOriginalId}.Payload and functionality is the same
+      operationId: deleteEmailWatchers_1
+      parameters:
+        - name: traceOriginalId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationWatchers'
+        required: true
+      responses:
+        '200':
+          description: Request processed without error
+        '400':
+          description: Bad Request
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      deprecated: true
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/notifications/email/delete/{traceOriginalId}:
+    post:
+      tags:
+        - E-mail notifications
+      summary: Remove notification recipients for trace:original
+      description: Calling this endpoint will remove all notification recipients included in the body. If list is empty then it will remove all notification recipients from the trace:original document watcher list.
+      operationId: deleteEmailWatchersPost
+      parameters:
+        - name: traceOriginalId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationWatchers'
+        required: true
+      responses:
+        '200':
+          description: Request processed without error
+        '400':
+          description: Bad Request
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/notifications/callback/delete:
+    post:
+      tags:
+        - API callbacks (Deprecated)
+      summary: Delete registered URLs
+      description: Call this endpoint with a list of callback URLs to be removed from notifications list.
+      operationId: deleteCallbackApis
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CallbackUrls'
+        required: true
+      responses:
+        '204':
+          description: Request processed without error
+        '400':
+          description: Bad Request
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      deprecated: true
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/notifications/callback:
+    get:
+      tags:
+        - API callbacks (Deprecated)
+      summary: Fetch all registered URLs
+      description: Calling this endpoint will return any URL registered for callback with this node. If no URL is registered it will respond with no content.
+      operationId: getCallbackApis
+      responses:
+        '200':
+          description: Found URLs registered
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/CallbackUrls'
+        '204':
+          description: No URLs registered
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/CallbackUrls'
+        '400':
+          description: Bad Request
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      deprecated: true
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+    post:
+      tags:
+        - API callbacks (Deprecated)
+      summary: Registers URL for API callback
+      description: Post to this endpoint will register URLs to call when an update is made to a trace:original document at this node. It will add all valid URL's and will include a response with the status of all URLs included in the body, where it flags any URL that is not valid.
+      operationId: registerCallbackApis
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CallbackUrls'
+        required: true
+      responses:
+        '200':
+          description: Some of the URLs added
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/CallbackStatus'
+        '204':
+          description: Successfully added all URLs
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/CallbackStatus'
+        '400':
+          description: Failed to add any URL's
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      deprecated: true
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+  /api/v1/notifications/bulk/sign:
+    post:
+      tags:
+        - Required signatures
+      summary: Send bulk sign e-mail for an array of email addresses
+      description: 'This endpoint will send a bulk sign email to the email addresses provided as an array of string. It returns email addresses that the service failed sending to as a string array. '
+      operationId: sendBulkSignEmailToEmails_1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendBulkEmailsRequest'
+        required: true
+      responses:
+        '200':
+          description: Emails sent ok.
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  type: string
+                uniqueItems: true
+        '400':
+          description: Error with description
+          content:
+            '*/*':
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - Basic Authentication: []
+          JWT Bearer: []
+components:
+  schemas:
+    AddRequiredSignature:
+      type: object
+      properties:
+        capacityOfSignatory:
+          type: string
+          description: The capacity of the signer on this signature.
+          example: Signatory
+          minLength: 1
+        documentVersion:
+          type: number
+          description: The document version to be signed.
+          example: 1
+        linkExpiresAt:
+          type: string
+          format: date-time
+          description: When the unique signature link will expire, and needs to be renewed.
+          example: '2022-06-16 07:03:49.852Z'
+        organisation:
+          type: string
+          description: The organisation the signer of this signature represents.
+          example: Enigio
+        role:
+          type: string
+          description: The role of the signer on this signature.
+          example: Signer
+        signers:
+          type: array
+          description: List of possible signers to this specific required signature field. Only one of the signers can sign the required signature.
+          items:
+            $ref: '#/components/schemas/AddSigner'
+        truncationOfExpiryDateOff:
+          type: boolean
+          description: This can be used to set to true if there is a need to not have the expiry link truncated to midnight of the date sent in. The expiry date will be set exactly as the UTC time sent in with millisecond precision if wanted. Default this is false, and is optional part of request.
+          example: false
+      required:
+        - capacityOfSignatory
+    AddSigner:
+      type: object
+      properties:
+        email:
+          type: string
+          description: The email of the signer.
+          example: alice@enigio.com
+          minLength: 1
+        identifications:
+          type: array
+          items:
+            $ref: '#/components/schemas/AddSignerIdentification'
+        name:
+          type: string
+          description: The name of the signer.
+          example: Alice
+        phone:
+          type: string
+          description: The phone number of the signer.
+      required:
+        - email
+        - phone
+    AddSignerIdentification:
+      type: object
+      properties:
+        eid:
+          type: string
+          description: The eid of the signer that needs to be used for identification when signing.
+          example: signer@enigio.com
+        eidMethod:
+          type: string
+          description: The eid method provider that needs to be used for identification when signing.
+          example: DOCUSIGN
+        eidType:
+          type: string
+          description: The eid type that needs to be used for identification when signing.
+          example: EMAIL
+      required:
+        - eid
+        - eidMethod
+        - eidType
+    AdditionalDocumentResponse:
+      type: object
+      properties:
+        contentType:
+          type: string
+          description: The content type of the additional document.
+          example: application/pdf
+        fileId:
+          type: string
+          description: The file identifier of the additional document.
+          example: c410f92c-4c75-4467-a93a-e1152d694ee5
+        filename:
+          type: string
+          description: The file name of the additional document.
+          example: invoice.pdf
+        filesize:
+          type: integer
+          format: int64
+          description: The file size of the additional document.
+          example: 243837
+        hash:
+          type: string
+          description: The SHA-256 hash of the additional document.
+          example: 98df1f1dfb3b1a123c1517912dc70447aa61c6be532ac99de973abb6219e1653
+    Address:
+      type: object
+      properties:
+        city:
+          type: string
+          description: City
+        country:
+          type: string
+          description: Country
+        line1:
+          type: string
+          description: Address line 1
+        line2:
+          type: string
+          description: Address line 2
+        zipCode:
+          type: string
+          description: ZIP code
+    AmendDocumentRequest:
+      type: object
+      properties:
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/AttachmentRequest'
+        content:
+          type: object
+          additionalProperties: {}
+          description: The content of the new amendment, the values of the provided JSON do not have to be ordered and the number of values that is provided is optional.
+          example:
+            Agreement terms: Some new terms
+          minProperties: 1
+        versionKey:
+          type: string
+          description: The private version key from the trace:original document's last amendment prior to this new amendment. This is needed to make sure that the latest current version of the trace:original document is known and that the amendment is made to the right version.
+          example: d5f547f76a04ce34c4577b2072791d307fdf7e3df1fd40625f1ab81c16f363e4
+      required:
+        - content
+        - versionKey
+    AttachmentRequest:
+      type: object
+      properties:
+        comment:
+          type: string
+          description: A comment describing the attachment. The comment will be shown in the structured data and in case of a PDF document it will also be visible as the description of the attachment in the PDF.
+        data:
+          type: string
+          format: byte
+          description: The file content. (binary)
+          minLength: 1
+        filename:
+          type: string
+          description: The file name of the attachment. The file name will be shown in the structured data and in case of a PDF document it will also be visible as the name of the attachment in the PDF.
+          minLength: 1
+      required:
+        - data
+        - filename
+    AttachmentShortResponse:
+      type: object
+      properties:
+        attachmentHash:
+          type: string
+          description: The SHA-256 hash of the attachment, can be used to retrieve more data on that specific attachment.
+        filename:
+          type: string
+          description: The name of the attachment
+    ContentResponse:
+      type: object
+      properties:
+        content:
+          description: The content of a version of the document. It can be an object or a string.
+          example:
+            Agreement terms: Some terms
+            Reference: '100000'
+            Agreement type: Generic
+        version:
+          type: integer
+          format: int64
+          description: The version of the document the content was extracted from.
+          example: 3
+    CreateDocumentRequest:
+      type: object
+      properties:
+        attachments:
+          type: array
+          description: Attachments to be added to the new original document. In case of a PDF original, the attachments will be embedded in the PDF document as attachments (can be seen in Adobe reader under the "paper clip"). For YAML original documents the attachments will be stored in the document store of this node.
+          items:
+            $ref: '#/components/schemas/AttachmentRequest'
+        content:
+          type: object
+          additionalProperties: {}
+          description: The initial content for this document, the values of the provided JSON do not have to be ordered and the number of values that is provided is optional.
+          example:
+            Agreement terms: Some terms
+            Reference: '100000'
+            Agreement type: Generic
+          minProperties: 1
+        contentSchemaUrl:
+          type: string
+          description: The content schema URL is optional and will associate the document with a JSON schema. If content schema is not set then locale must be provided in the request.
+        customData:
+          type: object
+          additionalProperties: {}
+          description: Custom data field used to store data provided by the customer which will be validated against the schemas specified in ```customDataSchemaUrls``` field. When ```FILL_PDF_FORM_WITH_CUSTOM_DATA``` is provided as ```pdfFormOperation``` in the ```initialPDF``` object then the form in the initial PDF will be filled with the data from this field and the keys of the custom data need to match the name of the fields in the PDF form. When ```EXTRACT_PDF_FORM_TO_CUSTOM_DATA``` is provided as ```pdfFormOperation``` in the ```initialPDF``` object then the data from the form in the initial PDF will be extracted and stored in this field.
+          example:
+            placeOfIssue: Stockholm
+            referenceNo: Ref 001
+            amountInFigures: 1 000 000
+            dateOfIssue: '2023-01-01T00:00:00.000Z'
+            currencyCode: EUR
+        customDataSchemaUrls:
+          type: array
+          description: Custom data schemas are optional and will associate and validate the custom data field with these JSON schemas. The schemas can be provided as HTTP or Data URLs.
+          items:
+            type: string
+        documentCode:
+          type: string
+          description: Enigio charges a one-time fee for each document created with trace:original. The charge depends on the features of each document, such as negotiable instruments, documents of title, certificates, invoices, agreements, etc. Read more at <a target="_blank" href="https://enigio.com/traceoriginal/pricing/">https://enigio.com/traceoriginal/pricing/</a><br/><br/>Available values:<br/>  NEG - Negotiable<br/>  TTL - Title<br/>  RGS - Registry<br/>  RGN - Registry (no update)<br/>  AGT - Agreement
+          enum:
+            - NEG
+            - TTL
+            - RGS
+            - RGN
+            - AGT
+        documentType:
+          type: string
+          description: 'Value that can be used for specifying the intended type of document/instrument, the value can be used by recipients to determine where in workflow the document should be handled or how data should be interpreted. Recommended values: ''Generic'', ''Guarantee'', ''Promissory note'', ''Mortgage'', ''CMR'', ''Bill of lading'', ''Agreement'', ''Contract'', ''Testament'',, ''Certificate'', ''Purchase order'', ''Minutes'', ''Invoice'', ''Tender'', ''Receipt'', ''Ticket'', ''Power of attorney'', ''Letter of credit'''
+          maximum: 250
+          minLength: 1
+        format:
+          type: string
+          default: PDF
+          description: The document format the created original will get.
+          enum:
+            - YAML
+            - PDF
+        initialPDF:
+          $ref: '#/components/schemas/InitialPDF'
+          description: The file size of the PDF file used as the initial PDF cannot be greater than 20 MB. It cannot contain attachments, comments, e-signatures or e-seals. Using an already existing trace:original document as initial PDF isn't allowed and password protected PDF's as initial PDF is not supported.
+        locale:
+          type: string
+          description: The target language of the document.
+          enum:
+            - en
+            - sv
+        ownerKey:
+          type: string
+          description: The public owner key can be specified to create the document with this key as holder at creation. The private key corresponding to this public key must exist in the keystore of this node.
+        reference:
+          type: string
+          description: Custom reference for the original to be set by the creator, any ID or other text that can be used for identifying or describing this original document. For example a specific use case ID or internal workflow ID for the instrument.
+          maximum: 250
+          minLength: 1
+        renderCustomData:
+          type: boolean
+          default: false
+          description: Whenever the custom data should be rendered in the PDF document. If true then the data from the ```customData``` field will be rendered in the initial content.
+      required:
+        - content
+        - documentCode
+        - documentType
+        - reference
+    CreateKeyPairAndSignResponse:
+      type: object
+      properties:
+        ownerKey:
+          type: string
+          description: The public key of the created key pair.
+          example: 03ecb34a49bff9c78ab2e4612fe44aa9549813eafc4a2670db1276ca71da50a1be
+        ownerSignature:
+          type: string
+          description: The signature of the newly created public key signed using the corresponding private key.In order to prove that this keystore owns the private key.
+          example: Bnm+2IOiDRe1s7VHvPHuRn2vbnTcFzIMcOQiETFo0igB+MosyF3siSPjNHBoK6KHWgReUZpxBBG3CJqWxKDoug==
+      required:
+        - ownerKey
+        - ownerSignature
+    CreateProofOfPossessionRequest:
+      type: object
+      properties:
+        comment:
+          type: string
+          description: Comment
+        locale:
+          type: string
+          description: The language the proof of possession should be generated in.
+          enum:
+            - en
+            - sv
+        owner:
+          $ref: '#/components/schemas/Owner'
+          description: Information about the owner of the document
+        versionKey:
+          type: string
+          description: The private version key from the trace:original document's last amendment.
+          example: d5f547f76a04ce34c4577b2072791d307fdf7e3df1fd40625f1ab81c16f363e4
+      required:
+        - comment
+        - locale
+        - owner
+        - versionKey
+    CreateProofOfPossessionResponse:
+      type: object
+      properties:
+        proofOfPossession:
+          type: string
+          description: The created proof of possession in YAML format.
+          minLength: 1
+      required:
+        - proofOfPossession
+    CustomDataResponse:
+      type: object
+      properties:
+        customData:
+          type: object
+          additionalProperties: {}
+          description: The custom data of a version of the document
+          example:
+            placeOfIssue: Stockholm
+            referenceNo: Ref 001
+            amountInFigures: 1 000 000
+            dateOfIssue: '2023-01-01T00:00:00.000Z'
+            currencyCode: EUR
+        version:
+          type: integer
+          format: int64
+          description: The version of the document the custom data was extracted from.
+          example: 2
+    DocumentMetadataResponse:
+      type: object
+      properties:
+        copy:
+          type: boolean
+          default: false
+          description: Whenever the document is a copy. If true then the document is not owned by the current node. It has been transferred from or uploaded to this node but the key pair owning the document does not exists in the keystore of this node.
+        documentCode:
+          type: string
+          description: Enigio charges a one-time fee for each document created with trace:original. The charge depends on the features of each document, such as negotiable instruments, documents of title, certificates, invoices, agreements, etc. Read more at <a target="_blank" href="https://enigio.com/traceoriginal/pricing/">https://enigio.com/traceoriginal/pricing/</a><br/><br/>Available values:<br/>  NEG - Negotiable<br/>  TTL - Title<br/>  RGS - Registry<br/>  RGN - Registry (no update)<br/>  AGT - Agreement
+          enum:
+            - NEG
+            - TTL
+            - RGS
+            - RGN
+            - AGT
+            - ENV
+        documentType:
+          type: string
+          description: The document type of the document.
+        filename:
+          type: string
+          description: The file name of the document.
+        format:
+          type: string
+          description: The format of the document.
+          enum:
+            - YAML
+            - PDF
+        inTransit:
+          type: boolean
+          default: false
+          description: Whenever the document is being transferred. If true then no operations can be done on the document until the transfer is cancelled or fulfilled.
+        invalidated:
+          type: boolean
+          default: false
+          description: Whenever the document is invalidated. If true then no more operations can be done on the document. It has reached its end state.
+        ownerKey:
+          type: string
+          description: The public key corresponding to the actual private owner key.
+        reference:
+          type: string
+          description: The reference of the document.
+        traceOriginalId:
+          type: string
+          description: The trace:original ID of the document.
+        version:
+          type: integer
+          format: int64
+          description: The actual version of the document.
+          minimum: 1
+        versionCreatedAt:
+          type: string
+          format: date-time
+          description: The ISO-8601 representation of the date when the actual version of the document was created.
+    DocumentOperationResponse:
+      type: object
+      properties:
+        traceOriginalId:
+          type: string
+          description: The trace:original ID of the document.
+          example: 60fcd0a7d84b1b5df0542b29b7a941abe6b45b20de7585ff2e91cbaf1665dac5
+        versionKey:
+          type: string
+          description: The latest version key of the document.
+          example: c43951da342ebcbdde1b0cc67e9f1573f98428b7a5ec3d38b01cc8b090437e16
+    DownloadDocumentResponse:
+      type: object
+      properties:
+        contentType:
+          type: string
+          description: The content type of the returned data.
+          enum:
+            - application/pdf
+            - text/yaml
+        data:
+          type: string
+          format: byte
+          description: The file content. (binary)
+        filename:
+          type: string
+          description: The file name of the document.
+    DraftReportResponse:
+      type: object
+      properties:
+        agreementParties:
+          type: array
+          description: A list of the agreement parties involved on this draft document.
+          example: '[{"Role":"tester","Name":"Dev","ID":0123456789,"ID Type":"VAT identification number","Email":"dev@enigio.com","Phone":"+4673000001","Address":{"Line 1":"High street. 123B","ZIP code":13137,"City":"London","Country":"England"}}]'
+          items:
+            type: object
+            additionalProperties: {}
+        createdAt:
+          type: string
+          description: The date when the latest revision of this draft document was created.
+          example: '2022-11-30T12:19:43.710884Z'
+        documentCode:
+          type: string
+          description: The document code of this draft document.
+          enum:
+            - NEG
+            - TTL
+            - RGS
+            - RGN
+            - AGT
+            - ENV
+          example: NEG
+        documentType:
+          type: string
+          description: The document type of this draft document.
+          example: Generic
+        reference:
+          type: string
+          description: The reference value of this draft document.
+          example: ABC-123
+        revision:
+          type: integer
+          format: int64
+          description: The latest revision number of this draft document.
+          example: 1
+        userId:
+          type: string
+          description: The id of the user that created the latest revision of the draft document.
+          example: dev@enigio.com
+    EnvelopeDocumentCopy:
+      type: object
+      properties:
+        copy:
+          type: boolean
+          default: false
+          description: Whenever the document is a copy. If true then the document is not owned by the current node. It has been transferred from or uploaded to this node but the key pair owning the document does not exists in the keystore of this node.
+        documentFormat:
+          type: string
+          description: The format of the document.
+          enum:
+            - YAML
+            - PDF
+        documentType:
+          type: string
+          description: The document type of the document.
+        fileHash:
+          type: string
+          description: The file hash of the document.
+          example: ef59c3895eca7686e75be8a75de0a48186e7a000907e6d9f1cb22367ea2bb196
+        filename:
+          type: string
+          description: The file name of the document.
+        invalidated:
+          type: boolean
+          default: false
+          description: Whenever the document is invalidated. If true then no more operations can be done on the document. It has reached its end state.
+        reference:
+          type: string
+          description: The reference of the document.
+        traceOriginalId:
+          type: string
+          description: trace:original ID of the document.
+          example: b6b2a956396563c403611662b57e5f851e5049998c7cc72cf73e4acb65084586
+        version:
+          type: integer
+          format: int64
+          description: The version of the document.
+          example: 3
+    EnvelopeDocumentCopyRequest:
+      type: object
+      properties:
+        traceOriginalId:
+          type: string
+          description: trace:original ID of the document which will be added to the envelope as a copy and will not change possession to the receiver.
+          example: b6b2a956396563c403611662b57e5f851e5049998c7cc72cf73e4acb65084586
+        version:
+          type: integer
+          format: int64
+          description: The version of the document to be added to the envelope. If left empty then the actual latest version of the document will be used.
+          example: 3
+      required:
+        - traceOriginalId
+    EnvelopeDocumentMetadataResponse:
+      type: object
+      properties:
+        fileHash:
+          type: string
+          description: The file hash of the document.
+          example: ef59c3895eca7686e75be8a75de0a48186e7a000907e6d9f1cb22367ea2bb196
+        filename:
+          type: string
+          description: The file name of the document.
+        traceOriginalId:
+          type: string
+          description: trace:original ID of the document.
+          example: b6b2a956396563c403611662b57e5f851e5049998c7cc72cf73e4acb65084586
+        version:
+          type: integer
+          format: int64
+          description: The version of the document.
+    EnvelopeDraft:
+      type: object
+      properties:
+        additionalDocuments:
+          type: array
+          description: List of additional documents in the envelope
+          items:
+            $ref: '#/components/schemas/AdditionalDocumentResponse'
+        copies:
+          type: array
+          description: List of document copies in the envelope
+          items:
+            $ref: '#/components/schemas/EnvelopeDocumentCopy'
+        coverMessage:
+          type: string
+          description: Cover message
+        originalDocuments:
+          type: array
+          description: List of original documents in the envelope
+          items:
+            $ref: '#/components/schemas/EnvelopeOriginalDocument'
+        ownerKey:
+          type: string
+          description: The public owner key to create the document with.
+        redirectUrl:
+          type: string
+          description: URL to redirect to after completing creation of envelope in create-envelope page.
+        reference:
+          type: string
+          description: Custom reference for the original set by the creator.
+    EnvelopeDraftRequest:
+      type: object
+      properties:
+        copies:
+          type: array
+          description: 'List of document copies to be added to the envelope. <b>Note: The total number of documents in original documents, copies and additional documents must not exceed the limit of 25.</b>'
+          items:
+            $ref: '#/components/schemas/EnvelopeDocumentCopyRequest'
+          maxItems: 25
+          minItems: 0
+        coverMessage:
+          type: string
+          description: Cover message that will be written on the first page of trace:original document representing the Envelope and that can be read by the receiver prior to opening the Envelope.
+          minLength: 1
+        originalDocuments:
+          type: array
+          description: 'List of original documents to be added to the envelope. <b>Note: The total number of documents in original documents, copies and additional documents must not exceed the limit of 25.</b>'
+          items:
+            $ref: '#/components/schemas/EnvelopeOriginalDocumentRequest'
+          maxItems: 25
+          minItems: 0
+        ownerKey:
+          type: string
+          description: The public owner key can be specified to create the document with this key as holder at creation. The private key corresponding to this public key must exist in the keystore of the node creating the draft envelope.
+        redirectUrl:
+          type: string
+          description: Workflow system that creates an envelope for a user in trace:original could set a redirect URL, in order for their users to be go to trace:original Fullnode GUI in order to complete creation of envelope and set to transfer, and then be sent back to the customer workflow system.
+        reference:
+          type: string
+          description: Custom reference for the original to be set by the creator, any ID or other text that can be used for identifying or describing this original document. For example a specific use case ID or internal workflow ID for the instrument.
+          maximum: 250
+          minLength: 1
+      required:
+        - coverMessage
+        - reference
+    EnvelopeDraftResponse:
+      type: object
+      properties:
+        draftId:
+          type: string
+          description: The envelope draft ID.
+          example: draft_d97655e4fddee111393944739daa580f5a8277ee68872e3cf18cf7af16
+    EnvelopeMetadataResponse:
+      type: object
+      properties:
+        additionalDocuments:
+          type: array
+          description: List of additional documents in the envelope
+          items:
+            $ref: '#/components/schemas/AdditionalDocumentResponse'
+        copies:
+          type: array
+          description: List of document copies in the envelope
+          items:
+            $ref: '#/components/schemas/EnvelopeDocumentMetadataResponse'
+        documentType:
+          type: string
+          description: The document type of the envelope.
+        filename:
+          type: string
+          description: The file name of the envelope.
+        inTransit:
+          type: boolean
+          default: false
+          description: Whenever the document is being transferred. If true then no operations can be done on the document until the transfer is cancelled or fulfilled.
+        invalidated:
+          type: boolean
+          default: false
+          description: Whenever the document is invalidated. If true then no more operations can be done on the document. It has reached its end state.
+        originalDocuments:
+          type: array
+          description: List of original documents in the envelope
+          items:
+            $ref: '#/components/schemas/EnvelopeDocumentMetadataResponse'
+        ownerKey:
+          type: string
+          description: The public key corresponding to the actual private owner key.
+        redirectUrl:
+          type: string
+          description: URL to redirect to after completing creation of envelope in create-envelope page.
+        reference:
+          type: string
+          description: The reference of the envelope.
+        version:
+          type: integer
+          format: int64
+          description: The actual version of the envelope.
+          minimum: 1
+        versionCreatedAt:
+          type: string
+          format: date-time
+          description: The ISO-8601 representation of the date when the actual version of the envelope was created.
+    EnvelopeOriginalDocument:
+      type: object
+      properties:
+        documentFormat:
+          type: string
+          description: The format of the document.
+          enum:
+            - YAML
+            - PDF
+        documentType:
+          type: string
+          description: The document type of the document.
+        fileHash:
+          type: string
+          description: The file hash of the document.
+          example: ef59c3895eca7686e75be8a75de0a48186e7a000907e6d9f1cb22367ea2bb196
+        filename:
+          type: string
+          description: The file name of the document.
+        reference:
+          type: string
+          description: The reference of the document.
+        traceOriginalId:
+          type: string
+          description: trace:original ID of the document.
+          example: b6b2a956396563c403611662b57e5f851e5049998c7cc72cf73e4acb65084586
+        version:
+          type: integer
+          format: int64
+          description: The version of the document.
+          example: 3
+    EnvelopeOriginalDocumentRequest:
+      type: object
+      properties:
+        traceOriginalId:
+          type: string
+          description: trace:original ID of the document which will be added to the envelope as an original and will change possession to the receiver.
+          example: b6b2a956396563c403611662b57e5f851e5049998c7cc72cf73e4acb65084586
+      required:
+        - traceOriginalId
+    ErrorDetails:
+      type: object
+      discriminator:
+        propertyName: type
+      oneOf:
+        - $ref: '#/components/schemas/ValidationErrorDetails'
+      properties:
+        errorMessage:
+          type: string
+          description: A description of the error
+        type:
+          type: string
+      required:
+        - type
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          format: int32
+          description: An internal error code that can point to a certain issue and where that issue occurred
+          example: 3500
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorDetails'
+            description: (Optional) A more detailed description of the error. It can also show which exact field that caused the error.
+            example:
+              fieldName: versionKey
+              errorMessage: must not be null
+        message:
+          type: string
+          description: A more informative description of the error
+          example: Validation of input failed
+        status:
+          type: string
+          description: The HTTP status code of the response
+          example: BAD_REQUEST
+        timestamp:
+          type: string
+          format: date-time
+          description: The ISO-8601 representation of the time when the error occured
+          example: '2023-03-09T10:08:56.246Z'
+    GetAttachmentResponse:
+      type: object
+      properties:
+        attachmentHash:
+          type: string
+          description: The SHA-256 hash of the attachment.
+        data:
+          type: string
+          format: byte
+          description: The file content. (binary)
+        filename:
+          type: string
+          description: The file name of the attachment.
+    GetStructuredDataResponse:
+      type: object
+      properties:
+        structuredData:
+          type: string
+          description: Structured data in YAML format.
+    InitialPDF:
+      type: object
+      properties:
+        data:
+          type: string
+          format: byte
+          description: The file content. (binary)
+        filename:
+          type: string
+          description: The file name of the initial PDF. The file name will be shown in the structured data.
+          minLength: 1
+          pattern: .*\.(pdf|PDF)$
+        pdfFormOperation:
+          type: string
+          enum:
+            - FILL_PDF_FORM_WITH_CUSTOM_DATA
+            - EXTRACT_PDF_FORM_TO_CUSTOM_DATA
+      required:
+        - data
+        - filename
+    InvalidateDocumentRequest:
+      type: object
+      properties:
+        comment:
+          type: string
+          description: A comment describing the reason and nature of the invalidation.
+          minLength: 1
+        versionKey:
+          type: string
+          description: The private version key from the trace:original document's last amendment prior to this new amendment. This is needed to make sure that the latest current version of the trace:original document is known and that the amendment is made to the right version.
+          example: d5f547f76a04ce34c4577b2072791d307fdf7e3df1fd40625f1ab81c16f363e4
+      required:
+        - comment
+        - versionKey
+    LedgerEntryDTO:
+      type: object
+      properties:
+        contentHash:
+          type: string
+          description: Hash on the content of the document.
+          example: 542a48f50bae2bd8fbe301eabbdeab99daf60f5c9bd6cc3debf9a230a0d0461d
+        documentCode:
+          type: string
+          description: The document code of the document.
+          example: NEG
+        documentHash:
+          type: string
+          description: Hash on the document as a whole.
+          example: 542a48f50bae2bd8fbe301eabbdeab99daf60f5c9bd6cc3debf9a230a0d0461d
+        documentTimestamp:
+          type: string
+          format: date-time
+          description: Timestamp when the document was created.
+          example: '2022-06-16 07:03:49.852Z'
+        documentVersion:
+          type: number
+          description: The version of the document.
+          example: 1
+        ledgerSeal:
+          type: string
+          description: The seal that joins the content of this row in ledger together with the rest of the ledger.
+          example: jvfXIj9o/k+KO5GDeujDHyGGFHH9ked7GejF6aiGiXTPSwvg5jk6bOrByfcnZD+quBa2D0oaND3MghSr5wye7A==
+        ledgerSignature:
+          type: string
+          description: The signature of this document using the ledger's private key.
+          example: jsxJhBM2FxcpVjrp2iGkEBbtHrk/xQjasad0fB+QK/zqQW4VEuCERxUmKKHvJYjrUh7K4vt0iKlcB6qTn0UG6A==
+        ledgerTimestamp:
+          type: string
+          format: date-time
+          description: Timestamp when the ledger added the original
+          example: '2022-06-16 07:03:49.852Z'
+        ownerKey:
+          type: string
+          description: The public key that has ownership of the document.
+          example: 02b9bc72e1a6fb87de88772d68e550afe3e0709d40f5e80a08a84987ddaa985786
+        ownerSignature:
+          type: string
+          description: The signature of this document using the ```ownerKey```.
+          example: jsxJhBM2FxcpVjrp2iGkEBbtHrk/xQjasad0fB+QK/zqQW4VEuCERxUmKKHvJYjrUh7K4vt0iKlcB6qTn0UG6A==
+        ownerSignedData:
+          type: string
+          description: The data that was signed with the ```ownerKey``` for ```ownerSignature```.
+          example: 542a48f50bae2bd8fbe301eabbdeab99daf60f5c9bd6cc3debf9a230a0d0461d
+        pdfContentHash:
+          type: string
+          description: Hash on the content of the pdf in the document.
+          example: 542a48f50bae2bd8fbe301eabbdeab99daf60f5c9bd6cc3debf9a230a0d0461d
+        pdfDocumentHash:
+          type: string
+          description: Hash on the document with the pdf in the document.
+          example: 542a48f50bae2bd8fbe301eabbdeab99daf60f5c9bd6cc3debf9a230a0d0461d
+        row:
+          type: number
+          description: The row number of the original version in the ledger.
+          example: 1
+        traceOriginalId:
+          type: string
+          description: trace:original ID of the document.
+          example: b6b2a956396563c403611662b57e5f851e5049998c7cc72cf73e4acb65084586
+        type:
+          type: string
+          description: The type of ledger operation done on that version the document.
+          example: CRE
+        versionKey:
+          type: string
+          description: The corresponding public key of key pair that signed this version of the document.
+          example: 03e64cba777b8657c6b1af08e91c123f44900d1628b74edd7ea208a24e4b5be996
+        versionSignature:
+          type: string
+          description: The signature of this document using the ```versionKey```.
+          example: jsxJhBM2FxcpVjrp2iGkEBbtHrk/xQjasad0fB+QK/zqQW4VEuCERxUmKKHvJYjrUh7K4vt0iKlcB6qTn0UG6A==
+      required:
+        - contentHash
+        - documentCode
+        - documentHash
+        - documentTimestamp
+        - documentVersion
+        - ledgerSeal
+        - ledgerSignature
+        - ledgerTimestamp
+        - ownerKey
+        - ownerSignature
+        - row
+        - traceOriginalId
+        - type
+        - versionKey
+        - versionSignature
+    LedgerEntryOperationLookup:
+      type: object
+      properties:
+        documentVersion:
+          type: number
+          description: The version of the document.
+          example: 1
+        row:
+          type: number
+          description: The row number of the original version in the ledger.
+          example: 1
+        type:
+          type: string
+          description: The type of ledger operation done on that version the document.
+          example: CRE
+    OriginalReportResponse:
+      type: object
+      properties:
+        agreementParties:
+          type: array
+          description: A list of the agreement parties involved on this document.
+          example: '[{"Role":"tester","Name":"Dev","ID":0123456789,"ID Type":"VAT identification number","Email":"dev@enigio.com","Phone":"+4673000001","Address":{"Line 1":"High street. 123B","ZIP code":13137,"City":"London","Country":"England"}}]'
+          items:
+            type: object
+            additionalProperties: {}
+        createdAt:
+          type: string
+          description: A date of when this document was created on this node.
+          example: '2022-11-30T12:19:43.710884Z'
+        documentCode:
+          type: string
+          description: The document code of this document.
+          enum:
+            - NEG
+            - TTL
+            - RGS
+            - RGN
+            - AGT
+            - ENV
+          example: NEG
+        documentType:
+          type: string
+          description: The document type of this document.
+          example: Generic
+        reference:
+          type: string
+          description: The reference value of this document.
+          example: ABC-123
+        state:
+          type: string
+          description: The state of the document in terms of validity, could be an original, copy or invalidated.
+          example: ORIGINAL
+        status:
+          type: string
+          description: Status of the document, can tell if it is pending signature, fully signed och in transit to new ownership.
+          example: PENDING
+        traceOriginalId:
+          type: string
+          description: The trace:original ID of this document.
+          example: 2a0c0d7018b70eb0fba84eff6080ee857cb1dcc04ec64e761fc052f4828dbc56
+        userId:
+          type: string
+          description: The id of the user that either created or invalidated the document.
+          example: dev@enigio.com
+        version:
+          type: integer
+          format: int64
+          description: The version of the document found in this report.
+          example: 1
+    Owner:
+      type: object
+      properties:
+        address:
+          $ref: '#/components/schemas/Address'
+          description: Address of the owner
+        email:
+          type: string
+          description: E-mail of the owner
+          minLength: 1
+        id:
+          type: string
+          description: ID of the owner
+          minLength: 1
+        idType:
+          type: string
+          description: ID type of the owner
+          enum:
+            - VAT_IDENTIFICATION_NUMBER
+            - SWEDISH_PERSONAL_REGISTRATION_NUMBER
+            - SWEDISH_CORPORATE_REGISTRATION_NUMBER
+            - MOBILE_NUMBER
+            - EMAIL
+            - BIC
+            - LEI
+        name:
+          type: string
+          description: Name of the owner
+          minLength: 1
+        phone:
+          type: string
+          description: Phone number of the owner
+      required:
+        - email
+        - id
+        - idType
+        - name
+    PaginatedDocumentMetadataResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          description: The list of document metadata.
+          items:
+            $ref: '#/components/schemas/DocumentMetadataResponse'
+        totalCount:
+          type: integer
+          format: int64
+          description: The number of total items.
+    RecipientNode:
+      type: object
+      properties:
+        remoteFullNodePassword:
+          type: string
+          description: Password to the Fullnode that will receive the document.
+          minLength: 1
+        remoteFullNodeUrl:
+          type: string
+          description: The URL of the Fullnode where the document should be sent.
+          minLength: 1
+        remoteFullNodeUserName:
+          type: string
+          description: Username to the Fullnode that will receive the document.
+          minLength: 1
+      required:
+        - remoteFullNodePassword
+        - remoteFullNodeUrl
+        - remoteFullNodeUserName
+    RenewRequiredSignature:
+      type: object
+      properties:
+        linkExpiresAt:
+          type: string
+          format: date-time
+        newLinkId:
+          type: string
+          example: 3f11cc28-4e4c-4976-8b4b-7f212ae812e5
+    RequiredSignatureDTO:
+      type: object
+      properties:
+        capacityOfSignatory:
+          type: string
+          description: The capacity of the signer on this signature.
+          example: Signatory
+          minLength: 1
+        documentVersion:
+          type: number
+          description: The document version to be signed.
+          example: 1
+        id:
+          type: number
+          description: The id of the required signature used to update this specific signer identication model for this signer, when updating the signer .
+          example: 1
+        linkCreatedAt:
+          type: string
+          format: date-time
+          description: Date and time when required signature is created in the document store, do not send in via API.
+          example: '2023-04-16T19:01:18.591'
+        linkExpiresAt:
+          type: string
+          format: date-time
+          description: When the unique signature link will expire, and needs to be renewed.
+          example: '2023-04-16T19:01:18.591'
+        linkId:
+          type: string
+          deprecated: true
+          description: 'The unique signature link ID created in the document store in order to sign this required signature. Deprecated: Use the link ID available in Signer instead.'
+          example: 3f11cc28-4e4c-4976-8b4b-7f212ae812e5
+        organisation:
+          type: string
+          description: The organisation the signer of this signature represents.
+          example: Enigio
+        role:
+          type: string
+          description: The role of the signer on this signature.
+          example: Signer
+        signature:
+          $ref: '#/components/schemas/Signature'
+        signers:
+          type: array
+          description: List of possible signers to this specific required signature field. Only one of the signers can sign the required signature.
+          items:
+            $ref: '#/components/schemas/Signer'
+        signingLink:
+          type: string
+          deprecated: true
+          description: 'The unique signature link. Deprecated: Use the signink link available in Signer instead.'
+          example: https://example.com/sign-original/8f296fff-7a43-48d9-a95b-aa962900c4f1
+        status:
+          type: string
+          description: The status of the signature.
+          enum:
+            - PENDING
+            - SIGNED
+            - REJECTED
+            - NO_SIGNATURE
+          example: PENDING
+        traceOriginalId:
+          type: string
+          description: trace:original ID of the document the required signature is meant to sign.
+          example: b6b2a956396563c403611662b57e5f851e5049998c7cc72cf73e4acb65084586
+      required:
+        - capacityOfSignatory
+    SendBulkEmailRequest:
+      type: object
+      properties:
+        emails:
+          type: array
+          description: A list of emails to send signing email to.
+          items:
+            type: string
+            description: A list of emails to send signing email to.
+        locale:
+          type: string
+          description: The language to use in the signing mails.
+          enum:
+            - '{''sv'', ''en''}'
+          example: en
+      required:
+        - emails
+        - locale
+    SendDocumentRequest:
+      type: object
+      properties:
+        recipientNode:
+          $ref: '#/components/schemas/RecipientNode'
+        versionKey:
+          type: string
+          description: The private version key from the trace:original document's last amendment.
+          example: d5f547f76a04ce34c4577b2072791d307fdf7e3df1fd40625f1ab81c16f363e4
+      required:
+        - recipientNode
+        - versionKey
+    SendSignEmailByLinkIdRequest:
+      type: object
+      properties:
+        force:
+          type: boolean
+          description: Flag if a new email should be force sent even if previously sent.
+          example: true
+        linkId:
+          type: string
+          description: The id of the required signature to send link for.
+          example: 3f11cc28-4e4c-4976-8b4b-7f212ae812e5
+        locale:
+          type: string
+          description: The language to use in the signing mails.
+          enum:
+            - '{''sv'', ''en''}'
+          example: en
+      required:
+        - linkId
+        - locale
+    SendSignEmailRequest:
+      type: object
+      properties:
+        force:
+          type: boolean
+          description: Flag if a new email should be force sent even if previously sent.
+          example: true
+        locale:
+          type: string
+          description: The language to use in the signing mails.
+          enum:
+            - '{''sv'', ''en''}'
+          example: en
+        traceOriginalId:
+          type: string
+          description: trace:original ID of the document.
+          example: b6b2a956396563c403611662b57e5f851e5049998c7cc72cf73e4acb65084586
+      required:
+        - locale
+        - traceOriginalId
+    Signature:
+      type: object
+      properties:
+        comment:
+          type: string
+          description: A comment to describe a reject reason.
+          example: This document needs to be amended before signing completed.
+        eidMethod:
+          type: string
+          description: The eid method provider used for identification for this signature.
+          example: DOCUSIGN
+        eidType:
+          type: string
+          description: The eid type used to create this signature.
+          example: EMAIL
+        id:
+          type: integer
+          format: int64
+        signature:
+          type: string
+          description: Metadata of the signature.
+          example: |-
+            Subject:
+              Name: Alice
+              ID: alice@enigio.com
+              ID Type: E-mail
+              Capacity of signatory: Tester
+              Role: CTO
+              Organisation: Enigio
+            Accepted: true
+            Method: DocuSign
+            Signature: Signature is attached to the PDF original
+        signedAt:
+          type: string
+          format: date-time
+          description: Datetime of signature creation.
+          example: '2022-06-16 07:03:49.852Z'
+        signedBy:
+          type: string
+          description: Name of the signer completing the signature.
+          example: Alice
+    SignatureDataRequest:
+      type: object
+      properties:
+        data:
+          type: string
+          description: The data content to be signed, usually in the form of the hash of the document.
+          example: Data to be signed.
+        ownerKey:
+          type: string
+          description: The public key of the corresponding private key that you want to sign the data with.
+          example: 03ecb34a49bff9c78ab2e4612fe44aa9549813eafc4a2670db1276ca71da50a1be
+      required:
+        - data
+        - ownerKey
+    SignaturePublicKeyRequest:
+      type: object
+      properties:
+        keyToSign:
+          type: string
+          description: The public key that you want to sign in order to show that it is trusted by the signing private key.
+          example: 03ecb34a49bff9c78ab2e4612fe44aa9549813eafc4a2670db1276ca71da50a1be
+        ownerKey:
+          type: string
+          description: The public key of the corresponding private key that you want to sign the data with.
+          example: 03ecb34a49bff9c78ab2e4612fe44aa9549813eafc4a2670db1276ca71da50a1be
+      required:
+        - keyToSign
+        - ownerKey
+    SignedDataResponse:
+      type: object
+      properties:
+        ownerKey:
+          type: string
+          description: The public key of the corresponding private key that was used to sign the data.
+          example: 03ecb34a49bff9c78ab2e4612fe44aa9549813eafc4a2670db1276ca71da50a1be
+        ownerSignature:
+          type: string
+          description: The signature of the signed data using the private key.
+          example: Bnm+2IOiDRe1s7VHvPHuRn2vbnTcFzIMcOQiETFo0igB+MosyF3siSPjNHBoK6KHWgReUZpxBBG3CJqWxKDoug==
+      required:
+        - ownerKey
+        - ownerSignature
+    Signer:
+      type: object
+      properties:
+        email:
+          type: string
+          description: The email of the signer.
+          example: alice@enigio.com
+          minLength: 1
+        id:
+          type: number
+          description: The id of the signer used to get, update and delete this specific signer for the required signature, as ´´´signerId´´´.
+          example: 1
+        identifications:
+          type: array
+          items:
+            $ref: '#/components/schemas/SignerIdentification'
+        linkId:
+          type: string
+          description: The unique signature link ID created in the document store in order to sign this required signature.
+          example: 019a0aa8-dd31-7e30-b3f0-2bca656ec86c
+        name:
+          type: string
+          description: The name of the signer.
+          example: Alice
+        phone:
+          type: string
+          description: The phone number of the signer.
+        signingLink:
+          type: string
+          description: The unique signature link.
+          example: https://example.com/sign-original/8f296fff-7a43-48d9-a95b-aa962900c4f1
+      required:
+        - email
+        - phone
+    SignerIdentification:
+      type: object
+      properties:
+        eid:
+          type: string
+          description: The eid of the signer that needs to be used for identification when signing.
+          example: signer@example.com
+        eidMethod:
+          type: string
+          description: The eid method provider that needs to be used for identification when signing.
+          example: DOCUSIGN
+        eidType:
+          type: string
+          description: The eid type that needs to be used for identification when signing.
+          example: EMAIL
+        id:
+          type: number
+          description: The id of the signer id used to get, update and delete this specific signer identification model for this required signature, as ´´´requiredSignatureId´´´.
+          example: 1
+      required:
+        - eid
+        - eidMethod
+        - eidType
+    SignerNameIdentification:
+      type: object
+      properties:
+        eid:
+          type: string
+        eidType:
+          type: string
+        name:
+          type: string
+    TechnicalDetailsDTO:
+      type: object
+      properties:
+        contentHash:
+          type: string
+          description: SHA-256 hash of the content.
+          example: b84667575710aaa1c95b4085cd45db79a454fd890dbbfe52745b16602008ce75
+        documentSignature:
+          type: string
+          description: Document signature. Only present in documents created with trace:original schema v1.2 or earlier.
+          example: zw0mAoeRaAL0LKfu79Yz329JNCjRkG2Ip8mavhjmJvyV+wfCA8elqWNjusjrr2hJj5j95wY2/jdW+M7ZQ0uAVg==
+        documentTimestamp:
+          type: string
+          format: date-time
+          description: The ISO-8601 representation of the date when the actual version of the document was created.
+          example: '2023-04-03T13:27:00.901Z'
+        ledgerSignature:
+          type: string
+          description: Ledger signature. Only present in documents created with trace:original schema v1.2 or earlier.
+          example: zw0mAoeRaAL0LKfu79Yz329JNCjRkG2Ip8mavhjmJvyV+wfCA8elqWNjusjrr2hJj5j95wY2/jdW+M7ZQ0uAVg==
+        ledgerTimestamp:
+          type: string
+          format: date-time
+          description: The ISO-8601 representation of the date when the actual version of the document was registered in the ledger. Only present in documents created with trace:original schema v1.2 or earlier.
+          example: '2023-04-03T13:27:00.901Z'
+        ledgerUrl:
+          type: string
+          description: URL for public notary where the document can be freely verified towards ledger and originals can be freely managed if holder does not have access or account on a Fullnode.
+          example: https://www.traceoriginal.com/
+        ownerKey:
+          type: string
+          description: The public key corresponding to the actual private owner key.
+          example: 02fc11cf8122e80e12eefe06f58a4e65e4091b5b268d1fa171ea16a1039ab0e9e1
+        ownerKeyId:
+          type: string
+          description: The id of the key from the YubiKey which was used for creating the signature. Only present if the operation was signed by a Webauthn / FIDO2 device.
+          example: KD0a5tXiHF3LuvGzDyCxCDT0FQp6r6DIoj/A2SbPPIR6WRtYMWW7zDEZ/7jXbVzf6Pbb72C4gtBBX80s74WUBg==
+        timestamp:
+          type: string
+          format: date-time
+          description: The ISO-8601 representation of the date when the actual version of the document was created. Only present in documents created with trace:original schema v1.2 or earlier.
+          example: '2023-04-03T13:27:00.901Z'
+        traceOriginalId:
+          type: string
+          description: The trace:original ID of the document.
+          example: 083fde1f81275c0bca5a5e6fcc3eba0f2c91be29ad6939bc2b57fcb35c0dcc35
+        versionKey:
+          type: string
+          description: The private version key.
+          example: d515e3e9b01ede88637993772fa7916bdae79dd4b959c77cd77ba179e629bdc1
+    TechnicalDetailsResponse:
+      type: object
+      properties:
+        technicalDetails:
+          $ref: '#/components/schemas/TechnicalDetailsDTO'
+          description: The technical details of a version of the document
+        version:
+          type: integer
+          format: int64
+          description: The version of the document the content was extracted from.
+          example: 3
+    TransferByEmailRequest:
+      type: object
+      properties:
+        comment:
+          type: string
+          description: A comment that will be included in the TRA operation on the document.
+          example: Transfer to ownership of original to...
+        email:
+          type: string
+          description: The email that you want to transfer ownership of the document to.
+          example: dev@enigio.com
+          minLength: 1
+        instantDownload:
+          type: boolean
+          description: If the recipient shall get the document downloaded directly after accepting it.
+          example: true
+        name:
+          type: string
+          description: The name of the recipient of ownership.
+          example: John
+        versionKey:
+          type: string
+          description: The latest version key of the document that you want to transfer.
+          example: 03ecb34a49bff9c78ab2e4612fe44aa9549813eafc4a2670db1276ca71da50a1be
+      required:
+        - email
+        - name
+        - versionKey
+    TransferDocumentRequest:
+      type: object
+      properties:
+        newOwnerKey:
+          type: string
+          description: The new public owner key to which transfer of ownership is made.
+          example: 03ecb34a49bff9c78ab2e4612fe44aa9549813eafc4a2670db1276ca71da50a1be
+        newOwnerKeyId:
+          type: string
+          description: The id of the key from the YubiKey which was used for creating the signature. Required if transferring to Webauthn / FIDO2 device transfer data generated at https://traceoriginal.com.Let it be null/empty if transferring to other form of keys.
+        newOwnerKeySignature:
+          type: string
+          description: The signature of the new owner signed data created with the new private key.
+          example: T7lVPCWEnTeJvDNs+mTdDZb8Ubze1kl8QNtGgxxYqc35cmEX+dJ9oLotDX7LlWXReS4+uRfZQFbqhjk1xrPjKg==
+        newOwnerSignedData:
+          type: string
+          description: The data used to generate the signature. If left empty, the system will automatically recognize the new owner key as the new owner signed data and validate the signature against it. In case of using a Webauthn / FIDO2 device the new owner signed data is the Base64 encoded metadata needed for validating the signature.
+          example: 03ecb34a49bff9c78ab2e4612fe44aa9549813eafc4a2670db1276ca71da50a1be
+        transferComment:
+          type: string
+          description: A text comment describing the transfer of ownership, this is a good place for Endorsements needed on certain negotiable instruments that changes ownership.
+          example: Transfer ownership of original to...
+          minLength: 1
+        versionKey:
+          type: string
+          description: The private version key from the trace:original document's last amendment prior to this new transfer operation. This is needed to make sure that the latest current version of the trace:original document is known and that the transfer is made to the right version.
+          example: d5f547f76a04ce34c4577b2072791d307fdf7e3df1fd40625f1ab81c16f363e4
+      required:
+        - newOwnerKey
+        - newOwnerKeySignature
+        - transferComment
+        - versionKey
+    TransferEnvelopeByEmailRequest:
+      type: object
+      properties:
+        recipientEmail:
+          type: string
+          description: The email that you want to transfer ownership of the document to.
+          example: dev@enigio.com
+          minLength: 1
+        recipientName:
+          type: string
+          description: The name of the recipient of ownership.
+          example: John
+          minLength: 1
+        transferComment:
+          type: string
+          description: A text that will be included in the TRA operation on the document.
+          example: Transfer to ownership of original to...
+          minLength: 1
+        transferEmailMessage:
+          type: string
+          description: A message that will be included in the e-mail sent to the receiver.
+          example: Transfer to ownership of original to...
+          minLength: 1
+        versionKey:
+          type: string
+          description: The latest version key of the document that you want to transfer.
+          example: 7b0211aec350bd4b4fe7460de9e1f70c198a8f45de65ace9c8804d20592ac0a2
+      required:
+        - recipientEmail
+        - recipientName
+        - transferComment
+        - transferEmailMessage
+        - versionKey
+    TransferEnvelopeByEmailResponse:
+      type: object
+      properties:
+        transferId:
+          type: string
+          description: A unique identifier for the transfer process.
+          example: f4ab91cb-cd7e-4130-aca4-d6189ed24228
+    TransferEnvelopeResponse:
+      type: object
+      properties:
+        createdTimestamp:
+          type: string
+          format: date-time
+          description: Date when the transfer of ownership was initiated.
+          example: '2022-06-16 07:03:49.852Z'
+        recipientEmail:
+          type: string
+          description: The email of the recipient of document ownership.
+          example: dev@enigio.com
+        recipientName:
+          type: string
+          description: The name of the recipient of document ownership.
+          example: Alice Smith
+        traceOriginalId:
+          type: string
+          description: trace:original ID of the envelope to be transferred.
+          example: b6b2a956396563c403611662b57e5f851e5049998c7cc72cf73e4acb65084586
+        transferComment:
+          type: string
+          description: A text that will be included in the TRA operation on the document.
+          example: Transfer to ownership of original to...
+        transferId:
+          type: string
+          description: A unique identifier for the transfer process.
+          example: f4ab91cb-cd7e-4130-aca4-d6189ed24228
+    TransferHandoverRequest:
+      type: object
+      properties:
+        comment:
+          type: string
+          description: A text comment describing the transfer of ownership, this is a good place for Endorsements needed on certain negotiable instruments that changes ownership.
+          example: Transfer ownership of original to...
+          minLength: 1
+        newOwnerKey:
+          type: string
+          description: The new public owner key to which transfer of ownership is made.
+          example: 03ecb34a49bff9c78ab2e4612fe44aa9549813eafc4a2670db1276ca71da50a1be
+        newOwnerKeyId:
+          type: string
+          description: The id of the key from the YubiKey which was used for creating the signature. Required if transferring to Webauthn / FIDO2 device transfer data generated at https://traceoriginal.com.Let it be null/empty if transferring to other form of keys.
+        newOwnerKeySignature:
+          type: string
+          description: The signature of the new owner signed data created with the new private key.
+          example: T7lVPCWEnTeJvDNs+mTdDZb8Ubze1kl8QNtGgxxYqc35cmEX+dJ9oLotDX7LlWXReS4+uRfZQFbqhjk1xrPjKg==
+        newOwnerSignedData:
+          type: string
+          description: The data used to generate the signature. If left empty, the system will automatically recognize the new owner key as the new owner signed data and validate the signature against it. In case of using a Webauthn / FIDO2 device the new owner signed data is the Base64 encoded metadata needed for validating the signature.
+          example: 03ecb34a49bff9c78ab2e4612fe44aa9549813eafc4a2670db1276ca71da50a1be
+        recipientNode:
+          $ref: '#/components/schemas/RecipientNode'
+          description: Information on the node to which you want to transfer the document to.
+        versionKey:
+          type: string
+          description: The private version key from the trace:original document's last amendment prior to this new transfer operation. This is needed to make sure that the latest current version of the trace:original document is known and that the transfer is made to the right version.
+          example: d5f547f76a04ce34c4577b2072791d307fdf7e3df1fd40625f1ab81c16f363e4
+      required:
+        - comment
+        - newOwnerKey
+        - newOwnerKeySignature
+        - recipientNode
+        - versionKey
+    TransferOwnershipRestResponse:
+      type: object
+      properties:
+        traceOriginalId:
+          type: string
+        versionKey:
+          type: string
+    TransferReportResponse:
+      type: object
+      properties:
+        dateTime:
+          type: string
+          description: The date when the ownership of the document was transferred.
+          example: '2022-11-30T12:19:43.710884Z'
+        documentCode:
+          type: string
+          description: The document code of this document.
+          enum:
+            - NEG
+            - TTL
+            - RGS
+            - RGN
+            - AGT
+            - ENV
+          example: NEG
+        documentType:
+          type: string
+          description: The document type of this document.
+          example: Generic
+        initiatingPartyOwnerKey:
+          type: string
+          description: The public key that was in ownership of the document before the transfer.
+          example: 03ecb34a49bff9c78ab2e4612fe44aa9549813eafc4a2670db1276ca71da50a1be
+        initiatingPartyUserId:
+          type: string
+          description: The id of the user that initiated the transfer to the new owner.
+          example: alice@enigio.com
+        receivingPartyOwnerKey:
+          type: string
+          description: The public key that gained possession of the document.
+          example: 03ecb34a49bff9c78ab2e4612fe44aa9549813eafc4a2670db1276ca71da50a1be
+        receivingPartyUserId:
+          type: string
+          description: The id of the new owner of the document.
+          example: bob@enigio.com
+        reference:
+          type: string
+          description: The reference value of this document.
+          example: ABC-123
+        traceOriginalId:
+          type: string
+          description: The trace:original ID of this document.
+          example: 2a0c0d7018b70eb0fba84eff6080ee857cb1dcc04ec64e761fc052f4828dbc56
+    TransferResponse:
+      type: object
+      properties:
+        comment:
+          type: string
+          description: The comment that will be part of the transfer message added to the document once completed.
+          example: Transfer ownership of the original to Alice.
+        createdTimestamp:
+          type: string
+          format: date-time
+          description: Date when the transfer of ownership was initiated.
+          example: '2022-06-16 07:03:49.852Z'
+        email:
+          type: string
+          description: The email of the recipient of document ownership.
+          example: dev@enigio.com
+        instantDownload:
+          type: boolean
+          description: Decides if the recipient will automatically receive a download of the transfer of the document once accepted.
+          example: true
+        recipientName:
+          type: string
+          description: The name of the recipient of document ownership.
+          example: Alice Smith
+        traceOriginalId:
+          type: string
+          description: trace:original ID of the document to be transferred.
+          example: b6b2a956396563c403611662b57e5f851e5049998c7cc72cf73e4acb65084586
+        transferId:
+          type: string
+          description: A unique identifier for the transfer process.
+          example: bcfaf87dc1078ff13721acd483189a56aff484d1ccfe5781b0c9a95f6bffeb7a
+    UpdateRequiredSignature:
+      type: object
+      properties:
+        capacityOfSignatory:
+          type: string
+          description: The capacity of the signer on this signature.
+          example: Signatory
+          minLength: 1
+        documentVersion:
+          type: number
+          description: The document version to be signed.
+          example: 1
+        linkExpiresAt:
+          type: string
+          format: date-time
+          description: When the unique signature link will expire, and needs to be renewed.
+          example: '2022-06-16 07:03:49.852Z'
+        organisation:
+          type: string
+          description: The organisation the signer of this signature represents.
+          example: Enigio
+        role:
+          type: string
+          description: The role of the signer on this signature.
+          example: Signer
+        signers:
+          type: array
+          description: List of possible signers to this specific required signature field. Only one of the signers can sign the required signature.
+          items:
+            $ref: '#/components/schemas/Signer'
+      required:
+        - capacityOfSignatory
+    UploadAdditionalDocumentResponse:
+      type: object
+      properties:
+        fileId:
+          type: string
+          description: The file identifier of an additional document.
+          example: c410f92c-4c75-4467-a93a-e1152d694ee5
+    UploadDocumentRequest:
+      type: object
+      properties:
+        document:
+          type: string
+          format: byte
+          description: The document to be uploaded. (binary)
+      required:
+        - document
+    UserOperationResponse:
+      type: object
+      properties:
+        documentCode:
+          type: string
+          description: Document code of the document.
+          enum:
+            - NEG
+            - TTL
+            - RGS
+            - RGN
+            - AGT
+            - ENV
+          example: NEG
+        documentId:
+          type: string
+          description: trace:original ID or draft ID of the document.
+          example: b6b2a956396563c403611662b57e5f851e5049998c7cc72cf73e4acb65084586
+        documentType:
+          type: string
+          description: The document type of this document.
+          example: Generic
+        reference:
+          type: string
+          description: Reference of the document, will only be available in this report if it has been withdrawn.
+          example: ABC-123
+        userId:
+          type: string
+          description: The user id of the user that performed the operation on the document.
+          example: dev@enigio.com
+        userOperationDoneAt:
+          type: string
+          format: date-time
+          description: Timestamp when the operation on the document was performed.
+          example: '2022-06-16 07:03:49.852Z'
+        userOperationType:
+          type: string
+          description: User operation performed by the given user on this document.
+          example: CREATE
+    ValidateDocumentRequest:
+      type: object
+      properties:
+        document:
+          type: string
+          format: byte
+          description: The original document or proof of ownership to be validated. (binary)
+      required:
+        - document
+    ValidateDocumentResponse:
+      type: object
+      properties:
+        details:
+          type: string
+          description: If the result is not valid, a string specifying the error will be returned here.
+        result:
+          type: string
+          description: The result of the validation.
+          enum:
+            - VALID
+            - NOT_VALID
+            - OUTDATED
+            - CANNOT_VALIDATE
+        traceOriginalId:
+          type: string
+          description: The trace:original ID of the validated document.
+          example: 60fcd0a7d84b1b5df0542b29b7a941abe6b45b20de7585ff2e91cbaf1665dac5
+        type:
+          type: string
+          description: The type of the validated document.
+          enum:
+            - TRACE_ORIGINAL
+            - PROOF_OF_POSSESSION
+    ValidationErrorDetails:
+      allOf:
+        - $ref: '#/components/schemas/ErrorDetails'
+        - type: object
+          properties:
+            fieldName:
+              type: string
+              description: The name of the field which caused the error
+    WithdrawnReportResponse:
+      type: object
+      properties:
+        documentCode:
+          type: string
+          description: The document code of this document.
+          enum:
+            - NEG
+            - TTL
+            - RGS
+            - RGN
+            - AGT
+            - ENV
+          example: NEG
+        documentType:
+          type: string
+          description: The document type of this document.
+          example: Generic
+        reference:
+          type: string
+          description: The reference value of this document.
+          example: ABC-123
+        traceOriginalId:
+          type: string
+          description: The trace:original ID of this document.
+          example: 2a0c0d7018b70eb0fba84eff6080ee857cb1dcc04ec64e761fc052f4828dbc56
+        userId:
+          type: string
+          description: The id of the user that withdrew the document from this document storage.
+          example: dev@enigio.com
+        userOperationType:
+          type: string
+        withdrawnAt:
+          type: string
+          description: The date when the document was withdrawn.
+          example: '2022-11-30T12:19:43.710884Z'
+    ValidationErrorDetailsNotification:
+      allOf:
+        - $ref: '#/components/schemas/ErrorDetails'
+        - type: object
+          properties:
+            fieldName:
+              type: string
+              description: The name of the field which caused the error
+    WebhookUpdateRequest:
+      type: object
+      description: Request payload for updating an existing webhook
+      properties:
+        url:
+          type: string
+          description: The URL where webhook events will be delivered.
+          example: https://api.example.com/webhooks/events
+        scope:
+          type: string
+          description: |
+            Defines which document changes trigger callbacks.
+
+            - ```ALL``` - Any changes to existing documents in the document storage will trigger webhooks, even if the document is a copy that has been transferred and the changes were done by an another node.
+            - ```OWNED_ONLY``` - Changes to documents in the document storage will trigger webhooks only if the documents are owned by this node.
+          enum:
+            - ALL
+            - OWNED_ONLY
+          example: OWNED_ONLY
+        signatureMethod:
+          type: string
+          default: NONE
+          description: Signing method for webhook payloads
+          enum:
+            - NONE
+            - JWS
+        eventTypes:
+          type: array
+          items:
+            type: string
+            enum:
+              - CREATE
+              - AMENDMENT
+              - TRANSFER_INITIATED
+              - TRANSFER_CANCELLED
+              - TRANSFER
+              - TRANSFER_REJECTED
+              - INVALIDATE
+              - FULLY_SIGNED
+              - PARTIALLY_SIGNED
+              - SIGNATURE_REJECTED
+              - SIGNATURE
+              - CHANGE_TO_PAPER
+              - CREATE_FROM_PAPER
+              - CHANGE_TO_MEDIUM
+              - CREATE_FROM_MEDIUM
+              - WITHDRAW
+              - UPLOAD
+              - ALL_EVENTS
+            example:
+              - CREATE
+              - TRANSFER
+          minItems: 1
+          uniqueItems: true
+        active:
+          type: boolean
+          description: Whether the webhook is active and will receive events. Webhooks are automatically disabled after repeated delivery failures.
+      required:
+        - eventTypes
+        - scope
+        - url
+    WebhookResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 0199e335-dac8-79ce-a7ed-049b5b388d6d
+        url:
+          type: string
+          description: The URL where webhook events will be delivered.
+          example: https://api.example.com/webhooks/events
+        created:
+          type: string
+          format: date-time
+          description: The ISO-8601 representation of the date when the webhook was created.
+          example: 2025-10-24T14:15:227Z
+        updated:
+          type: string
+          format: date-time
+          description: The ISO-8601 representation of the date when the webhook was last updated.
+          example: 2025-10-31T04:16:356Z
+        active:
+          type: boolean
+          description: Whether the webhook is active and will receive events. Webhooks are automatically disabled after repeated delivery failures.
+          example: true
+        scope:
+          type: string
+          description: |
+            Defines which document changes trigger callbacks.
+
+            - ```ALL``` - Any changes to existing documents in the document storage will trigger webhooks, even if the document is a copy that has been transferred and the changes were done by an another node.
+            - ```OWNED_ONLY``` - Changes to documents in the document storage will trigger webhooks only if the documents are owned by this node.
+          enum:
+            - ALL
+            - OWNED_ONLY
+          example: OWNED_ONLY
+        signatureMethod:
+          type: string
+          description: Signing method for webhook payloads.
+          enum:
+            - NONE
+            - JWS
+          example: JWS
+        eventTypes:
+          type: array
+          items:
+            type: string
+            enum:
+              - CREATE
+              - AMENDMENT
+              - TRANSFER_INITIATED
+              - TRANSFER_CANCELLED
+              - TRANSFER
+              - TRANSFER_REJECTED
+              - INVALIDATE
+              - FULLY_SIGNED
+              - PARTIALLY_SIGNED
+              - SIGNATURE_REJECTED
+              - SIGNATURE
+              - CHANGE_TO_PAPER
+              - CREATE_FROM_PAPER
+              - CHANGE_TO_MEDIUM
+              - CREATE_FROM_MEDIUM
+              - WITHDRAW
+              - UPLOAD
+              - ALL_EVENTS
+            example:
+              - CREATE
+              - TRANSFER
+          uniqueItems: true
+    WebhookRegistrationRequest:
+      type: object
+      description: Request payload for registering a new webhook
+      properties:
+        url:
+          type: string
+          description: The URL where webhook events will be delivered.
+          example: https://api.example.com/webhooks/events
+          minLength: 1
+        scope:
+          type: string
+          description: |
+            Defines which document changes trigger callbacks.
+
+            - ```ALL``` - Any changes to existing documents in the document storage will trigger webhooks, even if the document is a copy that has been transferred and the changes were done by an another node.
+            - ```OWNED_ONLY``` - Changes to documents in the document storage will trigger webhooks only if the documents are owned by this node.
+          enum:
+            - ALL
+            - OWNED_ONLY
+          example: OWNED_ONLY
+        signatureMethod:
+          type: string
+          default: NONE
+          description: Signing method for webhook payloads.
+          enum:
+            - NONE
+            - JWS
+          example: JWS
+        eventTypes:
+          type: array
+          items:
+            type: string
+            enum:
+              - CREATE
+              - AMENDMENT
+              - TRANSFER_INITIATED
+              - TRANSFER_CANCELLED
+              - TRANSFER
+              - TRANSFER_REJECTED
+              - INVALIDATE
+              - FULLY_SIGNED
+              - PARTIALLY_SIGNED
+              - SIGNATURE_REJECTED
+              - SIGNATURE
+              - CHANGE_TO_PAPER
+              - CREATE_FROM_PAPER
+              - CHANGE_TO_MEDIUM
+              - CREATE_FROM_MEDIUM
+              - WITHDRAW
+              - UPLOAD
+              - ALL_EVENTS
+            example:
+              - CREATE
+              - TRANSFER
+          minItems: 1
+          uniqueItems: true
+      required:
+        - eventTypes
+        - scope
+        - url
+    EmailBodyInputs:
+      discriminator:
+        propertyName: type
+      properties:
+        type:
+          type: string
+      required:
+        - type
+    EnrollOtpBodyInput:
+      allOf:
+        - $ref: '#/components/schemas/EmailBodyInputs'
+        - type: object
+          properties:
+            otp:
+              type: string
+    EnrollPasswordBodyInput:
+      allOf:
+        - $ref: '#/components/schemas/EmailBodyInputs'
+        - type: object
+          properties:
+            password:
+              type: string
+            nodeUri:
+              type: string
+            name:
+              type: string
+    ReceiveEnvelopeBodyInput:
+      allOf:
+        - $ref: '#/components/schemas/EmailBodyInputs'
+        - type: object
+          properties:
+            filename:
+              type: string
+            hostname:
+              type: string
+            receiveEnvelopeLink:
+              type: string
+            recipientName:
+              type: string
+            message:
+              type: string
+    SignatureBodyInput:
+      allOf:
+        - $ref: '#/components/schemas/EmailBodyInputs'
+        - type: object
+          properties:
+            name:
+              type: string
+            uri:
+              type: string
+              format: uri
+            expires:
+              type: string
+              format: date-time
+    TransferBodyInput:
+      allOf:
+        - $ref: '#/components/schemas/EmailBodyInputs'
+        - type: object
+          properties:
+            filename:
+              type: string
+            hostname:
+              type: string
+            transferLink:
+              type: string
+            recipientName:
+              type: string
+    EmailEventWatcher:
+      type: object
+      properties:
+        email:
+          type: string
+          description: E-mail of the recipient.
+          minLength: 1
+        events:
+          type: array
+          description: 'List of events the user should receive notifications for. List of event types: ```signature_full```, ```signature_partial```, ```amendment```, ```transfer```, ```invalidate```, ```all_events```'
+          items:
+            type: string
+            minLength: 1
+          minItems: 1
+      required:
+        - email
+        - events
+    NotificationWatchers:
+      type: object
+      properties:
+        watcherList:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmailEventWatcher'
+    CallbackUrls:
+      type: object
+      properties:
+        urls:
+          type: array
+          description: List of webhook endpoint URLs where event callbacks will be delivered.
+          example:
+            - https://api.example.com/webhooks/events
+          items:
+            type: string
+          minItems: 1
+      required:
+        - urls
+    CallbackStatus:
+      type: object
+      properties:
+        errorDescription:
+          type: string
+        urlStatuses:
+          type: array
+          items:
+            $ref: '#/components/schemas/UrlStatus'
+    UrlStatus:
+      type: object
+      properties:
+        validUrl:
+          type: boolean
+        url:
+          type: string
+    SendBulkEmailsRequest:
+      type: object
+      properties:
+        emails:
+          type: array
+          description: A list of emails to send signing email to.
+          items:
+            type: string
+            description: A list of emails to send signing email to.
+        locale:
+          type: string
+          description: The language to use in the signing mails.
+          enum:
+            - '{''sv'', ''en''}'
+          example: en
+      required:
+        - emails
+  securitySchemes:
+    Basic Authentication:
+      type: http
+      scheme: basic
+    JWT Bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

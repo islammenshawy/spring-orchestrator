@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Digital Instrument Service — Enigio trace:original Integration</title>
+<style>
+:root{--bg:#0a0e17;--sf:#111827;--sf2:#1a2234;--bd:#2a3548;--tx:#e2e8f0;--dim:#94a3b8;--dim2:#64748b;--blue:#3b82f6;--green:#10b981;--amber:#f59e0b;--purple:#8b5cf6;--red:#ef4444;--cyan:#06b6d4;--g1:#3b82f6;--g2:#f59e0b;--g3:#10b981;--gate:#8b5cf6}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',-apple-system,sans-serif;background:var(--bg);color:var(--tx);line-height:1.6}
+.container{max-width:1100px;margin:0 auto;padding:0 2rem}
+section{padding:5rem 0}
+h2{font-size:1.8rem;font-weight:700;margin-bottom:.4rem}
+h2 span{color:var(--blue)}
+.sub{color:var(--dim);font-size:1rem;margin-bottom:2.5rem;max-width:600px}
+h3{font-size:1.1rem;font-weight:600;margin-bottom:.6rem}
+a{color:var(--blue);text-decoration:none}
+
+/* Hero */
+.hero{min-height:90vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:2rem;position:relative}
+.hero::before{content:'';position:absolute;top:-200px;left:50%;transform:translateX(-50%);width:800px;height:800px;background:radial-gradient(circle,rgba(59,130,246,.08) 0%,transparent 70%);pointer-events:none}
+.badge{display:inline-block;padding:5px 14px;border-radius:16px;font-size:.75rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.badge-blue{background:rgba(59,130,246,.12);border:1px solid rgba(59,130,246,.3);color:var(--blue)}
+.badge-green{background:rgba(16,185,129,.12);color:var(--green)}
+.badge-amber{background:rgba(245,158,11,.12);color:var(--amber)}
+.badge-purple{background:rgba(139,92,246,.12);color:var(--purple)}
+.badge-red{background:rgba(239,68,68,.12);color:var(--red)}
+.hero h1{font-size:clamp(2.2rem,5vw,3.5rem);font-weight:700;letter-spacing:-.03em;margin:.8rem 0;animation:fadeIn .8s}
+.hero h1 span{color:var(--blue)}
+.hero p{font-size:1.1rem;color:var(--dim);max-width:680px;margin-bottom:2rem}
+.hero-links{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.hero-links a{padding:9px 20px;border-radius:7px;font-size:.85rem;font-weight:500}
+.btn-p{background:var(--blue);color:#fff}.btn-p:hover{opacity:.9}
+.btn-o{background:var(--sf);border:1px solid var(--bd);color:var(--tx)}.btn-o:hover{border-color:var(--blue)}
+
+/* Cards */
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:1.4rem;margin-bottom:1.2rem}
+.card h3{font-size:.8rem;font-weight:600;color:var(--dim2);text-transform:uppercase;letter-spacing:.04em}
+
+/* Sections */
+.dark-section{background:var(--sf);border-top:1px solid var(--bd);border-bottom:1px solid var(--bd)}
+
+/* Architecture */
+.arch{display:flex;align-items:center;justify-content:center;gap:0;flex-wrap:wrap;padding:2rem 0}
+.arch-box{padding:1.2rem 1.6rem;border-radius:10px;text-align:center;min-width:170px}
+.arch-box .lbl{font-size:.65rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px}
+.arch-box .ttl{font-size:1rem;font-weight:600}
+.arch-box .desc{font-size:.75rem;color:var(--dim)}
+.arch-arr{display:flex;flex-direction:column;align-items:center;padding:0 .8rem;font-size:.65rem;color:var(--dim2);gap:2px}
+.arch-arr .line{width:50px;height:2px;background:var(--bd);position:relative}
+.arch-arr .line::after{content:'';position:absolute;right:-1px;top:-4px;border:5px solid transparent;border-left-color:var(--bd)}
+.feat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.8rem;margin-top:1.5rem}
+.feat{padding:1rem;background:var(--sf2);border-radius:8px;border:1px solid var(--bd)}
+.feat h4{font-size:.85rem;margin-bottom:3px}.feat p{font-size:.78rem;color:var(--dim)}
+
+/* Flow timeline */
+.flow-viz{display:flex;gap:3px;align-items:stretch;flex-wrap:wrap;padding:1rem 0}
+.fv{flex:1;min-width:70px;padding:10px 4px;border-radius:7px;text-align:center;font-size:.6rem;font-weight:600;opacity:.3;transition:all .5s;border:1px solid transparent;position:relative}
+.fv.active{opacity:1;transform:scale(1.05)}.fv.done{opacity:.7}
+.fv .num{font-size:1.1rem;font-weight:700;margin-bottom:2px}.fv .nm{color:var(--dim)}
+.fv .chk{position:absolute;top:3px;right:5px;font-size:.65rem;opacity:0}.fv.done .chk{opacity:1;color:var(--green)}
+.fv.p1{background:rgba(59,130,246,.06)}.fv.p1.active{background:rgba(59,130,246,.18);border-color:var(--g1);box-shadow:0 0 15px rgba(59,130,246,.12)}.fv.p1 .num{color:var(--g1)}
+.fv.p2{background:rgba(245,158,11,.06)}.fv.p2.active{background:rgba(245,158,11,.18);border-color:var(--g2);box-shadow:0 0 15px rgba(245,158,11,.12)}.fv.p2 .num{color:var(--g2)}
+.fv.p3{background:rgba(16,185,129,.06)}.fv.p3.active{background:rgba(16,185,129,.18);border-color:var(--g3);box-shadow:0 0 15px rgba(16,185,129,.12)}.fv.p3 .num{color:var(--g3)}
+.fv.gt{background:rgba(139,92,246,.06);border-style:dashed}.fv.gt.active{background:rgba(139,92,246,.18);border-color:var(--gate);box-shadow:0 0 15px rgba(139,92,246,.12)}.fv.gt .num{color:var(--gate)}
+.fc{display:flex;align-items:center;color:var(--dim2);font-size:.6rem;flex-shrink:0}
+.prog{height:4px;background:var(--bd);border-radius:2px;overflow:hidden;margin-top:1rem}
+.prog-fill{height:100%;width:0;border-radius:2px;transition:width .5s;background:linear-gradient(90deg,var(--g1),var(--g2),var(--g3))}
+.status-txt{font-size:.72rem;color:var(--dim2);text-align:right;margin-top:4px}
+
+/* Group headers */
+.grp{display:flex;align-items:center;gap:10px;margin:2.5rem 0 1.2rem;padding:.8rem 1.2rem;border-radius:8px}
+.grp:first-of-type{margin-top:0}
+.grp.g1{background:linear-gradient(90deg,rgba(59,130,246,.08),transparent);border-left:3px solid var(--g1)}
+.grp.g2{background:linear-gradient(90deg,rgba(245,158,11,.08),transparent);border-left:3px solid var(--g2)}
+.grp.g3{background:linear-gradient(90deg,rgba(16,185,129,.08),transparent);border-left:3px solid var(--g3)}
+.grp.gg{background:linear-gradient(90deg,rgba(139,92,246,.08),transparent);border-left:3px solid var(--gate)}
+.grp-n{width:30px;height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.8rem;flex-shrink:0}
+.g1 .grp-n{background:rgba(59,130,246,.15);color:var(--g1)}
+.g2 .grp-n{background:rgba(245,158,11,.15);color:var(--g2)}
+.g3 .grp-n{background:rgba(16,185,129,.15);color:var(--g3)}
+.gg .grp-n{background:rgba(139,92,246,.15);color:var(--gate)}
+.grp-info h3{font-size:1rem;margin-bottom:1px}.grp-info p{font-size:.78rem;color:var(--dim)}
+
+/* Code */
+.code{background:#0d1117;border:1px solid var(--bd);border-radius:7px;padding:.9rem;font-family:'JetBrains Mono','Fira Code',monospace;font-size:.75rem;line-height:1.6;overflow-x:auto;margin:.6rem 0}
+.code .c{color:#6a737d}.code .k{color:#79c0ff}.code .s{color:#a5d6ff}.code .n{color:#d2a8ff}.code .m{color:#7ee787;font-weight:700}.code .u{color:#ffa657}
+
+/* Sequence */
+.seq-box{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:1.5rem;overflow-x:auto;margin-top:1.5rem}
+.seq-row{display:grid;grid-template-columns:1fr 2fr 1fr;align-items:center;padding:5px 0;min-height:36px}
+.seq-cell{text-align:center;font-size:.7rem;position:relative;z-index:2}
+.seq-lbl{padding:1px 5px;border-radius:3px;background:var(--sf2);white-space:nowrap;font-size:.65rem}
+.seq-lbl.req{color:var(--blue)}.seq-lbl.res{color:var(--green)}.seq-lbl.ntf{color:var(--purple)}.seq-lbl.wrn{color:var(--amber)}
+.seq-grp{display:flex;align-items:center;gap:6px;padding:8px 12px;margin:6px 0;border-radius:5px;font-size:.7rem;font-weight:600}
+.seq-grp.sg1{background:rgba(59,130,246,.06);border-left:3px solid var(--g1);color:var(--g1)}
+.seq-grp.sg2{background:rgba(245,158,11,.06);border-left:3px solid var(--g2);color:var(--g2)}
+.seq-grp.sg3{background:rgba(16,185,129,.06);border-left:3px solid var(--g3);color:var(--g3)}
+.seq-grp.sgg{background:rgba(139,92,246,.06);border-left:3px solid var(--gate);color:var(--gate)}
+.seq-arr{width:100%;height:0;border-top:2px solid var(--bd);position:relative}
+.seq-arr.req{border-color:var(--blue)}.seq-arr.res{border-color:var(--green);border-style:dashed}.seq-arr.ntf{border-color:var(--purple);border-style:dotted}
+.seq-actors{display:flex;justify-content:space-between;margin-bottom:.5rem}
+.seq-actor{text-align:center;flex:1}
+.seq-actor span{display:inline-block;padding:7px 14px;border-radius:6px;font-size:.75rem;font-weight:600}
+.a-ds span{background:rgba(139,92,246,.12);border:1px solid rgba(139,92,246,.3);color:var(--purple)}
+.a-or span{background:rgba(59,130,246,.12);border:1px solid rgba(59,130,246,.3);color:var(--blue)}
+.a-en span{background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3);color:var(--green)}
+
+/* Resilience */
+.res-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;margin-top:1.5rem}
+.res-card{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:1.2rem;transition:border-color .3s}
+.res-card:hover{border-color:var(--blue)}
+.res-card h4{font-size:.9rem;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.res-card p{font-size:.8rem;color:var(--dim);line-height:1.5}
+.res-icon{width:26px;height:26px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0}
+
+/* Table */
+.tbl{width:100%;border-collapse:collapse;font-size:.78rem;margin-top:.8rem}
+.tbl th{text-align:left;padding:7px 10px;border-bottom:2px solid var(--bd);color:var(--dim2);font-size:.68rem;text-transform:uppercase;letter-spacing:.04em}
+.tbl td{padding:7px 10px;border-bottom:1px solid rgba(42,53,72,.5)}
+.tbl td:first-child{color:var(--blue);font-family:'JetBrains Mono',monospace;font-size:.74rem}
+.tbl tr.grp-r td{background:rgba(59,130,246,.04);font-weight:600;font-size:.7rem;color:var(--dim2);text-transform:uppercase;letter-spacing:.04em;padding-top:10px}
+.tbl tr.grp-r.r2 td{background:rgba(245,158,11,.04)}
+.tbl tr.grp-r.r3 td{background:rgba(16,185,129,.04)}
+.tbl tr.grp-r.rg td{background:rgba(139,92,246,.04)}
+
+/* Misc */
+.tag{font-size:.6rem;padding:1px 5px;border-radius:3px;font-weight:600}
+.tag-r{background:rgba(239,68,68,.12);color:var(--red)}.tag-o{background:rgba(100,116,139,.12);color:var(--dim2)}
+footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-size:.75rem;color:var(--dim2)}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-15px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(59,130,246,.3)}50%{box-shadow:0 0 0 5px rgba(59,130,246,0)}}
+/* Endpoint tabs */
+.ep-tab{padding:6px 14px;border-radius:6px;border:1px solid var(--bd);background:transparent;color:var(--dim);cursor:pointer;font-size:.75rem;font-weight:500;transition:.15s}
+.ep-tab:hover{border-color:var(--blue);color:var(--tx)}
+.ep-tab.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+/* View toggle */
+.vt{padding:3px 10px;border-radius:4px;border:1px solid var(--bd);background:transparent;color:var(--dim);cursor:pointer;font-size:.68rem;font-weight:500;transition:.15s}
+.vt:hover{border-color:var(--blue);color:var(--tx)}.vt.active{background:rgba(59,130,246,.15);color:var(--blue);border-color:rgba(59,130,246,.3)}
+/* Copy button */
+.cp-btn{position:relative;margin-top:6px;padding:4px 12px;border-radius:4px;border:1px solid var(--bd);background:var(--sf2);color:var(--dim);cursor:pointer;font-size:.7rem;transition:.15s}
+.cp-btn:hover{border-color:var(--green);color:var(--green)}.cp-btn.copied{color:var(--green);border-color:var(--green)}
+@media(max-width:768px){.arch{flex-direction:column}.arch-arr{transform:rotate(90deg);padding:.5rem 0}.seq-row{font-size:.6rem}.flow-viz{flex-direction:column}}
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="badge badge-blue" style="margin-bottom:1.5rem">Integration Guide v3.3</div>
+  <h1>Digital Instrument Service<br><span>Enigio trace:original</span></h1>
+  <p>One API call from your downstream system triggers an 11-step orchestrated flow across 3 business phases, 2 approval gates, webhook-driven signing, and the Enigio trace:original platform.</p>
+  <div class="hero-links">
+    <a href="#architecture" class="btn-p">Architecture</a>
+    <a href="#flow" class="btn-o">Flow Steps</a>
+    <a href="#contract" class="btn-o">Downstream API</a>
+    <a href="#sequence" class="btn-o">Sequence Diagram</a>
+    <a href="https://docs.traceoriginal.com" class="btn-o" target="_blank">Enigio API Docs</a>
+  </div>
+</section>
+
+<!-- ARCHITECTURE -->
+<section class="dark-section" id="architecture">
+<div class="container">
+  <h2>Orchestrator <span>Architecture</span></h2>
+  <p class="sub">One API call in. Eleven steps executed. Three approval checkpoints. Full crash recovery.</p>
+
+  <div class="arch">
+    <div class="arch-box" style="background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.25)">
+      <div class="lbl" style="color:var(--purple)">Downstream</div>
+      <div class="ttl">Your System</div>
+      <div class="desc">Single POST request</div>
+    </div>
+    <div class="arch-arr">
+      <span>POST /flows/enigio-instrument</span>
+      <div class="line"></div>
+      <span style="color:var(--green);font-size:.55rem">dis.instrument.notifications</span>
+    </div>
+    <div class="arch-box" style="background:rgba(59,130,246,.1);border:2px solid rgba(59,130,246,.4)">
+      <div class="lbl" style="color:var(--blue)">Orchestrator</div>
+      <div class="ttl">digital-instrument-service</div>
+      <div class="desc">Kafka + MongoDB + Outbox</div>
+    </div>
+    <div class="arch-arr">
+      <span>11 API calls</span>
+      <div class="line"></div>
+      <span style="color:var(--green);font-size:.55rem">webhooks</span>
+    </div>
+    <div class="arch-box" style="background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.25)">
+      <div class="lbl" style="color:var(--green)">Enigio</div>
+      <div class="ttl">trace:original API v3.3</div>
+      <div class="desc">docs.traceoriginal.com</div>
+    </div>
+  </div>
+
+  <div class="feat-grid">
+    <div class="feat"><h4>Transactional Outbox</h4><p>Every state change persisted atomically with its Kafka event. No message loss even if broker is down.</p></div>
+    <div class="feat"><h4>Webhook-Driven Signing</h4><p>Primary signal from Enigio webhooks (PARTIALLY_SIGNED, FULLY_SIGNED). Poll fallback + configurable expiry (48h).</p></div>
+    <div class="feat"><h4>Approval Gates</h4><p>Downstream notified via Kafka topic at each phase boundary. Flow pauses until POST /approve. Expiry after 72h.</p></div>
+    <div class="feat"><h4>Crash Recovery</h4><p>Stale flow scanner + WaitingFlowScheduler re-publish stuck flows. Idempotent steps prevent duplicate API calls.</p></div>
+  </div>
+</div>
+</section>
+
+<!-- FLOW TIMELINE -->
+<section id="timeline">
+<div class="container">
+  <h2>Document <span>Lifecycle</span></h2>
+  <p class="sub">11 steps across 3 business phases with 2 approval gates.</p>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <h3 style="margin:0">Flow Execution Timeline</h3>
+      <button onclick="playFlow()" style="padding:6px 16px;border:1px solid var(--blue);background:rgba(59,130,246,.1);color:var(--blue);border-radius:5px;cursor:pointer;font-size:.75rem;font-weight:600">Play</button>
+    </div>
+    <div class="flow-viz" id="fviz">
+      <div class="fv p1" data-s="0"><div class="chk">&#10003;</div><div class="num">1</div><div class="nm">Draft</div></div><div class="fc">&rarr;</div>
+      <div class="fv p1" data-s="1"><div class="chk">&#10003;</div><div class="num">2</div><div class="nm">Register</div></div><div class="fc">&rarr;</div>
+      <div class="fv p1" data-s="2"><div class="chk">&#10003;</div><div class="num">3</div><div class="nm">Attach</div></div><div class="fc">&#9553;</div>
+      <div class="fv gt" data-s="3"><div class="chk">&#10003;</div><div class="num">&#8644;</div><div class="nm">Approve</div></div><div class="fc">&rarr;</div>
+      <div class="fv p2" data-s="4"><div class="chk">&#10003;</div><div class="num">5</div><div class="nm">Signers</div></div><div class="fc">&rarr;</div>
+      <div class="fv p2" data-s="5"><div class="chk">&#10003;</div><div class="num">6</div><div class="nm">Emails</div></div><div class="fc">&rarr;</div>
+      <div class="fv p2" data-s="6"><div class="chk">&#10003;</div><div class="num">7</div><div class="nm">Webhook</div></div><div class="fc">&#9553;</div>
+      <div class="fv gt" data-s="7"><div class="chk">&#10003;</div><div class="num">&#8644;</div><div class="nm">Approve</div></div><div class="fc">&rarr;</div>
+      <div class="fv p3" data-s="8"><div class="chk">&#10003;</div><div class="num">9</div><div class="nm">Validate</div></div><div class="fc">&rarr;</div>
+      <div class="fv p3" data-s="9"><div class="chk">&#10003;</div><div class="num">10</div><div class="nm">Envelope</div></div><div class="fc">&rarr;</div>
+      <div class="fv p3" data-s="10"><div class="chk">&#10003;</div><div class="num">11</div><div class="nm">Transfer</div></div>
+    </div>
+    <div class="prog"><div class="prog-fill" id="pf"></div></div>
+    <div class="status-txt" id="st">Ready</div>
+  </div>
+
+  <!-- Backoff Ladder -->
+  <div class="card">
+    <h3>Retry Backoff Ladder</h3>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:.6rem;font-size:.7rem">
+      <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--blue);background:rgba(59,130,246,.08);text-align:center"><div style="font-weight:700">Main</div><div style="color:var(--dim)">immediate</div></div>
+      <div style="color:var(--dim);display:flex;align-items:center">&rarr;</div>
+      <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--amber);background:rgba(245,158,11,.06);text-align:center"><div style="font-weight:700">retry-0</div><div style="color:var(--dim)">5s</div></div>
+      <div style="color:var(--dim);display:flex;align-items:center">&rarr;</div>
+      <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--amber);background:rgba(245,158,11,.06);text-align:center"><div style="font-weight:700">retry-1</div><div style="color:var(--dim)">10s</div></div>
+      <div style="color:var(--dim);display:flex;align-items:center">&rarr;</div>
+      <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--amber);background:rgba(245,158,11,.06);text-align:center"><div style="font-weight:700">retry-2</div><div style="color:var(--dim)">20s</div></div>
+      <div style="color:var(--dim);display:flex;align-items:center">&rarr;</div>
+      <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--amber);background:rgba(245,158,11,.06);text-align:center"><div style="font-weight:700">retry-3</div><div style="color:var(--dim)">40s</div></div>
+      <div style="color:var(--dim);display:flex;align-items:center">&rarr;</div>
+      <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--amber);background:rgba(245,158,11,.06);text-align:center"><div style="font-weight:700">retry-4</div><div style="color:var(--dim)">80s</div></div>
+      <div style="color:var(--dim);display:flex;align-items:center">&rarr;</div>
+      <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--amber);background:rgba(245,158,11,.06);text-align:center"><div style="font-weight:700">retry-5</div><div style="color:var(--dim)">160s</div></div>
+      <div style="color:var(--dim);display:flex;align-items:center">&rarr;</div>
+      <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--amber);background:rgba(245,158,11,.06);text-align:center"><div style="font-weight:700">retry-6</div><div style="color:var(--dim)">180s (cap)</div></div>
+      <div style="color:var(--dim);display:flex;align-items:center">&rarr;</div>
+      <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--red);background:rgba(239,68,68,.08);text-align:center"><div style="font-weight:700;color:var(--red)">DLT</div><div style="color:var(--dim)">manual review</div></div>
+    </div>
+    <div style="margin-top:.6rem;font-size:.72rem;color:var(--dim)">Jitter factor: 0.5 (equal jitter). Max attempts: 8. Total retry window: ~8 minutes before DLT.</div>
+  </div>
+</div>
+</section>
+
+<!-- SEQUENCE DIAGRAM -->
+<section id="sequence">
+<div class="container">
+  <h2>Sequence <span>Diagram</span></h2>
+  <p class="sub">End-to-end message flow including webhooks, notifications, and approval gates.</p>
+
+  <div class="seq-box" style="padding:1rem .5rem">
+    <svg viewBox="0 0 900 1180" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:900px;margin:0 auto;display:block;font-family:Inter,-apple-system,sans-serif">
+      <!-- Actor boxes -->
+      <rect x="65" y="10" width="130" height="36" rx="6" fill="rgba(139,92,246,.12)" stroke="rgba(139,92,246,.35)"/>
+      <text x="130" y="33" text-anchor="middle" fill="#8b5cf6" font-size="12" font-weight="600">Downstream</text>
+      <rect x="355" y="10" width="190" height="36" rx="6" fill="rgba(59,130,246,.12)" stroke="rgba(59,130,246,.35)"/>
+      <text x="450" y="33" text-anchor="middle" fill="#3b82f6" font-size="12" font-weight="600">DIS Orchestrator</text>
+      <rect x="685" y="10" width="140" height="36" rx="6" fill="rgba(16,185,129,.12)" stroke="rgba(16,185,129,.35)"/>
+      <text x="755" y="33" text-anchor="middle" fill="#10b981" font-size="12" font-weight="600">Enigio API</text>
+
+      <!-- Lifelines -->
+      <line x1="130" y1="50" x2="130" y2="1170" stroke="#2a3548" stroke-dasharray="6,4"/>
+      <line x1="450" y1="50" x2="450" y2="1170" stroke="#2a3548" stroke-dasharray="6,4"/>
+      <line x1="755" y1="50" x2="755" y2="1170" stroke="#2a3548" stroke-dasharray="6,4"/>
+
+      <!-- === Request === -->
+      <line x1="135" y1="75" x2="445" y2="75" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+      <text x="290" y="70" text-anchor="middle" fill="#3b82f6" font-size="9.5">POST /flows/enigio-instrument</text>
+      <line x1="445" y1="95" x2="135" y2="95" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowGreen)"/>
+      <text x="290" y="90" text-anchor="middle" fill="#10b981" font-size="9">202 { id, IN_PROGRESS }</text>
+
+      <!-- === Group 1 === -->
+      <rect x="20" y="115" width="860" height="135" rx="5" fill="rgba(59,130,246,.03)" stroke="rgba(59,130,246,.15)"/>
+      <text x="35" y="132" fill="#3b82f6" font-size="10" font-weight="700">GROUP 1: Document Preparation</text>
+
+      <rect x="410" y="142" width="80" height="20" rx="3" fill="rgba(245,158,11,.1)" stroke="rgba(245,158,11,.3)"/>
+      <text x="450" y="156" text-anchor="middle" fill="#f59e0b" font-size="8.5" font-weight="600">1. DRAFT</text>
+
+      <line x1="455" y1="175" x2="750" y2="175" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+      <text x="600" y="170" text-anchor="middle" fill="#3b82f6" font-size="9">2. POST /documents</text>
+      <line x1="750" y1="192" x2="455" y2="192" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowGreen)"/>
+      <text x="600" y="188" text-anchor="middle" fill="#10b981" font-size="8.5">{ traceOriginalId, versionKey }</text>
+
+      <line x1="455" y1="215" x2="750" y2="215" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+      <text x="600" y="210" text-anchor="middle" fill="#3b82f6" font-size="9">3. POST /documents/{id}/amend</text>
+      <line x1="750" y1="232" x2="455" y2="232" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowGreen)"/>
+      <text x="600" y="228" text-anchor="middle" fill="#10b981" font-size="8.5">{ versionKey: v2 }</text>
+
+      <!-- === Gate 1 === -->
+      <rect x="20" y="260" width="860" height="80" rx="5" fill="rgba(139,92,246,.03)" stroke="rgba(139,92,246,.2)" stroke-dasharray="6,3"/>
+      <text x="35" y="278" fill="#8b5cf6" font-size="10" font-weight="700">GATE 1: Await Signing Approval</text>
+      <text x="280" y="278" fill="#64748b" font-size="8">(72h expiry)</text>
+
+      <line x1="445" y1="295" x2="135" y2="295" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowPurple)"/>
+      <text x="290" y="290" text-anchor="middle" fill="#8b5cf6" font-size="9">topic: PREPARATION_COMPLETE</text>
+
+      <line x1="135" y1="320" x2="445" y2="320" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+      <text x="290" y="315" text-anchor="middle" fill="#8b5cf6" font-size="9">POST /{id}/approve</text>
+
+      <!-- === Group 2 === -->
+      <rect x="20" y="350" width="860" height="270" rx="5" fill="rgba(245,158,11,.03)" stroke="rgba(245,158,11,.15)"/>
+      <text x="35" y="368" fill="#f59e0b" font-size="10" font-weight="700">GROUP 2: Signing Ceremony</text>
+
+      <line x1="455" y1="385" x2="750" y2="385" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+      <text x="600" y="380" text-anchor="middle" fill="#3b82f6" font-size="9">5. POST /required-signatures/original/{id}</text>
+
+      <line x1="455" y1="410" x2="750" y2="410" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+      <text x="600" y="405" text-anchor="middle" fill="#3b82f6" font-size="9">6. POST /send-sign-emails + register webhook</text>
+
+      <rect x="380" y="428" width="140" height="22" rx="3" fill="rgba(245,158,11,.1)" stroke="rgba(245,158,11,.3)"/>
+      <text x="450" y="443" text-anchor="middle" fill="#f59e0b" font-size="9" font-weight="600">7. AWAIT SIGNATURES</text>
+      <text x="540" y="443" fill="#64748b" font-size="7.5">(48h expiry)</text>
+
+      <!-- Webhook 1 -->
+      <line x1="750" y1="468" x2="455" y2="468" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowGreen)"/>
+      <text x="600" y="463" text-anchor="middle" fill="#10b981" font-size="9">webhook: PARTIALLY_SIGNED (1/2)</text>
+
+      <line x1="445" y1="490" x2="135" y2="490" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowPurple)"/>
+      <text x="290" y="485" text-anchor="middle" fill="#8b5cf6" font-size="9">topic: SIGNATURE_RECEIVED 1/2</text>
+
+      <!-- Webhook 2 -->
+      <line x1="750" y1="520" x2="455" y2="520" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowGreen)"/>
+      <text x="600" y="515" text-anchor="middle" fill="#10b981" font-size="9">webhook: FULLY_SIGNED (2/2)</text>
+
+      <line x1="445" y1="545" x2="135" y2="545" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowPurple)"/>
+      <text x="290" y="540" text-anchor="middle" fill="#8b5cf6" font-size="9">topic: ALL_SIGNATURES_COMPLETE</text>
+
+      <!-- Poll fallback note -->
+      <rect x="580" y="558" width="280" height="30" rx="4" fill="rgba(245,158,11,.06)" stroke="rgba(245,158,11,.15)"/>
+      <text x="590" y="572" fill="#f59e0b" font-size="7.5">Fallback: GET /status poll via Kafka retry if webhook missed</text>
+      <text x="590" y="582" fill="#64748b" font-size="7">Safety net: WaitingFlowScheduler re-publishes every 30min</text>
+
+      <!-- === Gate 2 === -->
+      <rect x="20" y="630" width="860" height="80" rx="5" fill="rgba(139,92,246,.03)" stroke="rgba(139,92,246,.2)" stroke-dasharray="6,3"/>
+      <text x="35" y="648" fill="#8b5cf6" font-size="10" font-weight="700">GATE 2: Await Delivery Approval</text>
+      <text x="280" y="648" fill="#64748b" font-size="8">(72h expiry)</text>
+
+      <line x1="445" y1="665" x2="135" y2="665" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowPurple)"/>
+      <text x="290" y="660" text-anchor="middle" fill="#8b5cf6" font-size="9">topic: SIGNING_COMPLETE</text>
+
+      <line x1="135" y1="690" x2="445" y2="690" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+      <text x="290" y="685" text-anchor="middle" fill="#8b5cf6" font-size="9">POST /{id}/approve</text>
+
+      <!-- === Group 3 === -->
+      <rect x="20" y="720" width="860" height="200" rx="5" fill="rgba(16,185,129,.03)" stroke="rgba(16,185,129,.15)"/>
+      <text x="35" y="738" fill="#10b981" font-size="10" font-weight="700">GROUP 3: Packaging & Delivery</text>
+
+      <line x1="455" y1="755" x2="750" y2="755" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+      <text x="600" y="750" text-anchor="middle" fill="#3b82f6" font-size="9">9. POST /documents/validate</text>
+      <line x1="750" y1="775" x2="455" y2="775" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowGreen)"/>
+      <text x="600" y="770" text-anchor="middle" fill="#10b981" font-size="8.5">{ result: "VALID" }</text>
+
+      <line x1="455" y1="800" x2="750" y2="800" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+      <text x="600" y="795" text-anchor="middle" fill="#3b82f6" font-size="9">10a. POST /envelopes/drafts</text>
+
+      <line x1="455" y1="825" x2="750" y2="825" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+      <text x="600" y="820" text-anchor="middle" fill="#3b82f6" font-size="9">10b. POST /envelopes/drafts/{id}/seal</text>
+      <line x1="750" y1="845" x2="455" y2="845" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowGreen)"/>
+      <text x="600" y="840" text-anchor="middle" fill="#10b981" font-size="8.5">{ envelopeTraceId }</text>
+
+      <line x1="455" y1="870" x2="750" y2="870" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+      <text x="600" y="865" text-anchor="middle" fill="#3b82f6" font-size="9">11. POST /envelopes/{id}/transfer-by-email</text>
+      <line x1="750" y1="890" x2="455" y2="890" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowGreen)"/>
+      <text x="600" y="886" text-anchor="middle" fill="#10b981" font-size="8.5">{ transferId }</text>
+
+      <!-- === Complete === -->
+      <rect x="20" y="930" width="860" height="50" rx="5" fill="rgba(139,92,246,.03)" stroke="rgba(139,92,246,.15)"/>
+      <text x="35" y="948" fill="#8b5cf6" font-size="10" font-weight="700">FLOW COMPLETE</text>
+
+      <line x1="445" y1="960" x2="135" y2="960" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowPurple)"/>
+      <text x="290" y="955" text-anchor="middle" fill="#8b5cf6" font-size="9">topic: FLOW_COMPLETE { transferId, traceOriginalId }</text>
+
+      <!-- Legend -->
+      <rect x="20" y="1000" width="860" height="60" rx="5" fill="var(--sf2,#1a2234)" stroke="#2a3548"/>
+      <line x1="40" y1="1020" x2="100" y2="1020" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+      <text x="110" y="1024" fill="#94a3b8" font-size="9">Request (orchestrator &rarr; Enigio)</text>
+      <line x1="280" y1="1020" x2="340" y2="1020" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowGreen)"/>
+      <text x="350" y="1024" fill="#94a3b8" font-size="9">Response / Webhook</text>
+      <line x1="520" y1="1020" x2="580" y2="1020" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowPurple)"/>
+      <text x="590" y="1024" fill="#94a3b8" font-size="9">Notification (Kafka topic)</text>
+      <line x1="40" y1="1042" x2="100" y2="1042" stroke="#8b5cf6" stroke-width="1.5"/>
+      <text x="110" y="1046" fill="#94a3b8" font-size="9">Approval (downstream &rarr; orchestrator)</text>
+      <rect x="280" y="1034" width="60" height="16" rx="3" fill="rgba(245,158,11,.1)" stroke="rgba(245,158,11,.3)"/>
+      <text x="310" y="1046" text-anchor="middle" fill="#f59e0b" font-size="8">wait step</text>
+      <text x="360" y="1046" fill="#94a3b8" font-size="9">Internal processing / async wait</text>
+
+      <!-- Arrow markers -->
+      <defs>
+        <marker id="arrowBlue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#3b82f6"/></marker>
+        <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto"><path d="M8,0 L0,3 L8,6" fill="#10b981"/></marker>
+        <marker id="arrowPurple" markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto"><path d="M8,0 L0,3 L8,6" fill="#8b5cf6"/></marker>
+      </defs>
+    </svg>
+  </div>
+</div>
+</section>
+
+<!-- DOWNSTREAM CONTRACT -->
+<section class="dark-section" id="contract">
+<div class="container">
+  <h2>API <span>Reference</span></h2>
+  <p class="sub">All endpoints with request, response, and copy-ready curl commands.</p>
+
+  <!-- Endpoint navigation -->
+  <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:1.2rem">
+    <button class="ep-tab active" onclick="showEp('start',this)">Start Flow</button>
+    <button class="ep-tab" onclick="showEp('approve',this)">Approve</button>
+    <button class="ep-tab" onclick="showEp('status',this)">Poll Status</button>
+    <button class="ep-tab" onclick="showEp('approval-status',this)">Approval Status</button>
+    <button class="ep-tab" onclick="showEp('webhook',this)">Webhook</button>
+    <button class="ep-tab" onclick="showEp('notify',this)">Notifications</button>
+  </div>
+
+  <!-- Start Flow -->
+  <div class="ep-panel" id="ep-start">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div><span class="badge badge-green" style="font-size:.7rem">POST</span> <span style="font-family:monospace;font-size:.85rem;margin-left:6px">/flows/enigio-instrument</span></div>
+        <div style="display:flex;gap:4px">
+          <button class="vt active" onclick="showView(this,'req')">Request</button>
+          <button class="vt" onclick="showView(this,'res')">Response</button>
+          <button class="vt" onclick="showView(this,'curl')">cURL</button>
+        </div>
+      </div>
+      <div class="ep-view" data-v="req">
+        <div class="code">{
+  <span class="k">"reference"</span>: <span class="s">"PN-2026-00142"</span>,                      <span class="tag tag-r">required</span>
+  <span class="k">"title"</span>: <span class="s">"Promissory Note - Acme / Global Bank"</span>,   <span class="tag tag-r">required</span>
+  <span class="k">"content"</span>: <span class="s">"Acme Corp promises to pay EUR 1,000,000 on 2027-01-01 with 3.5% interest"</span>,
+  <span class="k">"instrumentType"</span>: <span class="s">"PROMISSORY_NOTE"</span>,               <span class="tag tag-r">required</span>  <span class="c">// BILL_OF_LADING | GUARANTEE | CERTIFICATE | ...</span>
+  <span class="k">"documentCode"</span>: <span class="s">"NEG"</span>,                             <span class="tag tag-r">required</span>  <span class="c">// NEG | TTL | RGS | RGN | AGT</span>
+  <span class="k">"parties"</span>: [
+    { <span class="k">"name"</span>: <span class="s">"Acme Corp"</span>, <span class="k">"role"</span>: <span class="s">"ISSUER"</span>, <span class="k">"orgNumber"</span>: <span class="s">"556677-8899"</span> },
+    { <span class="k">"name"</span>: <span class="s">"Global Bank"</span>, <span class="k">"role"</span>: <span class="s">"BENEFICIARY"</span> }
+  ],
+  <span class="k">"signers"</span>: [                                            <span class="tag tag-r">required</span>
+    {
+      <span class="k">"name"</span>: <span class="s">"Jane Doe"</span>,
+      <span class="k">"email"</span>: <span class="s">"jane.doe@acme-corp.com"</span>,
+      <span class="k">"phone"</span>: <span class="s">"+46701234567"</span>,
+      <span class="k">"capacity"</span>: <span class="s">"CEO"</span>,                                <span class="c">// CEO | CFO | Authorized Signatory</span>
+      <span class="k">"organisation"</span>: <span class="s">"Acme Corp"</span>,
+      <span class="k">"order"</span>: <span class="n">1</span>                                      <span class="c">// signing sequence</span>
+    },
+    {
+      <span class="k">"name"</span>: <span class="s">"John Smith"</span>, <span class="k">"email"</span>: <span class="s">"john.smith@acme-corp.com"</span>,
+      <span class="k">"phone"</span>: <span class="s">"+46709876543"</span>, <span class="k">"capacity"</span>: <span class="s">"CFO"</span>,
+      <span class="k">"organisation"</span>: <span class="s">"Acme Corp"</span>, <span class="k">"order"</span>: <span class="n">2</span>
+    }
+  ],
+  <span class="k">"recipient"</span>: {                                           <span class="tag tag-r">required</span>
+    <span class="k">"name"</span>: <span class="s">"Global Bank Operations"</span>,
+    <span class="k">"email"</span>: <span class="s">"ops@globalbank.com"</span>
+  },
+  <span class="k">"attachments"</span>: [                                         <span class="tag tag-o">optional</span>
+    { <span class="k">"filename"</span>: <span class="s">"terms.pdf"</span>, <span class="k">"data"</span>: <span class="s">"base64..."</span>, <span class="k">"comment"</span>: <span class="s">"Terms sheet"</span> }
+  ],
+  <span class="k">"customData"</span>: { <span class="k">"placeOfIssue"</span>: <span class="s">"Stockholm"</span> },       <span class="tag tag-o">optional</span>
+  <span class="k">"callbackUrl"</span>: <span class="s">"https://your-system.com/webhook"</span>     <span class="tag tag-o">optional</span>
+}</div>
+      </div>
+      <div class="ep-view" data-v="res" style="display:none">
+        <div style="font-size:.7rem;color:var(--dim);margin-bottom:4px">202 Accepted</div>
+        <div class="code">{
+  <span class="k">"id"</span>: <span class="s">"69f33c7a64e97bd048c2c195"</span>,
+  <span class="k">"correlationId"</span>: <span class="s">"2a7d9dc1-f8d3-4548-952d-bd9896bc6b83"</span>,
+  <span class="k">"flowType"</span>: <span class="s">"enigio-instrument"</span>,
+  <span class="k">"status"</span>: <span class="s">"IN_PROGRESS"</span>,
+  <span class="k">"currentStep"</span>: <span class="s">"CREATE_DRAFT"</span>,
+  <span class="k">"message"</span>: <span class="s">"Flow started. Poll GET /flows/enigio-instrument/{id} for status."</span>
+}</div>
+      </div>
+      <div class="ep-view" data-v="curl" style="display:none">
+        <div class="code" id="curl-start">curl -X POST http://localhost:8087/flows/enigio-instrument \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "reference": "PN-2026-00142",
+    "title": "Promissory Note - Acme / Global Bank",
+    "content": "Acme Corp promises to pay EUR 1,000,000",
+    "instrumentType": "PROMISSORY_NOTE",
+    "documentCode": "NEG",
+    "signers": [
+      {"name":"Jane Doe","email":"jane.doe@acme-corp.com","phone":"+46701234567","capacity":"CEO","organisation":"Acme Corp","order":1},
+      {"name":"John Smith","email":"john.smith@acme-corp.com","phone":"+46709876543","capacity":"CFO","organisation":"Acme Corp","order":2}
+    ],
+    "recipient": {"name":"Global Bank Operations","email":"ops@globalbank.com"}
+  }'</div>
+        <button class="cp-btn" onclick="copyCode('curl-start')">Copy</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Approve -->
+  <div class="ep-panel" id="ep-approve" style="display:none">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div><span class="badge badge-green" style="font-size:.7rem">POST</span> <span style="font-family:monospace;font-size:.85rem;margin-left:6px">/flows/enigio-instrument/{id}/approve</span></div>
+        <div style="display:flex;gap:4px">
+          <button class="vt active" onclick="showView(this,'req')">Request</button>
+          <button class="vt" onclick="showView(this,'res')">Response</button>
+          <button class="vt" onclick="showView(this,'curl')">cURL</button>
+        </div>
+      </div>
+      <div class="ep-view" data-v="req">
+        <div style="font-size:.78rem;color:var(--dim);margin-bottom:6px">Call after receiving <code>PREPARATION_COMPLETE</code> or <code>SIGNING_COMPLETE</code> notification on the <code>dis.instrument.notifications</code> topic. No request body required.</div>
+        <div class="code"><span class="c">// Empty body or {}</span></div>
+      </div>
+      <div class="ep-view" data-v="res" style="display:none">
+        <div style="font-size:.7rem;color:var(--dim);margin-bottom:4px">200 OK</div>
+        <div class="code">{
+  <span class="k">"flowId"</span>: <span class="s">"69f33c7a64e97bd048c2c195"</span>,
+  <span class="k">"approved"</span>: <span class="s">"signingApproved"</span>,       <span class="c">// or "deliveryApproved"</span>
+  <span class="k">"currentStep"</span>: <span class="s">"AWAIT_PREPARATION_APPROVAL"</span>,
+  <span class="k">"message"</span>: <span class="s">"Next phase will start on next retry cycle"</span>
+}</div>
+      </div>
+      <div class="ep-view" data-v="curl" style="display:none">
+        <div class="code" id="curl-approve">curl -X POST http://localhost:8087/flows/enigio-instrument/{FLOW_ID}/approve \
+  -H 'Content-Type: application/json' \
+  -d '{}'</div>
+        <button class="cp-btn" onclick="copyCode('curl-approve')">Copy</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Poll Status -->
+  <div class="ep-panel" id="ep-status" style="display:none">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div><span class="badge badge-blue" style="font-size:.7rem">GET</span> <span style="font-family:monospace;font-size:.85rem;margin-left:6px">/flows/enigio-instrument/{id}</span></div>
+        <div style="display:flex;gap:4px">
+          <button class="vt active" onclick="showView(this,'res')">Response</button>
+          <button class="vt" onclick="showView(this,'curl')">cURL</button>
+        </div>
+      </div>
+      <div class="ep-view" data-v="res">
+        <div class="code">{
+  <span class="k">"id"</span>: <span class="s">"69f33c7a64e97bd048c2c195"</span>,
+  <span class="k">"status"</span>: <span class="s">"IN_PROGRESS"</span>,                <span class="c">// IN_PROGRESS | WAITING_RETRY | COMPLETED | FAILED</span>
+  <span class="k">"currentStep"</span>: <span class="s">"AWAIT_SIGNATURES"</span>,
+  <span class="k">"reference"</span>: <span class="s">"PN-2026-00142"</span>,
+  <span class="k">"instrumentType"</span>: <span class="s">"PROMISSORY_NOTE"</span>,
+  <span class="k">"traceOriginalId"</span>: <span class="s">"ffc007ff..."</span>,       <span class="c">// set after step 2</span>
+  <span class="k">"signaturesReceived"</span>: <span class="n">1</span>,
+  <span class="k">"signaturesRequired"</span>: <span class="n">2</span>,
+  <span class="k">"signingStatus"</span>: <span class="s">"PARTIALLY_SIGNED"</span>,
+  <span class="k">"preparationNotified"</span>: <span class="n">true</span>,
+  <span class="k">"signingApproved"</span>: <span class="n">true</span>,
+  <span class="k">"retryCount"</span>: <span class="n">0</span>,
+  <span class="k">"transferId"</span>: <span class="n">null</span>                     <span class="c">// set after step 11</span>
+}</div>
+      </div>
+      <div class="ep-view" data-v="curl" style="display:none">
+        <div class="code" id="curl-status">curl http://localhost:8087/flows/enigio-instrument/{FLOW_ID}</div>
+        <button class="cp-btn" onclick="copyCode('curl-status')">Copy</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Approval Status -->
+  <div class="ep-panel" id="ep-approval-status" style="display:none">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div><span class="badge badge-blue" style="font-size:.7rem">GET</span> <span style="font-family:monospace;font-size:.85rem;margin-left:6px">/flows/enigio-instrument/{id}/approval-status</span></div>
+        <div style="display:flex;gap:4px">
+          <button class="vt active" onclick="showView(this,'res')">Response</button>
+          <button class="vt" onclick="showView(this,'curl')">cURL</button>
+        </div>
+      </div>
+      <div class="ep-view" data-v="res">
+        <div class="code">{
+  <span class="k">"flowId"</span>: <span class="s">"69f33c7a..."</span>,
+  <span class="k">"currentStep"</span>: <span class="s">"AWAIT_DELIVERY_APPROVAL"</span>,
+  <span class="k">"status"</span>: <span class="s">"IN_PROGRESS"</span>,
+  <span class="k">"preparationNotified"</span>: <span class="n">true</span>,
+  <span class="k">"signingApproved"</span>: <span class="n">true</span>,
+  <span class="k">"signingNotified"</span>: <span class="n">true</span>,
+  <span class="k">"deliveryApproved"</span>: <span class="n">false</span>            <span class="c">// waiting for this</span>
+}</div>
+      </div>
+      <div class="ep-view" data-v="curl" style="display:none">
+        <div class="code" id="curl-apst">curl http://localhost:8087/flows/enigio-instrument/{FLOW_ID}/approval-status</div>
+        <button class="cp-btn" onclick="copyCode('curl-apst')">Copy</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Webhook -->
+  <div class="ep-panel" id="ep-webhook" style="display:none">
+    <div class="card">
+      <div style="margin-bottom:8px">
+        <span class="badge badge-green" style="font-size:.7rem">POST</span> <span style="font-family:monospace;font-size:.85rem;margin-left:6px">/webhooks/enigio</span>
+        <span style="font-size:.75rem;color:var(--dim);margin-left:8px">Receives callbacks from Enigio trace:original</span>
+      </div>
+      <div style="font-size:.78rem;color:var(--dim);margin-bottom:8px">Registered automatically when signing emails are sent. Each signer's completion triggers a callback.</div>
+      <div class="code"><span class="c">// Signer 1 completes:</span>
+{ <span class="k">"messageId"</span>: <span class="s">"uuid"</span>, <span class="k">"traceOriginalId"</span>: <span class="s">"ffc007ff..."</span>, <span class="k">"eventType"</span>: <span class="s">"PARTIALLY_SIGNED"</span> }
+<span class="c">// &rarr; signaturesReceived++ &rarr; notify downstream: SIGNATURE_RECEIVED 1/2</span>
+
+<span class="c">// Signer 2 completes (last signer):</span>
+{ <span class="k">"messageId"</span>: <span class="s">"uuid"</span>, <span class="k">"traceOriginalId"</span>: <span class="s">"ffc007ff..."</span>, <span class="k">"eventType"</span>: <span class="s">"FULLY_SIGNED"</span> }
+<span class="c">// &rarr; signingStatus = "SIGNED" &rarr; notify downstream: ALL_SIGNATURES_COMPLETE &rarr; flow advances</span>
+
+<span class="c">// Signer rejects:</span>
+{ <span class="k">"messageId"</span>: <span class="s">"uuid"</span>, <span class="k">"traceOriginalId"</span>: <span class="s">"ffc007ff..."</span>, <span class="k">"eventType"</span>: <span class="s">"SIGNATURE_REJECTED"</span> }
+<span class="c">// &rarr; signingStatus = "REJECTED" &rarr; flow FAILED</span></div>
+    </div>
+  </div>
+
+  <!-- Notifications -->
+  <div class="ep-panel" id="ep-notify" style="display:none">
+    <div class="card">
+      <div style="margin-bottom:8px">
+        <span class="badge badge-purple" style="font-size:.7rem">KAFKA</span> <span style="font-family:monospace;font-size:.85rem;margin-left:6px">dis.instrument.notifications</span>
+      </div>
+      <div style="font-size:.78rem;color:var(--dim);margin-bottom:8px">Consume this topic to track flow progress. Published at each phase boundary and on every individual signature.</div>
+      <div class="code"><span class="c">// After Group 1 completes:</span>
+{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"PREPARATION_COMPLETE"</span>, <span class="k">"status"</span>:<span class="s">"AWAITING_APPROVAL"</span>, <span class="k">"approveUrl"</span>:<span class="s">"/flows/enigio-instrument/{id}/approve"</span> }
+
+<span class="c">// Each individual signature:</span>
+{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"SIGNATURE_RECEIVED"</span>, <span class="k">"status"</span>:<span class="s">"1/2 signed"</span> }
+
+<span class="c">// All signatures done:</span>
+{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"ALL_SIGNATURES_COMPLETE"</span>, <span class="k">"status"</span>:<span class="s">"SIGNED"</span> }
+
+<span class="c">// After Group 2 completes:</span>
+{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"SIGNING_COMPLETE"</span>, <span class="k">"status"</span>:<span class="s">"AWAITING_APPROVAL"</span> }
+
+<span class="c">// Signing expired (48h timeout):</span>
+{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"SIGNING_EXPIRED"</span>, <span class="k">"status"</span>:<span class="s">"1/2 signed before expiry"</span> }
+
+<span class="c">// Approval expired (72h timeout):</span>
+{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"APPROVAL_EXPIRED"</span>, <span class="k">"status"</span>:<span class="s">"..."</span> }
+
+<span class="c">// Flow complete:</span>
+{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"FLOW_COMPLETE"</span>, <span class="k">"status"</span>:<span class="s">"COMPLETED"</span>, <span class="k">"transferId"</span>:<span class="s">"..."</span> }</div>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- DATA MODEL -->
+<section id="model">
+<div class="container">
+  <h2>Flow <span>Data Model</span></h2>
+  <p class="sub">EnigioInstrumentEntity — all fields persisted in MongoDB.</p>
+  <table class="tbl">
+    <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr class="grp-r"><td colspan="3">Input</td></tr>
+      <tr><td>reference</td><td>String</td><td>Internal document reference</td></tr>
+      <tr><td>instrumentType</td><td>Enum</td><td>PROMISSORY_NOTE, BILL_OF_LADING, GUARANTEE, etc.</td></tr>
+      <tr><td>documentCode</td><td>Enum</td><td>NEG | TTL | RGS | RGN | AGT</td></tr>
+      <tr><td>signers[]</td><td>List</td><td>Name, email, phone, capacity, order</td></tr>
+      <tr><td>recipient</td><td>Object</td><td>Name + email for envelope transfer</td></tr>
+      <tr class="grp-r"><td colspan="3">Group 1 Results</td></tr>
+      <tr><td>traceOriginalId</td><td>String</td><td>Enigio document ID on blockchain</td></tr>
+      <tr><td>versionKey</td><td>String</td><td>Current document version for mutations</td></tr>
+      <tr><td>attachmentVersionKey</td><td>String</td><td>Version key after amendment</td></tr>
+      <tr class="grp-r rg"><td colspan="3">Gate 1</td></tr>
+      <tr><td>preparationNotified</td><td>boolean</td><td>Notification published to topic</td></tr>
+      <tr><td>signingApproved</td><td>boolean</td><td>Downstream approved via API</td></tr>
+      <tr class="grp-r r2"><td colspan="3">Group 2 Results</td></tr>
+      <tr><td>webhookRegistered</td><td>boolean</td><td>Enigio webhook for signing events</td></tr>
+      <tr><td>signingStartedAt</td><td>Instant</td><td>When emails sent (for expiry calc)</td></tr>
+      <tr><td>signaturesReceived</td><td>int</td><td>Count of PARTIALLY_SIGNED webhooks</td></tr>
+      <tr><td>signaturesRequired</td><td>int</td><td>Total signers (from signers.size())</td></tr>
+      <tr><td>signingStatus</td><td>String</td><td>PENDING | PARTIALLY_SIGNED | SIGNED | REJECTED | EXPIRED</td></tr>
+      <tr class="grp-r rg"><td colspan="3">Gate 2</td></tr>
+      <tr><td>signingNotified</td><td>boolean</td><td>Notification published to topic</td></tr>
+      <tr><td>deliveryApproved</td><td>boolean</td><td>Downstream approved via API</td></tr>
+      <tr class="grp-r r3"><td colspan="3">Group 3 Results</td></tr>
+      <tr><td>validationResult</td><td>String</td><td>VALID | NOT_VALID | OUTDATED</td></tr>
+      <tr><td>envelopeTraceId</td><td>String</td><td>Sealed envelope trace:original ID</td></tr>
+      <tr><td>transferId</td><td>String</td><td>Transfer tracking ID</td></tr>
+    </tbody>
+  </table>
+</div>
+</section>
+
+<!-- RESILIENCE -->
+<section class="dark-section" id="resilience">
+<div class="container">
+  <h2>Resilience <span>Guarantees</span></h2>
+  <p class="sub">What happens when things go wrong.</p>
+  <div class="res-grid">
+    <div class="res-card"><h4><div class="res-icon" style="background:rgba(59,130,246,.12);color:var(--blue)">&#8635;</div>Enigio 500/502/503</h4><p>RetryableStepException routes to Kafka retry topics with jittered exponential backoff (5s &rarr; 180s cap). After 8 attempts, message goes to DLT.</p></div>
+    <div class="res-card"><h4><div class="res-icon" style="background:rgba(245,158,11,.12);color:var(--amber)">&#9201;</div>Enigio Timeout</h4><p>WebClient responseTimeout (10s) triggers retry. The completedWhen guard prevents duplicate API calls if the first call succeeded but response was lost.</p></div>
+    <div class="res-card"><h4><div class="res-icon" style="background:rgba(239,68,68,.12);color:var(--red)">&#10007;</div>Enigio 400/403</h4><p>NonRetryableStepException. Flow immediately FAILED. Downstream notified via notification topic with error details.</p></div>
+    <div class="res-card"><h4><div class="res-icon" style="background:rgba(16,185,129,.12);color:var(--green)">&#8644;</div>Enigio 409 Conflict</h4><p>@RecoverOn(httpStatus=409) triggers skip recovery. Step marked completed using existing resource. No duplicate creation.</p></div>
+    <div class="res-card"><h4><div class="res-icon" style="background:rgba(139,92,246,.12);color:var(--purple)">&#9889;</div>Container Crash</h4><p>Transactional Outbox ensures Kafka event persisted atomically. On restart, outbox publisher re-sends. Idempotent completedWhen guards prevent re-execution.</p></div>
+    <div class="res-card"><h4><div class="res-icon" style="background:rgba(6,182,212,.12);color:var(--cyan)">&#9881;</div>Kafka Down</h4><p>Events accumulate in MongoDB outbox. When Kafka recovers, publisher drains backlog (500ms poll). No message loss.</p></div>
+    <div class="res-card"><h4><div class="res-icon" style="background:rgba(245,158,11,.12);color:var(--amber)">&#128260;</div>Signer Never Signs</h4><p>Configurable expiry (dis.signing.expiry-hours, default 48h). After threshold, one final GET /status poll. If still PENDING, flow FAILED with EXPIRED. Downstream notified.</p></div>
+    <div class="res-card"><h4><div class="res-icon" style="background:rgba(139,92,246,.12);color:var(--purple)">&#128337;</div>Approval Never Comes</h4><p>Gate steps check dis.approval.expiry-hours (default 72h). If downstream doesn't POST /approve within threshold, flow FAILED with APPROVAL_EXPIRED notification.</p></div>
+    <div class="res-card"><h4><div class="res-icon" style="background:rgba(59,130,246,.12);color:var(--blue)">&#127760;</div>Multi-Container Failover</h4><p>Multiple DIS instances share Kafka consumer group. If one dies, partitions rebalance in 30s. All state in MongoDB, not memory. Zero data loss.</p></div>
+  </div>
+</div>
+</section>
+
+<!-- CONFIG -->
+<section id="config">
+<div class="container">
+  <h2>Configuration <span>Reference</span></h2>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+    <div class="card">
+      <h3>application.yml</h3>
+      <div class="code"><span class="k">orchestrator</span>:
+  <span class="k">kafka</span>:
+    <span class="k">command-topic</span>: <span class="s">dis.instrument.commands</span>
+  <span class="k">retry</span>:
+    <span class="k">initial-interval-ms</span>: <span class="n">5000</span>
+    <span class="k">multiplier</span>: <span class="n">2.0</span>
+    <span class="k">max-interval-ms</span>: <span class="n">180000</span>    <span class="c"># 3 min cap</span>
+    <span class="k">max-attempts</span>: <span class="n">8</span>
+    <span class="k">jitter-factor</span>: <span class="n">0.5</span>
+
+<span class="k">dis</span>:
+  <span class="k">signing</span>:
+    <span class="k">expiry-hours</span>: <span class="n">48</span>          <span class="c"># signing timeout</span>
+  <span class="k">approval</span>:
+    <span class="k">expiry-hours</span>: <span class="n">72</span>          <span class="c"># gate approval timeout</span>
+  <span class="k">webhook</span>:
+    <span class="k">callback-url</span>: <span class="s">http://dis:8087/webhooks/enigio</span>
+  <span class="k">notifications</span>:
+    <span class="k">topic</span>: <span class="s">dis.instrument.notifications</span></div>
+    </div>
+    <div class="card">
+      <h3>Kafka Topics</h3>
+      <table class="tbl">
+        <tr><th>Topic</th><th>Purpose</th></tr>
+        <tr><td>dis.instrument.commands</td><td>Step execution commands</td></tr>
+        <tr><td>dis.instrument.commands-retry-0..6</td><td>Retry with backoff</td></tr>
+        <tr><td>dis.instrument.commands-dlt</td><td>Dead letter (manual review)</td></tr>
+        <tr><td>dis.instrument.commands.replies</td><td>Step completion replies</td></tr>
+        <tr><td>dis.instrument.notifications</td><td>Downstream notifications</td></tr>
+      </table>
+      <h3 style="margin-top:1rem">MongoDB Collections</h3>
+      <table class="tbl">
+        <tr><th>Collection</th><th>TTL</th></tr>
+        <tr><td>dis_instrument_flows</td><td>&mdash;</td></tr>
+        <tr><td>orchestrator_outbox</td><td>7d</td></tr>
+        <tr><td>orchestrator_processed_events</td><td>30d</td></tr>
+        <tr><td>orchestrator_step_log</td><td>90d</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+</section>
+
+<footer>
+<div class="container">
+  <p>Digital Instrument Service &mdash; Enigio trace:original Integration Guide</p>
+  <p style="margin-top:3px">API: <a href="https://docs.traceoriginal.com">docs.traceoriginal.com</a> (v3.3) | Port: 8087 | <a href="https://enigio.com">enigio.com</a></p>
+</div>
+</footer>
+
+<script>
+let animR=false;
+function playFlow(){
+  if(animR)return;animR=true;
+  const s=document.querySelectorAll('.fv'),pf=document.getElementById('pf'),st=document.getElementById('st');
+  const nm=['Creating draft...','Registering on Enigio...','Attaching documents...','Awaiting approval...','Adding signers...','Sending emails + webhook...','Awaiting signatures (webhook)...','Awaiting approval...','Validating document...','Creating envelope...','Transferring possession...'];
+  s.forEach(x=>{x.classList.remove('active','done')});pf.style.width='0%';
+  let i=0;
+  const iv=setInterval(()=>{
+    if(i>0){s[i-1].classList.remove('active');s[i-1].classList.add('done')}
+    if(i<s.length){s[i].classList.add('active');st.textContent=nm[i];pf.style.width=((i+1)/s.length*100)+'%';i++}
+    else{clearInterval(iv);st.textContent='COMPLETED';st.style.color='var(--green)';setTimeout(()=>{st.style.color='';animR=false},3000)}
+  },700);
+}
+// Auto-play on scroll
+let played=false;
+const obs=new IntersectionObserver(e=>{e.forEach(x=>{if(x.isIntersecting&&!played){played=true;setTimeout(playFlow,400)}})},{threshold:.5});
+const fv=document.getElementById('fviz');if(fv)obs.observe(fv);
+
+// Endpoint tabs
+function showEp(id,btn){
+  document.querySelectorAll('.ep-panel').forEach(p=>p.style.display='none');
+  document.querySelectorAll('.ep-tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('ep-'+id).style.display='block';
+  btn.classList.add('active');
+}
+
+// Request/Response/cURL view toggle
+function showView(btn,view){
+  const card=btn.closest('.card');
+  card.querySelectorAll('.ep-view').forEach(v=>v.style.display='none');
+  card.querySelectorAll('.vt').forEach(t=>t.classList.remove('active'));
+  card.querySelectorAll('.ep-view[data-v="'+view+'"]').forEach(v=>v.style.display='block');
+  btn.classList.add('active');
+}
+
+// Copy to clipboard
+function copyCode(id){
+  const el=document.getElementById(id);
+  const text=el.textContent;
+  navigator.clipboard.writeText(text).then(()=>{
+    const btn=el.parentElement.querySelector('.cp-btn');
+    btn.textContent='Copied!';btn.classList.add('copied');
+    setTimeout(()=>{btn.textContent='Copy';btn.classList.remove('copied')},2000);
+  });
+}
+</script>
+</body>
+</html>

@@ -29,10 +29,11 @@
       ============================================================
     -->
 
-    <!-- Default build: only the library and sample app -->
+    <!-- Default build: library, sample app, and digital instrument service -->
     <modules>
         <module>orchestrator-starter</module>
         <module>sample-app</module>
+        <module>digital-instrument-service</module>
     </modules>
 
     <profiles>
@@ -49,6 +50,7 @@
                 <module>statemachine</module>
                 <module>spring-integration</module>
                 <module>dashboard</module>
+                <module>digital-instrument-service</module>
             </modules>
         </profile>
     </profiles>

@@ -17,14 +17,17 @@
         .tab-content{display:none} .tab-content.active{display:block}
         .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px}
         .card h3{font-size:12px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
-        .grid{display:grid;gap:12px;margin-bottom:12px} .grid-2{grid-template-columns:1fr 1fr} .grid-3{grid-template-columns:1fr 1fr 1fr}
+        .grid{display:grid;gap:12px;margin-bottom:12px} .grid-2{grid-template-columns:1fr 1fr} .grid-3{grid-template-columns:1fr 1fr 1fr} .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+        .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 16px;text-align:center}
+        .stat-card .stat-value{font-size:24px;font-weight:700;color:var(--text)} .stat-card .stat-label{font-size:10px;color:var(--dim);text-transform:uppercase;margin-top:2px}
         .btn{padding:6px 12px;border-radius:6px;border:none;cursor:pointer;font-size:11px;font-weight:500;transition:.15s}
         .btn-primary{background:var(--primary);color:white} .btn-primary:hover{background:#818cf8}
         .btn-danger{background:var(--danger);color:white} .btn-success{background:var(--success);color:white}
         .btn-outline{background:transparent;border:1px solid var(--border);color:var(--text)} .btn-outline:hover{border-color:var(--primary);color:var(--primary)}
         .btn-sm{padding:3px 8px;font-size:10px}
         .form-group{margin-bottom:8px} .form-group label{display:block;font-size:10px;color:var(--dim);margin-bottom:2px}
-        .form-group input,.form-group select{width:100%;padding:6px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px}
+        .form-group input,.form-group select,.input,textarea.input{width:100%;padding:6px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;font-family:inherit}
+        select.input{appearance:auto}
         .badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:9px;font-weight:600;text-transform:uppercase}
         .b-pending{background:#374151;color:#9ca3af} .b-progress{background:#1e3a5f;color:#60a5fa}
         .b-waiting{background:#451a03;color:#fbbf24;animation:blink 2s infinite} .b-completed{background:#14532d;color:#4ade80}
@@ -95,6 +98,7 @@
 <div class="nav">
     <button class="nav-tab active" onclick="switchTab('main',this)">Dashboard</button>
     <button class="nav-tab" onclick="switchTab('arch',this)">Architecture</button>
+    <button class="nav-tab" onclick="switchTab('instruments',this)">Instruments</button>
 </div>
 
 <div class="main">
@@ -470,114 +474,54 @@ any redelivered messages.</pre>
         </div>
     </div>
 
-    <!-- Pattern Comparison Detail -->
+    <!-- Pattern Comparison — Feature Matrix -->
     <div class="card">
-        <h3>Pattern Comparison: Framework-Managed vs Custom Code</h3>
+        <h3>Feature Comparison Across Patterns</h3>
+        <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:11px">
+                <thead>
+                    <tr style="border-bottom:2px solid var(--border)">
+                        <th style="text-align:left;padding:8px;font-size:10px;min-width:180px">Feature</th>
+                        <th style="text-align:center;padding:8px;font-size:10px;color:var(--success);min-width:120px">orchestrator-starter</th>
+                        <th style="text-align:center;padding:8px;font-size:10px;color:#8b5cf6;min-width:120px">Saga + Outbox</th>
+                        <th style="text-align:center;padding:8px;font-size:10px;color:#06b6d4;min-width:120px">Statemachine</th>
+                        <th style="text-align:center;padding:8px;font-size:10px;color:var(--primary);min-width:120px">Spring Integration</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td colspan="5" style="padding:6px 8px;font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;background:var(--surface2)">Resilience</td></tr>
+                    <tr><td style="padding:5px 8px">Transactional Outbox</td><td style="text-align:center;color:var(--success)">Built-in</td><td style="text-align:center;color:var(--success)">Built-in</td><td style="text-align:center;color:var(--danger)">None</td><td style="text-align:center;color:var(--danger)">None</td></tr>
+                    <tr><td style="padding:5px 8px">Kafka Retry Topics</td><td style="text-align:center;color:var(--success)">Auto (non-blocking)</td><td style="text-align:center;color:var(--success)">Auto</td><td style="text-align:center;color:var(--success)">Auto</td><td style="text-align:center;color:var(--warning)">In-process only</td></tr>
+                    <tr><td style="padding:5px 8px">Jittered Backoff</td><td style="text-align:center;color:var(--success)">Configurable</td><td style="text-align:center;color:var(--warning)">Fixed backoff</td><td style="text-align:center;color:var(--warning)">Fixed backoff</td><td style="text-align:center;color:var(--success)">RetryAdvice</td></tr>
+                    <tr><td style="padding:5px 8px">Dead Letter Topic</td><td style="text-align:center;color:var(--success)">Auto + handler</td><td style="text-align:center;color:var(--success)">Auto</td><td style="text-align:center;color:var(--success)">Auto</td><td style="text-align:center;color:var(--warning)">Error channel</td></tr>
+                    <tr><td style="padding:5px 8px">Crash Recovery</td><td style="text-align:center;color:var(--success)">Stale flow scanner</td><td style="text-align:center;color:var(--success)">Stale flow scanner</td><td style="text-align:center;color:var(--warning)">Custom recovery</td><td style="text-align:center;color:var(--danger)">None (stateless)</td></tr>
+                    <tr><td style="padding:5px 8px">Idempotency</td><td style="text-align:center;color:var(--success)">Two-layer</td><td style="text-align:center;color:var(--success)">completedWhen guard</td><td style="text-align:center;color:var(--warning)">State check only</td><td style="text-align:center;color:var(--danger)">None built-in</td></tr>
 
-        <!-- Saga -->
-        <div style="border:1px solid #8b5cf6;border-radius:8px;padding:12px;margin-bottom:10px;background:rgba(139,92,246,.03)">
-            <div style="font-size:12px;font-weight:700;color:#8b5cf6;margin-bottom:8px">Saga + Transactional Outbox</div>
-            <div class="grid grid-2" style="margin-bottom:0">
-                <div>
-                    <div style="font-size:9px;font-weight:600;color:var(--success);text-transform:uppercase;margin-bottom:4px">Framework-managed (Spring Kafka)</div>
-                    <table><tbody>
-                        <tr><td class="text-sm">Retry topics</td><td class="text-sm dim"><code>-retry-0/1/2</code> auto-created</td></tr>
-                        <tr><td class="text-sm">Dead letter topic</td><td class="text-sm dim"><code>-dlt</code> auto-created</td></tr>
-                        <tr><td class="text-sm">Exponential backoff</td><td class="text-sm dim">Configurable via properties</td></tr>
-                        <tr><td class="text-sm">Consumer offsets</td><td class="text-sm dim">Kafka-managed crash recovery</td></tr>
-                        <tr><td class="text-sm">Rebalancing</td><td class="text-sm dim">CooperativeStickyAssignor</td></tr>
-                    </tbody></table>
-                </div>
-                <div>
-                    <div style="font-size:9px;font-weight:600;color:var(--warning);text-transform:uppercase;margin-bottom:4px">Custom code (we built)</div>
-                    <table><tbody>
-                        <tr><td class="text-sm">Outbox events</td><td class="text-sm dim">Atomic DB+Kafka guarantee</td></tr>
-                        <tr><td class="text-sm">Saga orchestrator</td><td class="text-sm dim">Step sequencing, compensation</td></tr>
-                        <tr><td class="text-sm">Outbox publisher</td><td class="text-sm dim">Polls unpublished → Kafka</td></tr>
-                        <tr><td class="text-sm">Recovery service</td><td class="text-sm dim">Stale IN_PROGRESS finder</td></tr>
-                        <tr><td class="text-sm">Idempotency guards</td><td class="text-sm dim">Check result before API call</td></tr>
-                    </tbody></table>
-                </div>
-            </div>
-        </div>
+                    <tr><td colspan="5" style="padding:6px 8px;font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;background:var(--surface2)">Developer Experience</td></tr>
+                    <tr><td style="padding:5px 8px">Lines of Code (user)</td><td style="text-align:center;color:var(--success);font-weight:600">~50 (2 files)</td><td style="text-align:center;color:var(--danger)">~900</td><td style="text-align:center;color:var(--warning)">~600</td><td style="text-align:center;color:var(--success)">~470</td></tr>
+                    <tr><td style="padding:5px 8px">Flow Definition</td><td style="text-align:center">@Flow + @Step</td><td style="text-align:center">StepHandler classes</td><td style="text-align:center">States + Transitions</td><td style="text-align:center">IntegrationFlow DSL</td></tr>
+                    <tr><td style="padding:5px 8px">Multi-Flow Support</td><td style="text-align:center;color:var(--success)">Built-in routing</td><td style="text-align:center;color:var(--danger)">One flow/app</td><td style="text-align:center;color:var(--danger)">One flow/app</td><td style="text-align:center;color:var(--warning)">Manual wiring</td></tr>
+                    <tr><td style="padding:5px 8px">Compensation (Saga)</td><td style="text-align:center;color:var(--success)">@Compensate</td><td style="text-align:center;color:var(--success)">compensate()</td><td style="text-align:center;color:var(--warning)">Guard actions</td><td style="text-align:center;color:var(--danger)">Manual</td></tr>
+                    <tr><td style="padding:5px 8px">Step Audit Logs</td><td style="text-align:center;color:var(--success)">Auto (TTL-managed)</td><td style="text-align:center;color:var(--warning)">Custom</td><td style="text-align:center;color:var(--warning)">Custom</td><td style="text-align:center;color:var(--danger)">None</td></tr>
 
-        <!-- SM -->
-        <div style="border:1px solid #06b6d4;border-radius:8px;padding:12px;margin-bottom:10px;background:rgba(6,182,212,.03)">
-            <div style="font-size:12px;font-weight:700;color:#06b6d4;margin-bottom:8px">Spring Statemachine</div>
-            <div class="grid grid-2" style="margin-bottom:0">
-                <div>
-                    <div style="font-size:9px;font-weight:600;color:var(--success);text-transform:uppercase;margin-bottom:4px">Framework-managed</div>
-                    <table><tbody>
-                        <tr><td class="text-sm">State machine engine</td><td class="text-sm dim">States, transitions, guards</td></tr>
-                        <tr><td class="text-sm">Transition validation</td><td class="text-sm dim">Invalid events auto-rejected</td></tr>
-                        <tr><td class="text-sm">Retry topics</td><td class="text-sm dim">Spring Kafka @RetryableTopic</td></tr>
-                        <tr><td class="text-sm">JPA persistence</td><td class="text-sm dim" style="color:var(--warning)">SQL only — not MongoDB</td></tr>
-                    </tbody></table>
-                </div>
-                <div>
-                    <div style="font-size:9px;font-weight:600;color:var(--warning);text-transform:uppercase;margin-bottom:4px">Custom code (we built)</div>
-                    <table><tbody>
-                        <tr><td class="text-sm">MongoStateMachinePersist</td><td class="text-sm dim">Custom MongoDB persistence</td></tr>
-                        <tr><td class="text-sm">StateMachineService</td><td class="text-sm dim">Acquire/restore/persist per flow</td></tr>
-                        <tr><td class="text-sm">Recovery service</td><td class="text-sm dim">Stuck machines in transient states</td></tr>
-                        <tr><td class="text-sm">No outbox pattern</td><td class="text-sm dim" style="color:var(--danger)">Direct Kafka — no atomic guarantee</td></tr>
-                    </tbody></table>
-                </div>
-            </div>
-        </div>
+                    <tr><td colspan="5" style="padding:6px 8px;font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;background:var(--surface2)">Infrastructure</td></tr>
+                    <tr><td style="padding:5px 8px">MongoDB Support</td><td style="text-align:center;color:var(--success)">Native</td><td style="text-align:center;color:var(--success)">Native</td><td style="text-align:center;color:var(--warning)">Custom adapter</td><td style="text-align:center;color:var(--success)">Native</td></tr>
+                    <tr><td style="padding:5px 8px">Multi-Container</td><td style="text-align:center;color:var(--success)">Partition-safe</td><td style="text-align:center;color:var(--success)">Partition-safe</td><td style="text-align:center;color:var(--warning)">Conflicts possible</td><td style="text-align:center;color:var(--warning)">Stateless only</td></tr>
+                    <tr><td style="padding:5px 8px">Reply Topic Pattern</td><td style="text-align:center;color:var(--success)">Built-in</td><td style="text-align:center;color:var(--danger)">None</td><td style="text-align:center;color:var(--danger)">None</td><td style="text-align:center;color:var(--danger)">None</td></tr>
+                    <tr><td style="padding:5px 8px">REST Endpoints</td><td style="text-align:center;color:var(--success)">Auto-configured</td><td style="text-align:center;color:var(--warning)">Manual</td><td style="text-align:center;color:var(--warning)">Manual</td><td style="text-align:center;color:var(--success)">Gateway</td></tr>
+                    <tr><td style="padding:5px 8px">Retention / TTL</td><td style="text-align:center;color:var(--success)">Configurable</td><td style="text-align:center;color:var(--danger)">Manual cleanup</td><td style="text-align:center;color:var(--danger)">Manual cleanup</td><td style="text-align:center;color:var(--danger)">No persistence</td></tr>
 
-        <!-- SI -->
-        <div style="border:1px solid var(--primary);border-radius:8px;padding:12px;margin-bottom:10px;background:rgba(99,102,241,.03)">
-            <div style="font-size:12px;font-weight:700;color:var(--primary);margin-bottom:8px">Spring Integration (EIP)</div>
-            <div class="grid grid-2" style="margin-bottom:0">
-                <div>
-                    <div style="font-size:9px;font-weight:600;color:var(--success);text-transform:uppercase;margin-bottom:4px">Framework-managed</div>
-                    <table><tbody>
-                        <tr><td class="text-sm">IntegrationFlow DSL</td><td class="text-sm dim">Declarative .handle() per step</td></tr>
-                        <tr><td class="text-sm">RetryAdvice</td><td class="text-sm dim">Per-step exponential backoff</td></tr>
-                        <tr><td class="text-sm">Error channel</td><td class="text-sm dim">Built-in error routing</td></tr>
-                        <tr><td class="text-sm">MessagingGateway</td><td class="text-sm dim">Clean API to trigger flows</td></tr>
-                    </tbody></table>
-                </div>
-                <div>
-                    <div style="font-size:9px;font-weight:600;color:var(--info);text-transform:uppercase;margin-bottom:4px">What we DON'T need (framework handles it)</div>
-                    <table><tbody>
-                        <tr><td class="text-sm" style="text-decoration:line-through;color:var(--dim)">Outbox table</td><td class="text-sm dim">No dual-write, synchronous</td></tr>
-                        <tr><td class="text-sm" style="text-decoration:line-through;color:var(--dim)">Saga orchestrator</td><td class="text-sm dim">IntegrationFlow chains steps</td></tr>
-                        <tr><td class="text-sm" style="text-decoration:line-through;color:var(--dim)">Recovery service</td><td class="text-sm dim">Retry advice handles inline</td></tr>
-                        <tr><td class="text-sm" style="text-decoration:line-through;color:var(--dim)">Kafka retry topics</td><td class="text-sm dim">In-process RetryTemplate</td></tr>
-                    </tbody></table>
-                </div>
-            </div>
+                    <tr><td colspan="5" style="padding:6px 8px;font-size:9px;font-weight:700;color:var(--dim);text-transform:uppercase;background:var(--surface2)">Production Readiness</td></tr>
+                    <tr><td style="padding:5px 8px;font-weight:600">Zero Data Loss</td><td style="text-align:center;color:var(--success);font-weight:700">Yes</td><td style="text-align:center;color:var(--success);font-weight:700">Yes</td><td style="text-align:center;color:var(--danger);font-weight:700">No</td><td style="text-align:center;color:var(--danger);font-weight:700">No</td></tr>
+                    <tr><td style="padding:5px 8px;font-weight:600">Survives Any Crash</td><td style="text-align:center;color:var(--success);font-weight:700">Yes</td><td style="text-align:center;color:var(--success);font-weight:700">Yes</td><td style="text-align:center;color:var(--warning)">Partial</td><td style="text-align:center;color:var(--danger);font-weight:700">No</td></tr>
+                    <tr><td style="padding:5px 8px;font-weight:600">Reusable Library</td><td style="text-align:center;color:var(--success);font-weight:700">Yes</td><td style="text-align:center;color:var(--danger)">No (app-specific)</td><td style="text-align:center;color:var(--danger)">No</td><td style="text-align:center;color:var(--danger)">No</td></tr>
+                </tbody>
+            </table>
         </div>
-    </div>
-
-    <!-- Starter Library -->
-    <div class="card" style="border-color:var(--success)">
-        <h3 style="color:var(--success)">orchestrator-starter (Reusable Library)</h3>
-        <div style="font-size:11px;color:var(--dim);margin-bottom:10px">
-            The patterns above were distilled into a Spring Boot starter. Teams add one dependency and write 2 files — the library handles everything else.
-        </div>
-        <div class="grid grid-2" style="margin-bottom:0">
-            <div>
-                <div style="font-size:9px;font-weight:600;color:var(--success);text-transform:uppercase;margin-bottom:4px">Library provides</div>
-                <table><tbody>
-                    <tr><td class="text-sm">Transactional Outbox</td><td class="text-sm dim">Atomic DB+Kafka — from Saga</td></tr>
-                    <tr><td class="text-sm">Kafka retry + jitter</td><td class="text-sm dim">retry-0/1/2 + DLT</td></tr>
-                    <tr><td class="text-sm">Two-layer idempotency</td><td class="text-sm dim">Consumer + handler guards</td></tr>
-                    <tr><td class="text-sm">@Flow/@Step annotations</td><td class="text-sm dim">Auto-discovery + validation</td></tr>
-                    <tr><td class="text-sm">Stale flow recovery</td><td class="text-sm dim">Crash safety net</td></tr>
-                    <tr><td class="text-sm">REST endpoints</td><td class="text-sm dim">POST /flows, GET /flows/{id}</td></tr>
-                </tbody></table>
-            </div>
-            <div>
-                <div style="font-size:9px;font-weight:600;color:var(--warning);text-transform:uppercase;margin-bottom:4px">User writes (2 files + config)</div>
-                <table><tbody>
-                    <tr><td class="text-sm">Flow entity</td><td class="text-sm dim">extends AbstractFlow + domain fields</td></tr>
-                    <tr><td class="text-sm">@Flow class</td><td class="text-sm dim">@Step methods with business logic</td></tr>
-                    <tr><td class="text-sm">application.yml</td><td class="text-sm dim">4 lines: topic, retry, retention</td></tr>
-                </tbody></table>
-            </div>
+        <div style="margin-top:10px;font-size:10px;color:var(--dim);display:flex;gap:16px;flex-wrap:wrap">
+            <span><span style="color:var(--success);font-weight:600">Green</span> = built-in / automatic</span>
+            <span><span style="color:var(--warning);font-weight:600">Amber</span> = partial / custom code needed</span>
+            <span><span style="color:var(--danger);font-weight:600">Red</span> = not supported / manual</span>
         </div>
     </div>
 
@@ -608,6 +552,134 @@ any redelivered messages.</pre>
                 <tr><td class="mono">orchestrator_step_log</td><td>Library</td><td>90d</td><td>Step execution audit</td></tr>
             </table>
         </div>
+    </div>
+</div>
+
+<!-- ==================== INSTRUMENTS TAB ==================== -->
+<div id="tab-instruments" class="tab-content">
+    <h2 style="margin-bottom:16px;color:var(--text)">Digital Instrument Service <span style="font-size:12px;color:var(--dim);font-weight:400">(Enigio trace:original)</span></h2>
+
+    <!-- Stats -->
+    <div class="grid-4" style="margin-bottom:16px">
+        <div class="stat-card"><div class="stat-value" id="dis-s-total">0</div><div class="stat-label">Total</div></div>
+        <div class="stat-card" style="border-left:3px solid var(--primary)"><div class="stat-value" id="dis-s-progress">0</div><div class="stat-label">In Progress</div></div>
+        <div class="stat-card" style="border-left:3px solid var(--success)"><div class="stat-value" id="dis-s-done">0</div><div class="stat-label">Completed</div></div>
+        <div class="stat-card" style="border-left:3px solid var(--danger)"><div class="stat-value" id="dis-s-failed">0</div><div class="stat-label">Failed</div></div>
+    </div>
+
+    <!-- Controls -->
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-bottom:16px">
+        <!-- Start Flow Form -->
+        <div class="card">
+            <h3>Start Instrument Flow</h3>
+            <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+                <input id="dis-ref" class="input" placeholder="Reference (e.g. PN-2026-001)" value="PN-2026-00142">
+                <input id="dis-title" class="input" placeholder="Title" value="Promissory Note — Acme Corp to Global Bank">
+                <textarea id="dis-content" class="input" rows="2" placeholder="Contract terms..." style="resize:vertical">Acme Corp hereby promises to pay Global Bank the sum of EUR 1,000,000 on or before January 1, 2027, with interest at 3.5% per annum.</textarea>
+                <div style="display:flex;gap:6px">
+                    <select id="dis-type" class="input" style="flex:1">
+                        <option value="PROMISSORY_NOTE">Promissory Note</option>
+                        <option value="BILL_OF_EXCHANGE">Bill of Exchange</option>
+                        <option value="BILL_OF_LADING">Bill of Lading</option>
+                        <option value="LETTER_OF_CREDIT">Letter of Credit</option>
+                        <option value="GUARANTEE">Guarantee</option>
+                        <option value="CERTIFICATE">Certificate</option>
+                        <option value="INVOICE">Invoice</option>
+                        <option value="AGREEMENT">Agreement</option>
+                    </select>
+                    <select id="dis-code" class="input" style="flex:1">
+                        <option value="NEG">NEG (Negotiable)</option>
+                        <option value="TTL">TTL (Title)</option>
+                        <option value="RGS">RGS (Registry)</option>
+                        <option value="AGT">AGT (Agreement)</option>
+                    </select>
+                </div>
+                <div style="border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:4px">
+                    <div class="flex between center"><span style="font-size:12px;font-weight:600;color:var(--dim)">SIGNERS</span><button class="btn btn-outline btn-sm" onclick="addDiSigner()">+ Add</button></div>
+                    <div id="dis-signers" style="margin-top:6px"></div>
+                </div>
+                <div style="display:flex;gap:6px">
+                    <input id="dis-recip-name" class="input" placeholder="Recipient name" style="flex:1" value="Global Bank Operations">
+                    <input id="dis-recip-email" class="input" placeholder="Recipient email" style="flex:1" value="ops@globalbank.com">
+                </div>
+                <button class="btn btn-primary" onclick="startDisFlow()">Start Flow</button>
+            </div>
+        </div>
+
+        <!-- Right column: Load Test + Health -->
+        <div>
+            <div class="card">
+                <h3>Load Test</h3>
+                <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+                    <div style="display:flex;gap:6px">
+                        <div style="flex:1"><label style="font-size:9px;color:var(--dim)">Duration (s)</label><input id="dis-lt-duration" class="input" type="number" value="30" min="5" max="300"></div>
+                        <div style="flex:1"><label style="font-size:9px;color:var(--dim)">Rate/s</label><input id="dis-lt-rate" class="input" type="number" value="2" min="1" max="20"></div>
+                    </div>
+                    <button class="btn btn-primary" onclick="startDisSustainedLoad()">Start Sustained</button>
+                    <button class="btn btn-outline" onclick="stopDisSustainedLoad()">Stop</button>
+                    <div style="display:flex;gap:6px;margin-top:4px">
+                        <div style="flex:1"><label style="font-size:9px;color:var(--dim)">Burst count</label><input id="dis-lt-burst" class="input" type="number" value="10" min="1" max="100"></div>
+                        <button class="btn btn-outline" onclick="runDisBurstLoad()" style="flex-shrink:0;align-self:flex-end">Burst</button>
+                    </div>
+                    <div id="dis-lt-status" style="font-size:10px;color:var(--dim);margin-top:2px"></div>
+                </div>
+            </div>
+            <div class="card">
+                <h3>Service Status</h3>
+                <div style="margin-top:6px">
+                    <div class="flex between" style="margin-bottom:6px;font-size:12px"><span style="color:var(--dim)">DIS (8087)</span><span id="dis-health" style="font-weight:600">--</span></div>
+                    <div class="flex between" style="margin-bottom:6px;font-size:12px"><span style="color:var(--dim)">Mock Vendor (8081)</span><span id="dis-mock-health" style="font-weight:600">--</span></div>
+                    <div class="flex between" style="margin-bottom:6px;font-size:12px"><span style="color:var(--dim)">Completion Rate</span><span id="dis-completion-rate" style="font-weight:600">--</span></div>
+                </div>
+                <label style="font-size:10px;color:var(--dim);margin-top:8px;display:block"><input type="checkbox" id="dis-auto-refresh" checked onchange="toggleDisAutoRefresh()"> Auto-refresh (2s)</label>
+            </div>
+        </div>
+    </div>
+
+    <!-- Flows Table -->
+    <div class="card" style="margin-bottom:16px">
+        <div class="flex between center" style="margin-bottom:10px">
+            <h3>Instrument Flows</h3>
+            <div style="display:flex;gap:4px" id="dis-filters">
+                <button class="btn btn-sm btn-outline active" onclick="setDisFilter('all',this)">All</button>
+                <button class="btn btn-sm btn-outline" onclick="setDisFilter('active',this)">Active</button>
+                <button class="btn btn-sm btn-outline" onclick="setDisFilter('done',this)">Done</button>
+                <button class="btn btn-sm btn-outline" onclick="setDisFilter('failed',this)">Failed</button>
+            </div>
+        </div>
+        <div style="overflow-x:auto">
+            <table class="table" style="width:100%">
+                <thead><tr>
+                    <th>ID</th><th>Reference</th><th>Type</th><th>Status</th><th>Progress (9 steps)</th><th>Retry</th><th>Updated</th>
+                </tr></thead>
+                <tbody id="dis-flow-tbody"></tbody>
+            </table>
+        </div>
+        <div class="flex between center" style="margin-top:8px">
+            <span id="dis-page-info" style="font-size:11px;color:var(--dim)"></span>
+            <div style="display:flex;gap:4px">
+                <button class="btn btn-sm btn-outline" onclick="disPage(-1)">&lt;</button>
+                <button class="btn btn-sm btn-outline" onclick="disPage(1)">&gt;</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Kafka Ladder for DIS -->
+    <div class="card" style="margin-bottom:16px">
+        <div class="flex between center" style="margin-bottom:10px">
+            <h3>Kafka Topics (DIS)</h3>
+            <button class="btn btn-sm btn-outline" onclick="loadDisLadder()">Refresh</button>
+        </div>
+        <div id="dis-ladder" style="font-size:12px;color:var(--dim)">Loading...</div>
+    </div>
+
+    <!-- MongoDB Collections for DIS -->
+    <div class="card">
+        <div class="flex between center" style="margin-bottom:10px">
+            <h3>MongoDB Collections (DIS)</h3>
+            <button class="btn btn-sm btn-outline" onclick="loadDisCollections()">Refresh</button>
+        </div>
+        <div id="dis-collections" style="font-size:12px;color:var(--dim)">Loading...</div>
     </div>
 </div>
 
@@ -1052,6 +1124,340 @@ async function loadMetrics(){
 function toast(m,t){const e=document.createElement('div');e.className='toast '+t;e.textContent=m;document.body.appendChild(e);setTimeout(()=>e.remove(),3000)}
 
 refreshFlows();loadLadder();loadCollections();
+
+// ==================== DIS (Digital Instrument Service) ====================
+const DIS_STEPS=['CREATE_DRAFT','REGISTER_DOCUMENT','ADD_ATTACHMENT',
+    'AWAIT_PREPARATION_APPROVAL',
+    'ADD_SIGNERS','SEND_FOR_SIGNING','AWAIT_SIGNATURES',
+    'AWAIT_DELIVERY_APPROVAL',
+    'VALIDATE_DOCUMENT','CREATE_ENVELOPE','TRANSFER_DOCUMENT'];
+const DIS_SH=['DFT','REG','ATT','GATE','SGN','SND','AWA','GATE','VAL','ENV','TRF'];
+const DIS_GRP=[0,0,0,3,1,1,1,3,2,2,2]; // 0=prep, 1=signing, 2=delivery, 3=gate
+const DIS_GRP_COLORS=['var(--primary)','#f59e0b','var(--success)','#8b5cf6'];
+let disFlows=[],disFilter='all',disPage_=0,disAutoInt=null,disLadderInt=null;
+let disSignerCount=0;
+
+// --- Signer Management ---
+function addDiSigner(){
+    const c=document.getElementById('dis-signers');
+    const i=disSignerCount++;
+    const row=document.createElement('div');
+    row.id='dis-signer-'+i;
+    row.style.cssText='background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:6px;position:relative';
+    row.innerHTML=`<div style="display:flex;gap:4px;margin-bottom:4px">
+        <input class="input" placeholder="Full name" style="flex:1" id="ds-name-${i}">
+        <input class="input" placeholder="Email" style="flex:1" id="ds-email-${i}">
+        <input class="input" placeholder="Phone" style="flex:0.8" id="ds-phone-${i}">
+      </div>
+      <div style="display:flex;gap:4px;align-items:center">
+        <input class="input" placeholder="Capacity (CEO, CFO...)" style="flex:1" id="ds-cap-${i}" value="CEO">
+        <input class="input" placeholder="Organisation" style="flex:1" id="ds-org-${i}">
+        <span style="font-size:9px;color:var(--dim);flex-shrink:0">Signer ${i+1}</span>
+        <button class="btn btn-sm btn-outline" onclick="document.getElementById('dis-signer-${i}').remove()" style="flex-shrink:0;color:var(--danger);padding:2px 6px">&times;</button>
+      </div>`;
+    c.appendChild(row);
+}
+// Pre-populate with two realistic signers
+addDiSigner();addDiSigner();
+document.getElementById('ds-name-0').value='Jane Doe';
+document.getElementById('ds-email-0').value='jane.doe@acme-corp.com';
+document.getElementById('ds-phone-0').value='+46701234567';
+document.getElementById('ds-cap-0').value='CEO';
+document.getElementById('ds-org-0').value='Acme Corp';
+document.getElementById('ds-name-1').value='John Smith';
+document.getElementById('ds-email-1').value='john.smith@acme-corp.com';
+document.getElementById('ds-phone-1').value='+46709876543';
+document.getElementById('ds-cap-1').value='CFO';
+document.getElementById('ds-org-1').value='Acme Corp';
+
+function collectDisSigners(){
+    const signers=[];
+    document.querySelectorAll('[id^="dis-signer-"]').forEach(row=>{
+        const idx=row.id.split('-')[2];
+        const n=document.getElementById('ds-name-'+idx)?.value;
+        const e=document.getElementById('ds-email-'+idx)?.value;
+        if(n&&e) signers.push({
+            name:n, email:e,
+            phone:document.getElementById('ds-phone-'+idx)?.value||'+0000000000',
+            capacity:document.getElementById('ds-cap-'+idx)?.value||'CEO',
+            organisation:document.getElementById('ds-org-'+idx)?.value||'',
+            order:signers.length+1
+        });
+    });
+    return signers;
+}
+
+// --- Start Flow ---
+async function startDisFlow(){
+    const signers=collectDisSigners();
+    if(!signers.length){toast('Add at least one signer','error');return}
+    const body={
+        reference:document.getElementById('dis-ref').value||('PN-'+Date.now()),
+        title:document.getElementById('dis-title').value||'Instrument Flow',
+        content:document.getElementById('dis-content').value||'Auto-generated',
+        instrumentType:document.getElementById('dis-type').value,
+        documentCode:document.getElementById('dis-code').value,
+        signers,
+        recipient:{
+            name:document.getElementById('dis-recip-name').value||'Recipient',
+            email:document.getElementById('dis-recip-email').value||'recipient@test.com'
+        }
+    };
+    try{
+        const r=await api('/api/dashboard/dis/flows/start',{method:'POST',body:JSON.stringify(body)});
+        toast('Flow started: '+(r.response?JSON.parse(r.response).id:'OK'),'success');
+        refreshDisFlows();
+    }catch(e){toast('Error: '+e.message,'error')}
+}
+
+// --- Refresh Flows ---
+async function refreshDisFlows(){
+    try{
+        disFlows=await api('/api/dashboard/dis/flows');
+        renderDisFlows();
+        updateDisStats();
+        updateDisHealth();
+    }catch(e){}
+}
+
+function updateDisStats(){
+    let c={IN_PROGRESS:0,COMPLETED:0,FAILED:0};
+    disFlows.forEach(f=>c[f.status]=(c[f.status]||0)+1);
+    document.getElementById('dis-s-total').textContent=disFlows.length;
+    document.getElementById('dis-s-progress').textContent=(c.IN_PROGRESS||0)+(c.WAITING_RETRY||0);
+    document.getElementById('dis-s-done').textContent=c.COMPLETED||0;
+    document.getElementById('dis-s-failed').textContent=c.FAILED||0;
+    const total=disFlows.length;
+    document.getElementById('dis-completion-rate').textContent=total?Math.round((c.COMPLETED/total)*100)+'%':'--';
+}
+
+async function updateDisHealth(){
+    try{
+        await fetch('/api/dashboard/dis/flows');
+        document.getElementById('dis-health').innerHTML='<span style="color:var(--success)">UP</span>';
+    }catch(e){document.getElementById('dis-health').innerHTML='<span style="color:var(--danger)">DOWN</span>'}
+    try{
+        const r=await fetch('http://localhost:8081/actuator/health');
+        document.getElementById('dis-mock-health').innerHTML=r.ok?'<span style="color:var(--success)">UP</span>':'<span style="color:var(--danger)">DOWN</span>';
+    }catch(e){document.getElementById('dis-mock-health').innerHTML='<span style="color:var(--danger)">DOWN</span>'}
+}
+
+// --- Render Flows Table ---
+function setDisFilter(f,btn){
+    disFilter=f;disPage_=0;
+    document.querySelectorAll('#dis-filters .btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    renderDisFlows();
+}
+
+function renderDisFlows(){
+    let filtered=disFlows;
+    if(disFilter==='active')filtered=disFlows.filter(f=>f.status==='IN_PROGRESS'||f.status==='WAITING_RETRY');
+    else if(disFilter==='done')filtered=disFlows.filter(f=>f.status==='COMPLETED');
+    else if(disFilter==='failed')filtered=disFlows.filter(f=>f.status==='FAILED');
+
+    const start=disPage_*pageSize, page=filtered.slice(start,start+pageSize);
+    document.getElementById('dis-page-info').textContent=`${start+1}-${Math.min(start+pageSize,filtered.length)} of ${filtered.length}`;
+
+    const tbody=document.getElementById('dis-flow-tbody');
+    tbody.innerHTML=page.map(f=>{
+        const progress=renderDisProgress(f);
+        const sc=f.status==='COMPLETED'?'color:var(--success)':f.status==='FAILED'?'color:var(--danger)':'color:var(--primary)';
+        const id=f._id||f.id||'';
+        const shortId=id.substring(id.length-8);
+        return `<tr style="cursor:pointer" onclick="showDisDetail('${id}')">
+            <td style="font-family:monospace;font-size:11px">${shortId}</td>
+            <td>${f.reference||''}</td>
+            <td style="font-size:11px">${f.instrumentType||''}</td>
+            <td style="font-size:12px;font-weight:600;${sc}">${f.status}</td>
+            <td>${progress}</td>
+            <td>${f.retryCount||0}</td>
+            <td style="font-size:11px;color:var(--dim)">${f.updatedAt?new Date(f.updatedAt).toLocaleTimeString():''}</td>
+        </tr>`;
+    }).join('');
+}
+
+function renderDisProgress(f){
+    const cur=DIS_STEPS.indexOf(f.currentStep);
+    const done=f.status==='COMPLETED';
+    const failed=f.status==='FAILED';
+    return '<div style="display:flex;align-items:center;gap:1px">'+DIS_STEPS.map((s,i)=>{
+        const grp=DIS_GRP[i];
+        const color=DIS_GRP_COLORS[grp];
+        const isGate=grp===3;
+        const sz=isGate?'8px':'10px';
+        const radius=isGate?'2px':'50%';
+        let bg='var(--border)';
+        let extra='';
+        if(done||(i<cur))bg=color;
+        else if(i===cur&&failed){bg='var(--danger)';extra='animation:blink 1.5s infinite;'}
+        else if(i===cur){bg=color;extra='box-shadow:0 0 6px '+color+';animation:pulse 1.5s infinite;';}
+        const conn=i<DIS_STEPS.length-1?`<div style="width:3px;height:2px;background:${i<cur||done?color:'var(--border)'};flex-shrink:0"></div>`:'';
+        return `<div style="display:flex;align-items:center" title="${s} (${DIS_SH[i]})">
+            <div style="width:${sz};height:${sz};border-radius:${radius};background:${bg};flex-shrink:0;${extra}"></div>${conn}</div>`;
+    }).join('')+'</div>';
+}
+
+function disPage(d){disPage_=Math.max(0,disPage_+d);renderDisFlows()}
+
+async function showDisDetail(id){
+    try{
+        const f=await api('/api/dashboard/dis/flows/'+id);
+        const steps=await api('/api/dashboard/dis/flows/'+id+'/steps');
+        let html=`<div style="font-size:12px;margin-bottom:12px">
+            <div class="flex between"><span style="color:var(--dim)">Reference</span><span>${f.reference||''}</span></div>
+            <div class="flex between"><span style="color:var(--dim)">Type</span><span>${f.instrumentType||''} (${f.documentCode||''})</span></div>
+            <div class="flex between"><span style="color:var(--dim)">Status</span><span style="font-weight:600">${f.status}</span></div>
+            <div class="flex between"><span style="color:var(--dim)">traceOriginalId</span><span style="font-family:monospace;font-size:10px">${f.traceOriginalId||'--'}</span></div>
+            <div class="flex between"><span style="color:var(--dim)">signingStatus</span><span>${f.signingStatus||'--'}</span></div>
+            <div class="flex between"><span style="color:var(--dim)">validationResult</span><span>${f.validationResult||'--'}</span></div>
+            <div class="flex between"><span style="color:var(--dim)">envelopeTraceId</span><span style="font-family:monospace;font-size:10px">${f.envelopeTraceId||'--'}</span></div>
+            <div class="flex between"><span style="color:var(--dim)">transferId</span><span style="font-family:monospace;font-size:10px">${f.transferId||'--'}</span></div>
+        </div>`;
+        if(steps.length){
+            html+=`<h4 style="margin:10px 0 6px">Step Execution Log</h4>
+            <table class="table" style="width:100%;font-size:11px"><thead><tr><th>Step</th><th>Status</th><th>Duration</th><th>Attempt</th></tr></thead><tbody>`;
+            steps.forEach(s=>{
+                const dur=s.durationMs!=null?s.durationMs+'ms':'--';
+                const sc=s.status==='COMPLETED'?'color:var(--success)':s.status==='FAILED'?'color:var(--danger)':'';
+                html+=`<tr><td>${s.stepName}</td><td style="${sc}">${s.status}</td><td>${dur}</td><td>${s.attemptNumber||1}</td></tr>`;
+            });
+            html+='</tbody></table>';
+        }
+        html+=`<details style="margin-top:10px"><summary style="font-size:11px;color:var(--dim);cursor:pointer">Full JSON</summary>
+            <pre style="font-size:10px;background:var(--bg);padding:8px;border-radius:6px;overflow-x:auto;margin-top:4px">${JSON.stringify(f,null,2)}</pre></details>`;
+        document.getElementById('modal-body').innerHTML=html;
+        document.getElementById('modal').style.display='flex';
+    }catch(e){toast('Error loading flow','error')}
+}
+
+// --- Load Test ---
+async function startDisSustainedLoad(){
+    const dur=parseInt(document.getElementById('dis-lt-duration').value)||30;
+    const rate=parseInt(document.getElementById('dis-lt-rate').value)||2;
+    try{
+        await api('/api/dashboard/dis/flows/loadtest/sustained',{method:'POST',body:JSON.stringify({durationSeconds:dur,ratePerSecond:rate,flowTypes:['instrument']})});
+        document.getElementById('dis-lt-status').textContent='Sustained load started ('+dur+'s @ '+rate+'/s)';
+        toast('DIS sustained load started','success');
+    }catch(e){toast('Error: '+e.message,'error')}
+}
+async function stopDisSustainedLoad(){
+    try{
+        const r=await api('/api/dashboard/dis/flows/loadtest/stop',{method:'POST'});
+        document.getElementById('dis-lt-status').textContent='Stopped. Launched: '+r.totalLaunched+', Errors: '+r.errors;
+    }catch(e){}
+}
+async function runDisBurstLoad(){
+    const count=parseInt(document.getElementById('dis-lt-burst').value)||10;
+    try{
+        const r=await api('/api/dashboard/dis/flows/loadtest',{method:'POST',body:JSON.stringify({count,flowTypes:['instrument']})});
+        document.getElementById('dis-lt-status').textContent='Burst: '+r.flowsStarted+' flows launched';
+        toast('DIS burst: '+r.flowsStarted+' flows','success');
+    }catch(e){toast('Error: '+e.message,'error')}
+}
+
+// --- Kafka Ladder (DIS) ---
+async function loadDisLadder(){
+    const el=document.getElementById('dis-ladder');
+    try{
+        const topics=await api('/api/data/kafka/topics');
+        const disTopics=topics.filter(t=>t.name&&t.name.startsWith('dis.'));
+        if(!disTopics.length){el.innerHTML='<span>No DIS topics found</span>';return}
+
+        let html='<div style="display:flex;gap:8px;flex-wrap:wrap">';
+        const order=['dis.instrument.commands','dis.instrument.commands-retry-0','dis.instrument.commands-retry-1','dis.instrument.commands-retry-2',
+                     'dis.instrument.commands-retry-3','dis.instrument.commands-retry-4','dis.instrument.commands-retry-5','dis.instrument.commands-retry-6',
+                     'dis.instrument.commands-dlt','dis.instrument.commands.replies','dis.instrument.commands.replies-dlt'];
+        const backoffs=['','5s','10s','20s','40s','80s','160s','180s','DLT','replies','replies-dlt'];
+        const sorted=order.filter(o=>disTopics.some(t=>t.name===o));
+
+        for(let i=0;i<sorted.length;i++){
+            const t=disTopics.find(x=>x.name===sorted[i]);
+            if(!t)continue;
+            const msgs=await api('/api/data/kafka/topics/'+t.name+'/messages?limit=10');
+            const cnt=msgs.count||0;
+            const isDlt=t.name.includes('-dlt');
+            const isReply=t.name.includes('.replies');
+            const bg=isDlt?'rgba(239,68,68,0.15)':isReply?'rgba(139,92,246,0.15)':cnt>0?'rgba(59,130,246,0.15)':'var(--surface)';
+            const border=isDlt?'var(--danger)':isReply?'#8b5cf6':cnt>0?'var(--primary)':'var(--border)';
+            const label=backoffs[i]||'';
+            html+=`<div style="text-align:center;padding:8px 12px;border-radius:6px;border:1px solid ${border};background:${bg};min-width:70px">
+                <div style="font-size:10px;color:var(--dim)">${label}</div>
+                <div style="font-size:16px;font-weight:700;color:${cnt>0?'var(--text)':'var(--dim)'}">${cnt}</div>
+                <div style="font-size:9px;color:var(--dim);word-break:break-all">${t.name.replace('dis.instrument.commands','...')}</div>
+            </div>`;
+            if(i<sorted.length-1)html+='<div style="display:flex;align-items:center;color:var(--dim);font-size:10px">&rarr;</div>';
+        }
+        html+='</div>';
+        el.innerHTML=html;
+    }catch(e){el.innerHTML='<span style="color:var(--danger)">Error loading topics</span>'}
+}
+
+// --- MongoDB Collections (DIS) ---
+async function loadDisCollections(){
+    const el=document.getElementById('dis-collections');
+    try{
+        const cols=await api('/api/dashboard/dis/mongo/collections');
+        if(!cols.length){el.innerHTML='<span>No collections</span>';return}
+        const groups={'DIS Flows':[],'Orchestrator Infra':[]};
+        cols.forEach(c=>{
+            if(c.startsWith('dis_'))groups['DIS Flows'].push(c);
+            else if(c.startsWith('orchestrator_'))groups['Orchestrator Infra'].push(c);
+            else groups['DIS Flows'].push(c);
+        });
+        let html='';
+        for(const[group,items]of Object.entries(groups)){
+            if(!items.length)continue;
+            const color=group.includes('Flows')?'#f97316':'var(--success)';
+            html+=`<div style="margin-bottom:10px"><div style="font-size:11px;font-weight:600;color:${color};margin-bottom:4px">${group}</div>`;
+            html+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
+            for(const c of items){
+                const data=await api('/api/dashboard/dis/mongo/collections/'+c);
+                html+=`<div style="padding:6px 10px;border-radius:4px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:11px"
+                    onclick="showDisCollection('${c}')"><span style="color:${color}">${c}</span> <span style="color:var(--dim)">(${data.total})</span></div>`;
+            }
+            html+='</div></div>';
+        }
+        el.innerHTML=html;
+    }catch(e){el.innerHTML='<span style="color:var(--danger)">Error loading collections</span>'}
+}
+
+async function showDisCollection(name){
+    try{
+        const data=await api('/api/dashboard/dis/mongo/collections/'+name+'?limit=20');
+        let html=`<h4>${name} (${data.total} documents)</h4>`;
+        html+=`<pre style="font-size:10px;background:var(--bg);padding:8px;border-radius:6px;overflow-x:auto;max-height:60vh">${JSON.stringify(data.documents,null,2)}</pre>`;
+        document.getElementById('modal-body').innerHTML=html;
+        document.getElementById('modal').style.display='flex';
+    }catch(e){toast('Error loading collection','error')}
+}
+
+// --- Auto-refresh ---
+function toggleDisAutoRefresh(){
+    if(document.getElementById('dis-auto-refresh').checked){
+        disAutoInt=setInterval(refreshDisFlows,2000);
+        disLadderInt=setInterval(loadDisLadder,5000);
+    }else{
+        clearInterval(disAutoInt);clearInterval(disLadderInt);
+        disAutoInt=null;disLadderInt=null;
+    }
+}
+
+// Start DIS refresh when tab is shown
+const origSwitch=switchTab;
+switchTab=function(id,btn){
+    origSwitch(id,btn);
+    if(id==='instruments'){
+        refreshDisFlows();loadDisLadder();loadDisCollections();
+        if(document.getElementById('dis-auto-refresh').checked&&!disAutoInt){
+            disAutoInt=setInterval(refreshDisFlows,2000);
+            disLadderInt=setInterval(loadDisLadder,5000);
+        }
+    }else{
+        clearInterval(disAutoInt);clearInterval(disLadderInt);
+        disAutoInt=null;disLadderInt=null;
+    }
+};
 </script>
 </body>
 </html>

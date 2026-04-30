@@ -1,4 +1,18 @@
 services:
+  # ========== MongoDB ==========
+  mongodb:
+    image: mongo:7.0
+    ports:
+      - "27117:27017"      # 27117 to avoid conflict with other projects
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: mongosh --eval "db.adminCommand('ping')" --quiet
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ========== Zookeeper ==========
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     ports:
@@ -6,13 +20,21 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: bash -c "echo srvr | nc localhost 2181 | grep Mode"
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
 
+  # ========== Kafka 3-broker cluster ==========
   kafka-1:
     image: confluentinc/cp-kafka:7.5.0
     ports:
       - "9092:9092"
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_BROKER_RACK: rack-1
@@ -24,13 +46,20 @@ services:
       KAFKA_MIN_INSYNC_REPLICAS: 2
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 3
+    healthcheck:
+      test: kafka-broker-api-versions --bootstrap-server localhost:9092
+      interval: 10s
+      timeout: 10s
+      retries: 10
 
   kafka-2:
     image: confluentinc/cp-kafka:7.5.0
     ports:
       - "9093:9093"
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     environment:
       KAFKA_BROKER_ID: 2
       KAFKA_BROKER_RACK: rack-2
@@ -42,13 +71,15 @@ services:
       KAFKA_MIN_INSYNC_REPLICAS: 2
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 3
 
   kafka-3:
     image: confluentinc/cp-kafka:7.5.0
     ports:
       - "9094:9094"
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     environment:
       KAFKA_BROKER_ID: 3
       KAFKA_BROKER_RACK: rack-3
@@ -60,3 +91,120 @@ services:
       KAFKA_MIN_INSYNC_REPLICAS: 2
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 3
+
+  # ========== Mock Vendor API ==========
+  mock-vendor:
+    build:
+      context: .
+      args:
+        JAR_FILE: mock-vendor/target/mock-vendor-0.0.1-SNAPSHOT.jar
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: wget -qO- http://localhost:8081/actuator/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ========== Dashboard ==========
+  dashboard:
+    build:
+      context: .
+      args:
+        JAR_FILE: dashboard/target/dashboard-0.0.1-SNAPSHOT.jar
+    ports:
+      - "8080:8080"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka-1:
+        condition: service_healthy
+    environment:
+      SPRING_MONGODB_URI: mongodb://mongodb:27017/enigio_orchestrator
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29093,kafka-3:29094
+      DIS_MONGODB_URI: mongodb://mongodb:27017/digital_instrument_service
+      DIS_BASE_URL: http://digital-instrument-service:8087
+    healthcheck:
+      test: wget -qO- http://localhost:8080/actuator/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ========== Sample App — Instance 1 ==========
+  sample-app-1:
+    build:
+      context: .
+      args:
+        JAR_FILE: sample-app/target/sample-app-0.0.1-SNAPSHOT.jar
+    ports:
+      - "8085:8085"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka-1:
+        condition: service_healthy
+      mock-vendor:
+        condition: service_healthy
+    environment:
+      SPRING_MONGODB_URI: mongodb://mongodb:27017/enigio_orchestrator
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29093,kafka-3:29094
+      VENDOR_BASE_URL: http://mock-vendor:8081/api/v1
+    healthcheck:
+      test: wget -qO- http://localhost:8085/actuator/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  # ========== Sample App — Instance 2 ==========
+  sample-app-2:
+    build:
+      context: .
+      args:
+        JAR_FILE: sample-app/target/sample-app-0.0.1-SNAPSHOT.jar
+    ports:
+      - "8086:8085"        # different host port, same container port
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka-1:
+        condition: service_healthy
+      mock-vendor:
+        condition: service_healthy
+    environment:
+      SPRING_MONGODB_URI: mongodb://mongodb:27017/enigio_orchestrator
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29093,kafka-3:29094
+      VENDOR_BASE_URL: http://mock-vendor:8081/api/v1
+    healthcheck:
+      test: wget -qO- http://localhost:8085/actuator/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  # ========== Digital Instrument Service ==========
+  digital-instrument-service:
+    build:
+      context: .
+      args:
+        JAR_FILE: digital-instrument-service/target/digital-instrument-service-0.0.1-SNAPSHOT.jar
+    ports:
+      - "8087:8087"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka-1:
+        condition: service_healthy
+      mock-vendor:
+        condition: service_healthy
+    environment:
+      SPRING_MONGODB_URI: mongodb://mongodb:27017/digital_instrument_service
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29093,kafka-3:29094
+      VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
+    healthcheck:
+      test: wget -qO- http://localhost:8087/actuator/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  mongo-data:

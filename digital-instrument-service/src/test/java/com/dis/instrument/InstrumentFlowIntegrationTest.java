@@ -1,0 +1,375 @@
+package com.dis.instrument;
+
+import com.dis.instrument.core.model.*;
+import com.dis.instrument.vendor.enigio.EnigioInstrumentEntity;
+import com.orchestrator.starter.domain.FlowStatus;
+import org.junit.jupiter.api.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.http.MediaType;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.reactive.function.client.WebClient;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+/**
+ * Integration tests for the Enigio instrument flow.
+ * Requires: Kafka, MongoDB, mock-vendor — all running (Docker or native).
+ *
+ * Tests verify the complete 9-step flow:
+ * Group 1: CREATE_DRAFT → REGISTER_DOCUMENT → ADD_ATTACHMENT
+ * Group 2: ADD_SIGNERS → SEND_FOR_SIGNING → AWAIT_SIGNATURES
+ * Group 3: VALIDATE_DOCUMENT → CREATE_ENVELOPE → TRANSFER_DOCUMENT
+ */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+@org.springframework.test.context.ActiveProfiles("test")
+class InstrumentFlowIntegrationTest {
+
+    @LocalServerPort
+    private int port;
+
+    @Autowired
+    private MongoTemplate mongoTemplate;
+
+    private RestClient rest;
+    private WebClient vendorAdmin;
+
+    @BeforeAll
+    static void clearTestData(@Autowired MongoTemplate mongo) throws InterruptedException {
+        for (String col : mongo.getCollectionNames()) {
+            mongo.dropCollection(col);
+        }
+        Thread.sleep(5000); // Wait for Kafka consumers to join groups
+    }
+
+    @BeforeEach
+    void setUp() {
+        rest = RestClient.create("http://localhost:" + port);
+        vendorAdmin = WebClient.create("http://localhost:8081");
+        // DO NOT reset mock-vendor here — async flows (AWAIT_SIGNATURES) poll
+        // the mock-vendor after setUp returns, resetting would wipe in-flight state.
+        // Only reset failure config, not document state.
+        try {
+            vendorAdmin.post().uri("/admin/failure-config")
+                    .bodyValue(Map.of()).retrieve().bodyToMono(String.class).block();
+        } catch (Exception ignored) {}
+    }
+
+    private void resetMockVendor() {
+        try {
+            vendorAdmin.post().uri("/admin/reset").retrieve().bodyToMono(String.class).block();
+        } catch (Exception ignored) {}
+    }
+
+    // ===== Flow Helpers =====
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> startInstrumentFlow(String reference, InstrumentType type) {
+        return rest.post().uri("/flows/enigio-instrument")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of(
+                        "reference", reference,
+                        "title", type.toEnigioValue() + " — Test Corp to Bank",
+                        "content", "Test Corp promises to pay Bank EUR 500,000",
+                        "instrumentType", type.name(),
+                        "documentCode", "NEG",
+                        "parties", List.of(
+                                Map.of("name", "Test Corp", "role", "ISSUER", "orgNumber", "123456-7890"),
+                                Map.of("name", "Test Bank", "role", "BENEFICIARY")
+                        ),
+                        "signers", List.of(
+                                Map.of("name", "Alice CEO", "email", "alice@test.com",
+                                        "phone", "+46700000001", "capacity", "CEO",
+                                        "organisation", "Test Corp", "order", 1),
+                                Map.of("name", "Bob CFO", "email", "bob@test.com",
+                                        "phone", "+46700000002", "capacity", "CFO",
+                                        "organisation", "Test Corp", "order", 2)
+                        ),
+                        "recipient", Map.of("name", "Bank Operations", "email", "ops@bank.com")
+                ))
+                .retrieve()
+                .body(Map.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> startFlowWithAttachments(String reference) {
+        return rest.post().uri("/flows/enigio-instrument")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of(
+                        "reference", reference,
+                        "title", "Promissory Note with Attachments",
+                        "content", "Contract terms...",
+                        "instrumentType", "PROMISSORY_NOTE",
+                        "documentCode", "NEG",
+                        "parties", List.of(Map.of("name", "Corp", "role", "ISSUER")),
+                        "signers", List.of(
+                                Map.of("name", "Signer", "email", "s@test.com",
+                                        "phone", "+1234567890", "capacity", "CEO",
+                                        "organisation", "Corp", "order", 1)
+                        ),
+                        "recipient", Map.of("name", "Recipient", "email", "r@bank.com"),
+                        "attachments", List.of(
+                                Map.of("filename", "terms.pdf", "data", "base64data", "comment", "Terms sheet"),
+                                Map.of("filename", "kyc.pdf", "data", "base64kyc", "comment", "KYC document")
+                        )
+                ))
+                .retrieve()
+                .body(Map.class);
+    }
+
+    private EnigioInstrumentEntity waitForStatus(String flowId, FlowStatus expected, Duration timeout) {
+        long deadline = System.currentTimeMillis() + timeout.toMillis();
+        while (System.currentTimeMillis() < deadline) {
+            EnigioInstrumentEntity flow = mongoTemplate.findById(
+                    flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+            if (flow != null && flow.getStatus() == expected) return flow;
+
+            // Auto-approve gate steps (simulate downstream approval)
+            if (flow != null) {
+                String step = flow.getCurrentStep();
+                if ("AWAIT_PREPARATION_APPROVAL".equals(step) && flow.isPreparationNotified() && !flow.isSigningApproved()) {
+                    try {
+                        rest.post().uri("/flows/enigio-instrument/" + flowId + "/approve")
+                                .contentType(MediaType.APPLICATION_JSON).body(Map.of())
+                                .retrieve().body(Map.class);
+                    } catch (Exception ignored) {}
+                }
+                if ("AWAIT_DELIVERY_APPROVAL".equals(step) && flow.isSigningNotified() && !flow.isDeliveryApproved()) {
+                    try {
+                        rest.post().uri("/flows/enigio-instrument/" + flowId + "/approve")
+                                .contentType(MediaType.APPLICATION_JSON).body(Map.of())
+                                .retrieve().body(Map.class);
+                    } catch (Exception ignored) {}
+                }
+            }
+
+            try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
+        }
+        EnigioInstrumentEntity flow = mongoTemplate.findById(
+                flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        fail("Flow " + flowId + " did not reach " + expected + " within " + timeout +
+                ". Current: " + (flow != null ? flow.getStatus() + " @ " + flow.getCurrentStep() : "NOT FOUND"));
+        return null;
+    }
+
+    // ========== 1. Happy path — all 9 steps ==========
+
+    @Test
+    @Order(1)
+    @DisplayName("Happy path: promissory note completes all 9 steps")
+    void happyPath_promissoryNote_completesAllSteps() {
+        var result = startInstrumentFlow("PN-TEST-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+        assertNotNull(flowId);
+        assertEquals("enigio-instrument", result.get("flowType"));
+
+        EnigioInstrumentEntity completed = waitForStatus(flowId, FlowStatus.COMPLETED, Duration.ofMinutes(3));
+
+        // Group 1 results
+        assertTrue(completed.isPdfGenerated(), "Draft should be generated");
+        assertNotNull(completed.getTraceOriginalId(), "Should have traceOriginalId from Enigio");
+        assertNotNull(completed.getVersionKey(), "Should have versionKey");
+
+        // Group 2 results
+        assertTrue(completed.isSignersAdded(), "Signers should be added");
+        assertTrue(completed.isSigningEmailsSent(), "Signing emails should be sent");
+        assertEquals("SIGNED", completed.getSigningStatus(), "Signing should complete");
+
+        // Group 3 results
+        assertEquals("VALID", completed.getValidationResult(), "Validation should pass");
+        assertNotNull(completed.getEnvelopeDraftId(), "Should have envelope draft ID");
+        assertNotNull(completed.getEnvelopeTraceId(), "Should have sealed envelope trace ID");
+        assertNotNull(completed.getTransferId(), "Should have transfer ID");
+
+        // Orchestrator fields
+        assertEquals(0, completed.getRetryCount(), "No retries on happy path");
+        assertNull(completed.getErrorMessage());
+        assertEquals("enigio-instrument", completed.getFlowType());
+    }
+
+    // ========== 2. With attachments ==========
+
+    @Test
+    @Order(2)
+    @DisplayName("Flow with attachments triggers amend step")
+    void withAttachments_amendStepExecutes() {
+        var result = startFlowWithAttachments("PN-ATTACH-001");
+        String flowId = (String) result.get("id");
+
+        EnigioInstrumentEntity completed = waitForStatus(flowId, FlowStatus.COMPLETED, Duration.ofMinutes(3));
+
+        assertNotNull(completed.getAttachmentVersionKey(), "Should have attachment version key");
+        assertNotEquals("NONE", completed.getAttachmentVersionKey(),
+                "Attachment version key should not be NONE when attachments provided");
+    }
+
+    // ========== 3. Without attachments — skips amend ==========
+
+    @Test
+    @Order(3)
+    @DisplayName("Flow without attachments skips amend step")
+    void withoutAttachments_skipAmendStep() {
+        var result = startInstrumentFlow("PN-NOATTACH-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        EnigioInstrumentEntity completed = waitForStatus(flowId, FlowStatus.COMPLETED, Duration.ofMinutes(3));
+
+        assertEquals("NONE", completed.getAttachmentVersionKey(),
+                "Should be NONE when no attachments");
+    }
+
+    // ========== 4. Flaky vendor — retries and recovers ==========
+
+    @Test
+    @Order(4)
+    @DisplayName("Flaky vendor: flow recovers after Kafka retry")
+    void flakyVendor_recoversAfterRetry() {
+        vendorAdmin.post().uri("/admin/failure-config")
+                .bodyValue(Map.of("createDocument", "FLAKY"))
+                .retrieve().bodyToMono(String.class).block();
+
+        var result = startInstrumentFlow("PN-FLAKY-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        EnigioInstrumentEntity completed = waitForStatus(flowId, FlowStatus.COMPLETED, Duration.ofMinutes(5));
+
+        assertNotNull(completed.getTraceOriginalId());
+        assertNotNull(completed.getTransferId());
+    }
+
+    // ========== 5. Different instrument types ==========
+
+    @Test
+    @Order(5)
+    @DisplayName("Bill of lading instrument type completes")
+    void billOfLading_completesSuccessfully() {
+        var result = startInstrumentFlow("BL-TEST-001", InstrumentType.BILL_OF_LADING);
+        String flowId = (String) result.get("id");
+
+        EnigioInstrumentEntity completed = waitForStatus(flowId, FlowStatus.COMPLETED, Duration.ofMinutes(3));
+
+        assertEquals("BILL_OF_LADING", completed.getInstrumentType().name());
+        assertNotNull(completed.getTransferId());
+    }
+
+    // ========== 6. Step audit logs ==========
+
+    @Test
+    @Order(6)
+    @DisplayName("Step audit logs created for all 9 steps")
+    void stepLogs_createdForAllSteps() {
+        var result = startInstrumentFlow("PN-AUDIT-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        waitForStatus(flowId, FlowStatus.COMPLETED, Duration.ofMinutes(3));
+
+        var logs = mongoTemplate.find(
+                new Query(Criteria.where("flowId").is(flowId)),
+                org.bson.Document.class, "orchestrator_step_log");
+
+        assertTrue(logs.size() >= 9,
+                "Should have at least 9 step logs (one per step), got " + logs.size());
+
+        var stepNames = logs.stream().map(d -> d.getString("stepName")).toList();
+        assertTrue(stepNames.contains("CREATE_DRAFT"), "Missing CREATE_DRAFT log");
+        assertTrue(stepNames.contains("REGISTER_DOCUMENT"), "Missing REGISTER_DOCUMENT log");
+        assertTrue(stepNames.contains("ADD_SIGNERS"), "Missing ADD_SIGNERS log");
+        assertTrue(stepNames.contains("AWAIT_SIGNATURES"), "Missing AWAIT_SIGNATURES log");
+        assertTrue(stepNames.contains("VALIDATE_DOCUMENT"), "Missing VALIDATE_DOCUMENT log");
+        assertTrue(stepNames.contains("CREATE_ENVELOPE"), "Missing CREATE_ENVELOPE log");
+        assertTrue(stepNames.contains("TRANSFER_DOCUMENT"), "Missing TRANSFER_DOCUMENT log");
+    }
+
+    // ========== 7. Concurrent flows ==========
+
+    @Test
+    @Order(7)
+    @DisplayName("5 concurrent instrument flows all complete")
+    void concurrentFlows_allComplete() {
+        List<String> flowIds = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            var result = startInstrumentFlow("PN-CONC-" + (i + 1), InstrumentType.PROMISSORY_NOTE);
+            flowIds.add((String) result.get("id"));
+        }
+
+        for (String flowId : flowIds) {
+            EnigioInstrumentEntity completed = waitForStatus(
+                    flowId, FlowStatus.COMPLETED, Duration.ofMinutes(6));
+            assertNotNull(completed.getTransferId(),
+                    "Flow " + flowId + " should have transferId");
+        }
+    }
+
+    // ========== 8. Idempotency ==========
+
+    @Test
+    @Order(8)
+    @DisplayName("Processed events tracked for idempotency")
+    void idempotency_processedEventsTracked() {
+        var result = startInstrumentFlow("PN-IDEMP-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        waitForStatus(flowId, FlowStatus.COMPLETED, Duration.ofMinutes(3));
+
+        long count = mongoTemplate.count(new Query(), "orchestrator_processed_events");
+        assertTrue(count > 0, "Processed events should be tracked");
+    }
+
+    // ========== 9. Outbox events published ==========
+
+    @Test
+    @Order(9)
+    @DisplayName("All outbox events published after completion")
+    void outbox_allEventsPublished() {
+        var result = startInstrumentFlow("PN-OUTBOX-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        waitForStatus(flowId, FlowStatus.COMPLETED, Duration.ofMinutes(3));
+
+        try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
+
+        var unpublished = mongoTemplate.find(
+                new Query(Criteria.where("published").is(false)),
+                org.bson.Document.class, "orchestrator_outbox");
+        assertEquals(0, unpublished.size(), "All outbox events should be published");
+    }
+
+    // ========== 10. Entity fields persisted correctly ==========
+
+    @Test
+    @Order(10)
+    @DisplayName("All entity fields persisted correctly")
+    void entityFields_allPersisted() {
+        var result = startInstrumentFlow("PN-FIELDS-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        EnigioInstrumentEntity completed = waitForStatus(flowId, FlowStatus.COMPLETED, Duration.ofMinutes(3));
+
+        // Input fields preserved
+        assertEquals("PN-FIELDS-001", completed.getReference());
+        assertEquals(InstrumentType.PROMISSORY_NOTE, completed.getInstrumentType());
+        assertEquals(DocumentCode.NEG, completed.getDocumentCode());
+        assertNotNull(completed.getTitle());
+        assertNotNull(completed.getContent());
+        assertEquals(2, completed.getSigners().size());
+        assertEquals(2, completed.getParties().size());
+        assertNotNull(completed.getRecipient());
+        assertEquals("ops@bank.com", completed.getRecipient().getEmail());
+
+        // Library fields
+        assertNotNull(completed.getCorrelationId());
+        assertNotNull(completed.getCreatedAt());
+        assertNotNull(completed.getUpdatedAt());
+        assertEquals(0, completed.getRetryCount());
+    }
+}

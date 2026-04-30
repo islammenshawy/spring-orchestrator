@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: dis-test
+
+orchestrator:
+  kafka:
+    command-topic: dis.test.commands
+  retry:
+    initial-interval-ms: 1000
+    multiplier: 1.5
+    max-interval-ms: 5000
+    max-attempts: 20         # high enough for gate steps to survive approval delay
+    jitter-factor: 0.2
+
+dis:
+  signing:
+    expiry-hours: 48
+    poll-interval-ms: 60000
+  approval:
+    expiry-hours: 72

@@ -16,6 +16,12 @@ enigio:
   client:
     base-url: http://localhost:8081/api/v1
 
+# Digital Instrument Service
+dis:
+  mongodb:
+    uri: mongodb://localhost:27017/digital_instrument_service
+  base-url: http://localhost:8087
+
 management:
   endpoints:
     web:

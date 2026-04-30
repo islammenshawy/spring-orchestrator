@@ -1,0 +1,48 @@
+server:
+  port: 8087
+
+spring:
+  application:
+    name: digital-instrument-service
+
+  mongodb:
+    uri: mongodb://mongodb:27017/digital_instrument_service
+
+  kafka:
+    bootstrap-servers: kafka-1:29092,kafka-2:29093,kafka-3:29094
+
+# Enigio trace:original vendor
+vendor:
+  enigio:
+    base-url: http://mock-vendor:8081/api/v1
+
+# Digital Instrument Service settings
+dis:
+  notifications:
+    topic: dis.instrument.notifications
+  signing:
+    expiry-hours: 48                      # signing must complete within 48h
+    poll-interval-minutes: 30             # safety-net poll frequency after webhook registered
+    poll-interval-ms: 1800000             # 30 min in ms (for @Scheduled)
+  approval:
+    expiry-hours: 72                      # downstream must approve next phase within 72h
+  webhook:
+    callback-url: http://digital-instrument-service:8087/webhooks/enigio
+
+# Orchestrator library
+orchestrator:
+  kafka:
+    command-topic: dis.instrument.commands
+
+  retry:
+    initial-interval-ms: 5000             # 5s first retry
+    multiplier: 2.0                       # ladder: 5s → 10s → 20s → 40s → 80s → 160s (capped at 180s)
+    max-interval-ms: 180000               # cap at 3 minutes
+    max-attempts: 8                       # 1 initial + 7 retries before DLT
+    jitter-factor: 0.5                    # equal jitter to avoid thundering herd
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
