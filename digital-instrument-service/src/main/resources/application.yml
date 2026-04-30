@@ -23,6 +23,8 @@ spring:
     # ========== Consumer — stretched cluster resilience ==========
     consumer:
       auto-offset-reset: earliest           # if offsets lost, re-read (not skip)
+                                            # idempotency guards handle duplicates
+                                            # alternative: use offsetsForTimes() for timestamp-based recovery
       enable-auto-commit: false             # manual commit after processing (RECORD ack mode)
       properties:
         partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
@@ -30,6 +32,8 @@ spring:
         heartbeat.interval.ms: 10000        # must be < session.timeout / 3
         max.poll.records: 50                # limit batch size
         max.poll.interval.ms: 300000        # 5 min — allows slow steps
+        # Rack-aware consumer — prefer replicas in same AZ to reduce cross-AZ traffic
+        # client.rack: ${KAFKA_RACK:rack-1}
 
 # Enigio trace:original vendor
 vendor:
