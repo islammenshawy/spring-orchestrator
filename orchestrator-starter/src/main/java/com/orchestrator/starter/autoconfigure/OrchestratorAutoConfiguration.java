@@ -7,6 +7,8 @@ import com.orchestrator.starter.exception.RetryableStepException;
 import com.orchestrator.starter.flow.*;
 import com.orchestrator.starter.idempotency.IdempotencyService;
 import com.orchestrator.starter.idempotency.ProcessedEventRepository;
+import com.orchestrator.starter.kafka.MongoOffsetRecoveryListener;
+import com.orchestrator.starter.kafka.MongoOffsetStore;
 import com.orchestrator.starter.kafka.OrchestratorKafkaConsumer;
 import com.orchestrator.starter.kafka.TimestampOffsetRecoveryListener;
 import com.orchestrator.starter.outbox.OutboxEventRepository;
@@ -28,6 +30,7 @@ import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
+import org.springframework.kafka.listener.ConsumerAwareRebalanceListener;
 import org.springframework.kafka.listener.MessageListener;
 import org.springframework.kafka.retrytopic.DltStrategy;
 import org.springframework.kafka.retrytopic.RetryTopicConfiguration;
@@ -257,13 +260,19 @@ public class OrchestratorAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public MongoOffsetStore mongoOffsetStore(MongoTemplate mongoTemplate) {
+        return new MongoOffsetStore(mongoTemplate);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public TimestampOffsetRecoveryListener timestampOffsetRecoveryListener(OrchestratorProperties props) {
         return new TimestampOffsetRecoveryListener(props.getRecovery());
     }
 
-    // Note: @KafkaListener command topic containers are managed by Spring Kafka's
-    // RetryTopicConfiguration which handles its own offset management. The timestamp
-    // recovery listener is applied to programmatic containers (reply + DLT) above.
+    // Note: @KafkaListener command topic containers use Spring Kafka's RetryTopicConfiguration
+    // which manages its own offsets. MongoDB offset store + recovery listener is applied
+    // to programmatic containers (reply + DLT) below.
 
     // ========== Programmatic Kafka Listeners ==========
 
@@ -274,11 +283,23 @@ public class OrchestratorAutoConfiguration {
             ConcurrentKafkaListenerContainerFactory<String, String> containerFactory,
             KafkaTemplate kafkaTemplate,
             OrchestratorProperties props,
-            TimestampOffsetRecoveryListener offsetRecoveryListener,
+            MongoOffsetStore mongoOffsetStore,
+            TimestampOffsetRecoveryListener timestampFallback,
             org.springframework.core.env.Environment env) {
 
         List<ConcurrentMessageListenerContainer<String, String>> containers = new ArrayList<>();
         String appName = env.getProperty("spring.application.name", "orchestrator");
+
+        // Build the appropriate rebalance listener based on offset store config
+        ConsumerAwareRebalanceListener rebalanceListener;
+        if (props.getRecovery().getOffsetStore() == OrchestratorProperties.OffsetStore.MONGO) {
+            rebalanceListener = new MongoOffsetRecoveryListener(
+                    mongoOffsetStore, appName + "-orchestrator", timestampFallback);
+            log.info("Offset recovery: MongoDB-backed (cross-cluster failover safe)");
+        } else {
+            rebalanceListener = timestampFallback;
+            log.info("Offset recovery: Kafka-only (single-cluster mode)");
+        }
 
         // Command listeners — use @KafkaListener via adapter bean (supports RetryTopicConfiguration)
         // Programmatic containers here are ONLY for reply and DLT topics.
@@ -288,10 +309,18 @@ public class OrchestratorAutoConfiguration {
         for (String topic : registry.getAllReplyTopics()) {
             var container = containerFactory.createContainer(topic);
             container.getContainerProperties().setGroupId(appName + "-orchestrator");
-            container.getContainerProperties().setConsumerRebalanceListener(offsetRecoveryListener);
+            container.getContainerProperties().setConsumerRebalanceListener(rebalanceListener);
+            boolean saveMongo = props.getRecovery().getOffsetStore() == OrchestratorProperties.OffsetStore.MONGO;
+            String groupId = appName + "-orchestrator";
             container.getContainerProperties().setMessageListener(
-                    (MessageListener<String, String>) record -> consumer.onStepReply(
-                            record.value(), record.topic(), record.offset()));
+                    (MessageListener<String, String>) record -> {
+                        consumer.onStepReply(record.value(), record.topic(), record.offset());
+                        if (saveMongo) {
+                            mongoOffsetStore.saveOffset(groupId, record.topic(),
+                                    record.partition(), record.offset(),
+                                    record.key(), record.timestamp());
+                        }
+                    });
             container.setBeanName("orchestrator-reply-" + topic.replace(".", "-"));
             container.start();
             containers.add(container);
@@ -307,7 +336,7 @@ public class OrchestratorAutoConfiguration {
         for (String topic : dltTopics) {
             var container = containerFactory.createContainer(topic);
             container.getContainerProperties().setGroupId(appName + "-dlt");
-            container.getContainerProperties().setConsumerRebalanceListener(offsetRecoveryListener);
+            container.getContainerProperties().setConsumerRebalanceListener(rebalanceListener);
             container.getContainerProperties().setMessageListener(
                     (MessageListener<String, String>) record -> {
                         // Extract exception from headers if available

@@ -61,14 +61,23 @@ public class OrchestratorProperties {
         private long scanIntervalMs = 30000;
         private int staleThresholdMinutes = 5;
 
-        /** Offset recovery strategy when committed offsets are lost.
-         *  EARLIEST: replay from beginning (safe but slow at scale, vendor sees old requests)
-         *  TIMESTAMP: seek to (now - offsetFallbackHours) via offsetsForTimes() — recommended
-         *  LATEST: skip missed messages (risk: flows stuck forever) */
+        /** Where to store consumer offsets for cross-cluster failover.
+         *  MONGO: store in MongoDB (replicated cross-DC) — recommended for multi-cluster
+         *  KAFKA: rely on __consumer_offsets only (single-cluster) */
+        private OffsetStore offsetStore = OffsetStore.MONGO;
+
+        /** Fallback when offset not found in either Kafka or MongoDB.
+         *  TIMESTAMP: seek to (now - offsetFallbackHours) via offsetsForTimes()
+         *  EARLIEST: replay from beginning
+         *  LATEST: skip to end */
         private OffsetFallback offsetFallback = OffsetFallback.TIMESTAMP;
 
         /** Hours to look back when using TIMESTAMP offset fallback. Default 24h. */
         private int offsetFallbackHours = 24;
+    }
+
+    public enum OffsetStore {
+        MONGO, KAFKA
     }
 
     public enum OffsetFallback {
