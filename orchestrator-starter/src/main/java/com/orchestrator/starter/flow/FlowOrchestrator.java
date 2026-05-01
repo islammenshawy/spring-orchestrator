@@ -17,6 +17,7 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -156,6 +157,10 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 .orElseThrow(() -> new IllegalArgumentException("Flow not found: " + flowId));
 
         if (flow.getStatus() == FlowStatus.COMPLETED) return;
+        if (flow.getStatus() == FlowStatus.CANCELLED || flow.getStatus() == FlowStatus.CANCELLING) {
+            log.info("[Saga] Flow {} is {} — skipping step {}", flowId, flow.getStatus(), stepName);
+            return;
+        }
 
         // Use the step name from the Kafka message (supports parallel steps)
         if (stepName == null) stepName = flow.getCurrentStep();
@@ -359,6 +364,84 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
         // Run compensation for all completed steps in reverse
         runCompensation(flow);
+    }
+
+    // ========== Cancellation ==========
+
+    /**
+     * Cancel a running flow. Runs @OnCancel handlers (or @Compensate fallback)
+     * for all completed steps in reverse order, then marks as CANCELLED.
+     *
+     * Can only cancel flows in IN_PROGRESS, WAITING_RETRY, or PENDING status.
+     * Returns the cancelled flow, or null if cancellation not allowed.
+     */
+    public F cancelFlow(String flowId, String reason) {
+        F flow = flowRepository.findById(flowId).orElse(null);
+        if (flow == null) return null;
+
+        FlowStatus status = flow.getStatus();
+        if (status != FlowStatus.IN_PROGRESS && status != FlowStatus.WAITING_RETRY
+                && status != FlowStatus.PENDING) {
+            log.warn("[Saga] Cannot cancel flow {} — status is {}", flowId, status);
+            return null;
+        }
+
+        log.info("[Saga] Cancelling flow {} at step {} (reason: {})",
+                flowId, flow.getCurrentStep(), reason);
+
+        flow.setStatus(FlowStatus.CANCELLING);
+        flow.setErrorMessage("CANCELLED: " + (reason != null ? reason : "user requested"));
+        flow.setUpdatedAt(Instant.now());
+        saveFlow(flow);
+
+        // Run cancel handlers in reverse for completed steps
+        runCancellation(flow);
+
+        return flow;
+    }
+
+    private void runCancellation(F flow) {
+        List<String> completedSteps = stepRegistry.getCompletedStepsBefore(flow.getCurrentStep());
+        // Include current step if it has a result (completedWhen is true)
+        String currentStep = flow.getCurrentStep();
+        if (currentStep != null) {
+            StepHandler<F> currentHandler = stepRegistry.getHandler(currentStep);
+            if (currentHandler != null && currentHandler.isAlreadyCompleted(flow)) {
+                completedSteps = new ArrayList<>(completedSteps);
+                completedSteps.add(currentStep);
+            }
+        }
+
+        if (completedSteps.isEmpty()) {
+            log.info("[Saga] No completed steps to cancel for flow {}", flow.getId());
+        } else {
+            log.info("[Saga] Running cancellation for flow {} — {} steps to undo",
+                    flow.getId(), completedSteps.size());
+        }
+
+        // Cancel in reverse order
+        for (int i = completedSteps.size() - 1; i >= 0; i--) {
+            String stepName = completedSteps.get(i);
+            StepHandler<F> handler = stepRegistry.getHandler(stepName);
+
+            if (handler instanceof MethodStepAdapter<F> adapter) {
+                Instant start = Instant.now();
+                try {
+                    adapter.cancel(flow);
+                    logStep(flow.getId(), stepName, "CANCELLED", 1, null, null, null, start);
+                } catch (Exception e) {
+                    log.error("[Saga] Cancel handler failed for step {} on flow {}: {}",
+                            stepName, flow.getId(), e.getMessage());
+                    logStep(flow.getId(), stepName, "CANCEL_FAILED", 1,
+                            null, null, e.getMessage(), start);
+                }
+            }
+        }
+
+        flow.setStatus(FlowStatus.CANCELLED);
+        flow.setUpdatedAt(Instant.now());
+        saveFlow(flow);
+        log.info("[Saga] Flow {} cancelled", flow.getId());
     }
 
     // ========== Compensation (what makes this a Saga) ==========

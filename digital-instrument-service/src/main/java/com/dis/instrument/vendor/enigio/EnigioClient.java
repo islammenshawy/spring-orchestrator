@@ -81,6 +81,12 @@ public class EnigioClient {
                 (String) res.get("versionKey"));
     }
 
+    public void invalidateDocument(String traceOriginalId) {
+        client.post().uri("/documents/{id}/invalidate", traceOriginalId)
+                .retrieve().bodyToMono(Void.class).block();
+        log.info("Invalidated document: {}", traceOriginalId);
+    }
+
     public String validateDocument(String traceOriginalId) {
         var res = client.post().uri("/documents/validate")
                 .bodyValue(Map.of("document", traceOriginalId))

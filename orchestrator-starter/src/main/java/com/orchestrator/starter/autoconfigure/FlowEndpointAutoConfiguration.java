@@ -133,5 +133,39 @@ public class FlowEndpointAutoConfiguration {
                 return ResponseEntity.notFound().build();
             }
         }
+
+        /**
+         * Cancel a running flow. Runs @OnCancel handlers in reverse, marks CANCELLED.
+         * POST /flows/{flowType}/{id}/cancel
+         */
+        @PostMapping("/{flowType}/{id}/cancel")
+        public ResponseEntity<?> cancelFlow(
+                @PathVariable String flowType,
+                @PathVariable String id,
+                @RequestBody(required = false) Map<String, Object> body) {
+            try {
+                FlowTypeDescriptor desc = registry.resolve(flowType);
+                FlowOrchestrator orch = (FlowOrchestrator) desc.getOrchestrator();
+                String reason = body != null ? (String) body.getOrDefault("reason", "user requested") : "user requested";
+
+                OrchestratorFlow cancelled = orch.cancelFlow(id, reason);
+                if (cancelled == null) {
+                    return ResponseEntity.badRequest().body(Map.of(
+                            "error", "Cannot cancel flow — not in cancellable state",
+                            "flowId", id
+                    ));
+                }
+
+                return ResponseEntity.ok(Map.of(
+                        "flowId", cancelled.getId(),
+                        "flowType", flowType,
+                        "status", cancelled.getStatus().name(),
+                        "currentStep", cancelled.getCurrentStep() != null ? cancelled.getCurrentStep() : "",
+                        "message", "Flow cancelled. " + cancelled.getErrorMessage()
+                ));
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            }
+        }
     }
 }

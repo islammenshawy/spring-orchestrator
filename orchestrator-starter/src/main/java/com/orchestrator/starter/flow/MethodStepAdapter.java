@@ -33,6 +33,7 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
     private final String parallelGroup;  // null if not parallel
     private final String joinOnGroup;    // null if not a join point
     private Method compensateMethod;
+    private Method cancelMethod;
 
     public MethodStepAdapter(Object flowDefinition, Method method, Step stepAnnotation) {
         this.flowDefinition = flowDefinition;
@@ -47,6 +48,7 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
         JoinOn joinOn = method.getAnnotation(JoinOn.class);
         this.joinOnGroup = joinOn != null ? joinOn.group() : null;
         this.compensateMethod = findCompensateMethod(flowDefinition.getClass(), method.getName());
+        this.cancelMethod = findCancelMethod(flowDefinition.getClass(), method.getName());
     }
 
     @Override
@@ -124,10 +126,43 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
         }
     }
 
+    public boolean hasCancellation() {
+        return cancelMethod != null || compensateMethod != null;
+    }
+
+    /**
+     * Run cancellation handler. Falls back to @Compensate if no @OnCancel defined.
+     */
+    public void cancel(F flow) {
+        Method handler = cancelMethod != null ? cancelMethod : compensateMethod;
+        if (handler == null) {
+            log.warn("[Step:{}] No @OnCancel or @Compensate defined, skipping cancellation", stepName);
+            return;
+        }
+        try {
+            String type = cancelMethod != null ? "@OnCancel" : "@Compensate (fallback)";
+            log.info("[Step:{}] Executing cancellation via {}", stepName, type);
+            handler.invoke(flowDefinition, flow);
+        } catch (Exception e) {
+            log.error("[Step:{}] Cancellation failed: {}", stepName, e.getMessage());
+        }
+    }
+
     private static Method findCompensateMethod(Class<?> clazz, String stepMethodName) {
         for (Method m : clazz.getDeclaredMethods()) {
             Compensate comp = m.getAnnotation(Compensate.class);
             if (comp != null && comp.step().equals(stepMethodName)) {
+                m.setAccessible(true);
+                return m;
+            }
+        }
+        return null;
+    }
+
+    private static Method findCancelMethod(Class<?> clazz, String stepMethodName) {
+        for (Method m : clazz.getDeclaredMethods()) {
+            OnCancel cancel = m.getAnnotation(OnCancel.class);
+            if (cancel != null && cancel.step().equals(stepMethodName)) {
                 m.setAccessible(true);
                 return m;
             }

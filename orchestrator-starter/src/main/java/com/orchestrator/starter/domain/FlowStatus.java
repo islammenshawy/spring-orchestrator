@@ -6,5 +6,7 @@ public enum FlowStatus {
     WAITING_RETRY,
     COMPLETED,
     COMPENSATING,
-    FAILED
+    FAILED,
+    CANCELLING,
+    CANCELLED
 }

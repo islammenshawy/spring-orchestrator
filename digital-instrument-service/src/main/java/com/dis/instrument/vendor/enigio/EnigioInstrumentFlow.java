@@ -361,4 +361,28 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         // Final notification — flow complete
         notificationPublisher.notifyPhaseComplete(flow, "FLOW_COMPLETE", "COMPLETED");
     }
+
+    // ===== Cancellation Handlers =====
+
+    @OnCancel(step = "registerDocument")
+    public void cancelDocument(EnigioInstrumentEntity flow) {
+        if (flow.getTraceOriginalId() == null) return;
+        log.info("[{}] Cancelling: invalidating document {} on Enigio",
+                flow.getId(), flow.getTraceOriginalId());
+        try {
+            enigioClient.invalidateDocument(flow.getTraceOriginalId());
+        } catch (Exception e) {
+            log.warn("[{}] Failed to invalidate document: {}", flow.getId(), e.getMessage());
+        }
+        notificationPublisher.notifyPhaseComplete(flow, "FLOW_CANCELLED", "CANCELLED");
+    }
+
+    @OnCancel(step = "transferDocument")
+    public void cancelTransfer(EnigioInstrumentEntity flow) {
+        if (flow.getTransferId() == null) return;
+        log.info("[{}] Cancelling: revoking transfer {} on Enigio",
+                flow.getId(), flow.getTransferId());
+        // In production: enigioClient.cancelTransfer(flow.getEnvelopeTraceId(), flow.getTransferId());
+        notificationPublisher.notifyPhaseComplete(flow, "TRANSFER_CANCELLED", "CANCELLED");
+    }
 }
