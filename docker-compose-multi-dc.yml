@@ -92,6 +92,8 @@ services:
     environment:
       SPRING_MONGODB_URI: mongodb://mongodb:27017/dis_multi_dc
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-a:29092
+      SPRING_KAFKA_PRODUCER_ACKS: 1
+      SPRING_KAFKA_PRODUCER_PROPERTIES_ENABLE_IDEMPOTENCE: false
       VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
       DIS_WEBHOOK_CALLBACK_URL: http://dis-1:8087/webhooks/enigio
       ORCHESTRATOR_RECOVERY_OFFSET_STORE: MONGO
@@ -139,6 +141,8 @@ services:
       retries: 10
 
   # DIS Instance 2 (Standby — connects to kafka-b, same MongoDB)
+  # Does NOT auto-start. Manually start on failover:
+  #   docker compose -f docker-compose-multi-dc.yml start dis-2
   dis-2:
     build:
       context: .
@@ -146,6 +150,8 @@ services:
         JAR_FILE: digital-instrument-service/target/digital-instrument-service-0.0.1-SNAPSHOT.jar
     ports:
       - "8088:8087"
+    profiles:
+      - failover
     depends_on:
       mongodb:
         condition: service_healthy
@@ -156,6 +162,8 @@ services:
     environment:
       SPRING_MONGODB_URI: mongodb://mongodb:27017/dis_multi_dc
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-b:29192
+      SPRING_KAFKA_PRODUCER_ACKS: 1
+      SPRING_KAFKA_PRODUCER_PROPERTIES_ENABLE_IDEMPOTENCE: false
       VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
       DIS_WEBHOOK_CALLBACK_URL: http://dis-2:8087/webhooks/enigio
       ORCHESTRATOR_RECOVERY_OFFSET_STORE: MONGO
@@ -173,42 +181,27 @@ services:
         condition: service_healthy
       kafka-b:
         condition: service_healthy
-    command: >
-      bash -c "
-        echo 'Waiting for topics to be created on source cluster...'
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo 'Waiting for source cluster...'
         sleep 30
-
-        cat > /tmp/mm2.properties << 'PROPS'
-        # Clusters
-        clusters = dc1, dc2
-        dc1.bootstrap.servers = kafka-a:29092
-        dc2.bootstrap.servers = kafka-b:29192
-
-        # Replication: dc1 → dc2
-        dc1->dc2.enabled = true
-        dc2->dc1.enabled = false
-
-        # Topic replication
-        dc1->dc2.topics = dis\.instrument\.commands, dis\.instrument\.commands\.replies, dis\.instrument\.notifications
-
-        # Disable offset sync (we use MongoDB for offsets)
-        emit.checkpoints.enabled = false
-
-        # Don't rename topics (no prefix)
-        replication.policy.class = org.apache.kafka.connect.mirror.IdentityReplicationPolicy
-
-        # Replication settings
-        refresh.topics.interval.seconds = 10
-        sync.topic.configs.enabled = true
-        sync.topic.acls.enabled = false
-
-        # Consumer/producer config
-        dc1.consumer.auto.offset.reset = earliest
-        PROPS
-
+        printf '%s\n' \
+          'clusters = dc1, dc2' \
+          'dc1.bootstrap.servers = kafka-a:29092' \
+          'dc2.bootstrap.servers = kafka-b:29192' \
+          'dc1->dc2.enabled = true' \
+          'dc2->dc1.enabled = false' \
+          'dc1->dc2.topics = dis\.instrument\..*' \
+          'emit.checkpoints.enabled = false' \
+          'replication.policy.class = org.apache.kafka.connect.mirror.IdentityReplicationPolicy' \
+          'refresh.topics.interval.seconds = 10' \
+          'sync.topic.configs.enabled = true' \
+          'sync.topic.acls.enabled = false' \
+          'dc1.consumer.auto.offset.reset = earliest' \
+          > /tmp/mm2.properties
         echo 'Starting MirrorMaker 2...'
         connect-mirror-maker /tmp/mm2.properties
-      "
 
 volumes:
   multi-dc-mongo:
