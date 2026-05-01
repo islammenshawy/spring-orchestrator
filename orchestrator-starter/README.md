@@ -19,6 +19,8 @@ Kafka retry topics with jittered exponential backoff. MongoDB persistence. Annot
 - [The Unavoidable Gap: API Call + Crash](#the-unavoidable-gap-api-call--crash)
 - [Transactional Outbox](#transactional-outbox)
 - [Saga Compensation (Rollback)](#saga-compensation-rollback)
+- [Flow Cancellation](#flow-cancellation)
+- [Cross-Cluster Offset Recovery](#cross-cluster-offset-recovery)
 - [Container Crash Recovery](#container-crash-recovery)
 - [Kafka Rebalancing](#kafka-rebalancing)
 - [Configuration Reference](#configuration-reference)
@@ -575,6 +577,71 @@ Step 3: generateInvoice   ✗ FAILED
 ```
 
 Triggers automatically on `NonRetryableStepException` and DLT.
+
+---
+
+## Flow Cancellation
+
+Cancel a running flow at any point. Runs `@OnCancel` handlers in reverse for completed steps.
+
+```java
+// Define cancel handler — runs when flow is explicitly cancelled
+@OnCancel(step = "registerDocument")
+public void cancelDocument(MyFlow flow) {
+    vendorClient.invalidateDocument(flow.getDocumentId());
+}
+
+// If no @OnCancel defined, falls back to @Compensate
+```
+
+**Cancel via REST:**
+```
+POST /flows/{flowType}/{id}/cancel
+{"reason": "Terms rejected by legal"}
+
+→ 200 {"status": "CANCELLED", "message": "..."}
+```
+
+**What happens:**
+1. Status set to `CANCELLING`
+2. `@OnCancel` handlers run in **reverse** for all completed steps
+3. Falls back to `@Compensate` if no `@OnCancel` defined
+4. Status set to `CANCELLED`
+5. In-flight retry messages silently skipped (status check at execution start)
+
+**Edge case — cancel while in retry topic:**
+```
+Flow at step 7 → RetryableStepException → message in retry-3 (40s backoff)
+→ User cancels: POST /cancel → status = CANCELLED
+→ 40s later: retry-3 delivers message → executeStep checks status
+→ "Flow is CANCELLED — skipping step" → message consumed, no re-execution
+```
+
+Cancellable states: `PENDING`, `IN_PROGRESS`, `WAITING_RETRY`
+Not cancellable: `COMPLETED`, `FAILED`, `CANCELLED`
+
+---
+
+## Cross-Cluster Offset Recovery
+
+For multi-DC failover where `__consumer_offsets` is per-cluster and NOT replicated.
+
+```yaml
+orchestrator:
+  recovery:
+    offset-store: MONGO           # MONGO (default) | KAFKA
+    offset-fallback: TIMESTAMP    # TIMESTAMP | EARLIEST | LATEST
+    offset-fallback-hours: 24
+```
+
+**MongoDB Offset Store** saves the last processed offset + message timestamp to MongoDB after each message. On DC failover, the `MongoOffsetRecoveryListener` reads the stored timestamp and uses `offsetsForTimes()` to seek to the correct position on the new cluster.
+
+**Recovery chain:** Kafka offset → MongoDB offset (by timestamp) → Timestamp fallback → Latest
+
+```
+Collection: orchestrator_consumer_offsets
+{ consumerGroup, topic, partition, offset, eventId, messageTimestamp }
+```
 
 ---
 

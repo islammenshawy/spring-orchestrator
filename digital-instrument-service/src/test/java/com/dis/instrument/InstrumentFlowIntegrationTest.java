@@ -372,4 +372,133 @@ class InstrumentFlowIntegrationTest {
         assertNotNull(completed.getUpdatedAt());
         assertEquals(0, completed.getRetryCount());
     }
+
+    // ========== 11. Flow cancellation ==========
+
+    @Test
+    @Order(11)
+    @DisplayName("Cancel flow at gate step")
+    void cancelFlow_atGateStep() {
+        var result = startInstrumentFlow("PN-CANCEL-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        // Wait for Gate 1
+        long deadline = System.currentTimeMillis() + Duration.ofMinutes(2).toMillis();
+        while (System.currentTimeMillis() < deadline) {
+            EnigioInstrumentEntity flow = mongoTemplate.findById(
+                    flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+            if (flow != null && "AWAIT_PREPARATION_APPROVAL".equals(flow.getCurrentStep())) break;
+            try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
+        }
+
+        // Cancel
+        var cancelResult = rest.post()
+                .uri("/flows/enigio-instrument/" + flowId + "/cancel")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("reason", "Test cancellation"))
+                .retrieve()
+                .body(Map.class);
+
+        assertNotNull(cancelResult);
+        assertEquals("CANCELLED", cancelResult.get("status"));
+
+        // Verify in MongoDB
+        EnigioInstrumentEntity cancelled = mongoTemplate.findById(
+                flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(cancelled);
+        assertEquals(FlowStatus.CANCELLED, cancelled.getStatus());
+        assertTrue(cancelled.getErrorMessage().contains("Test cancellation"));
+    }
+
+    @Test
+    @Order(12)
+    @DisplayName("Cancel while in retry topic — retry message skipped")
+    void cancelFlow_whileInRetry() {
+        var result = startInstrumentFlow("PN-CANCEL-RETRY", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        // Wait for WAITING_RETRY status (message in retry topic)
+        long deadline = System.currentTimeMillis() + Duration.ofMinutes(2).toMillis();
+        while (System.currentTimeMillis() < deadline) {
+            EnigioInstrumentEntity flow = mongoTemplate.findById(
+                    flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+            if (flow != null && flow.getStatus() == FlowStatus.WAITING_RETRY) break;
+            try { Thread.sleep(500); } catch (InterruptedException e) { break; }
+        }
+
+        // Cancel while in retry
+        rest.post()
+                .uri("/flows/enigio-instrument/" + flowId + "/cancel")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("reason", "Cancel during retry"))
+                .retrieve()
+                .body(Map.class);
+
+        // Wait for retry message to be delivered and skipped
+        try { Thread.sleep(15000); } catch (InterruptedException ignored) {}
+
+        // Verify still CANCELLED (not re-executed)
+        EnigioInstrumentEntity flow = mongoTemplate.findById(
+                flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(flow);
+        assertEquals(FlowStatus.CANCELLED, flow.getStatus(),
+                "Flow should stay CANCELLED even after retry message delivered");
+    }
+
+    // ========== 13. MongoDB offset store ==========
+
+    @Test
+    @Order(13)
+    @DisplayName("Consumer offsets saved to MongoDB")
+    void mongoOffsetStore_offsetsSaved() {
+        var result = startInstrumentFlow("PN-OFFSET-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        waitForStatus(flowId, FlowStatus.COMPLETED, Duration.ofMinutes(3));
+
+        // Check orchestrator_consumer_offsets collection
+        long offsetCount = mongoTemplate.count(new Query(), "orchestrator_consumer_offsets");
+        assertTrue(offsetCount > 0,
+                "Consumer offsets should be saved to MongoDB for cross-cluster recovery");
+
+        // Verify offset has required fields
+        var offset = mongoTemplate.findOne(new Query(), org.bson.Document.class,
+                "orchestrator_consumer_offsets");
+        assertNotNull(offset);
+        assertNotNull(offset.get("topic"), "Offset should have topic");
+        assertNotNull(offset.get("offset"), "Offset should have offset number");
+        assertNotNull(offset.get("messageTimestamp"), "Offset should have timestamp for cross-cluster seek");
+    }
+
+    // ========== 14. Cannot cancel completed flow ==========
+
+    @Test
+    @Order(14)
+    @DisplayName("Cannot cancel completed flow")
+    void cancelFlow_completedFlowRejected() {
+        var result = startInstrumentFlow("PN-CANCEL-DONE", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        waitForStatus(flowId, FlowStatus.COMPLETED, Duration.ofMinutes(3));
+
+        // Try to cancel completed flow
+        try {
+            rest.post()
+                    .uri("/flows/enigio-instrument/" + flowId + "/cancel")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("reason", "Should fail"))
+                    .retrieve()
+                    .body(Map.class);
+            // If no exception, check response
+        } catch (Exception e) {
+            // 400 expected
+            assertTrue(e.getMessage().contains("400") || e.getMessage().contains("Bad Request"),
+                    "Should return 400 for completed flow");
+        }
+
+        // Flow should still be COMPLETED
+        EnigioInstrumentEntity flow = mongoTemplate.findById(
+                flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertEquals(FlowStatus.COMPLETED, flow.getStatus());
+    }
 }
