@@ -210,220 +210,277 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
   <h2>Kafka <span>Architecture</span></h2>
   <p class="sub">How messages flow, retry, and survive failures across a stretched Kafka cluster.</p>
 
-  <!-- Cluster topology -->
+  <!-- SVG: Cluster Topology -->
   <div class="card" style="margin-bottom:1.2rem">
     <h3>Stretched Cluster Topology</h3>
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:.8rem">
-      <div style="border:1px solid var(--blue);border-radius:6px;padding:10px;text-align:center;background:rgba(59,130,246,.04)">
-        <div style="font-size:.7rem;color:var(--blue);font-weight:700">Rack 1 (AZ-a)</div>
-        <div style="font-size:.85rem;font-weight:600;margin:4px 0">Broker 1</div>
-        <div style="font-size:.7rem;color:var(--dim)">Leader for partitions 0, 3, 6...</div>
-      </div>
-      <div style="border:1px solid var(--amber);border-radius:6px;padding:10px;text-align:center;background:rgba(245,158,11,.04)">
-        <div style="font-size:.7rem;color:var(--amber);font-weight:700">Rack 2 (AZ-b)</div>
-        <div style="font-size:.85rem;font-weight:600;margin:4px 0">Broker 2</div>
-        <div style="font-size:.7rem;color:var(--dim)">Leader for partitions 1, 4, 7...</div>
-      </div>
-      <div style="border:1px solid var(--green);border-radius:6px;padding:10px;text-align:center;background:rgba(16,185,129,.04)">
-        <div style="font-size:.7rem;color:var(--green);font-weight:700">Rack 3 (AZ-c)</div>
-        <div style="font-size:.85rem;font-weight:600;margin:4px 0">Broker 3</div>
-        <div style="font-size:.7rem;color:var(--dim)">Leader for partitions 2, 5, 8...</div>
-      </div>
-    </div>
-    <div style="font-size:.75rem;color:var(--dim);margin-top:8px;text-align:center">
-      Replication Factor: 3 &bull; Min In-Sync Replicas: 2 &bull; Unclean Leader Election: disabled
-    </div>
+    <svg viewBox="0 0 860 200" xmlns="http://www.w3.org/2000/svg" style="width:100%;margin-top:.5rem;font-family:Inter,-apple-system,sans-serif">
+      <!-- Broker boxes -->
+      <rect x="30" y="20" width="240" height="130" rx="8" fill="rgba(59,130,246,.04)" stroke="rgba(59,130,246,.3)"/>
+      <rect x="310" y="20" width="240" height="130" rx="8" fill="rgba(245,158,11,.04)" stroke="rgba(245,158,11,.3)"/>
+      <rect x="590" y="20" width="240" height="130" rx="8" fill="rgba(16,185,129,.04)" stroke="rgba(16,185,129,.3)"/>
+      <!-- Labels -->
+      <text x="150" y="45" text-anchor="middle" fill="#3b82f6" font-size="10" font-weight="700">RACK 1 / AZ-a</text>
+      <text x="430" y="45" text-anchor="middle" fill="#f59e0b" font-size="10" font-weight="700">RACK 2 / AZ-b</text>
+      <text x="710" y="45" text-anchor="middle" fill="#10b981" font-size="10" font-weight="700">RACK 3 / AZ-c</text>
+      <!-- Broker icons -->
+      <rect x="90" y="58" width="120" height="40" rx="5" fill="rgba(59,130,246,.12)" stroke="rgba(59,130,246,.4)"/>
+      <text x="150" y="82" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600">Broker 1</text>
+      <rect x="370" y="58" width="120" height="40" rx="5" fill="rgba(245,158,11,.12)" stroke="rgba(245,158,11,.4)"/>
+      <text x="430" y="82" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600">Broker 2</text>
+      <rect x="650" y="58" width="120" height="40" rx="5" fill="rgba(16,185,129,.12)" stroke="rgba(16,185,129,.4)"/>
+      <text x="710" y="82" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="600">Broker 3</text>
+      <!-- Partition bars -->
+      <rect x="70" y="108" width="40" height="12" rx="2" fill="#3b82f6"/><text x="90" y="117" text-anchor="middle" fill="white" font-size="7" font-weight="700">P0</text>
+      <rect x="115" y="108" width="40" height="12" rx="2" fill="rgba(245,158,11,.4)"/><text x="135" y="117" text-anchor="middle" fill="white" font-size="7">P1</text>
+      <rect x="160" y="108" width="40" height="12" rx="2" fill="rgba(16,185,129,.4)"/><text x="180" y="117" text-anchor="middle" fill="white" font-size="7">P2</text>
+      <text x="150" y="138" text-anchor="middle" fill="#94a3b8" font-size="8">Leader: P0 | Replica: P1, P2</text>
+
+      <rect x="350" y="108" width="40" height="12" rx="2" fill="rgba(59,130,246,.4)"/><text x="370" y="117" text-anchor="middle" fill="white" font-size="7">P0</text>
+      <rect x="395" y="108" width="40" height="12" rx="2" fill="#f59e0b"/><text x="415" y="117" text-anchor="middle" fill="white" font-size="7" font-weight="700">P1</text>
+      <rect x="440" y="108" width="40" height="12" rx="2" fill="rgba(16,185,129,.4)"/><text x="460" y="117" text-anchor="middle" fill="white" font-size="7">P2</text>
+      <text x="430" y="138" text-anchor="middle" fill="#94a3b8" font-size="8">Leader: P1 | Replica: P0, P2</text>
+
+      <rect x="630" y="108" width="40" height="12" rx="2" fill="rgba(59,130,246,.4)"/><text x="650" y="117" text-anchor="middle" fill="white" font-size="7">P0</text>
+      <rect x="675" y="108" width="40" height="12" rx="2" fill="rgba(245,158,11,.4)"/><text x="695" y="117" text-anchor="middle" fill="white" font-size="7">P1</text>
+      <rect x="720" y="108" width="40" height="12" rx="2" fill="#10b981"/><text x="740" y="117" text-anchor="middle" fill="white" font-size="7" font-weight="700">P2</text>
+      <text x="710" y="138" text-anchor="middle" fill="#94a3b8" font-size="8">Leader: P2 | Replica: P0, P1</text>
+
+      <!-- Replication arrows -->
+      <line x1="210" y1="78" x2="370" y2="78" stroke="#2a3548" stroke-width="1" stroke-dasharray="4,3"/>
+      <line x1="490" y1="78" x2="650" y2="78" stroke="#2a3548" stroke-width="1" stroke-dasharray="4,3"/>
+      <text x="290" y="73" text-anchor="middle" fill="#64748b" font-size="7">replicate</text>
+      <text x="570" y="73" text-anchor="middle" fill="#64748b" font-size="7">replicate</text>
+
+      <!-- Bottom legend -->
+      <text x="430" y="175" text-anchor="middle" fill="#94a3b8" font-size="9">Replication Factor: 3 &bull; Min ISR: 2 &bull; acks=all &bull; Unclean Election: OFF</text>
+      <rect x="200" y="183" width="12" height="8" rx="1" fill="#3b82f6"/><text x="218" y="190" fill="#94a3b8" font-size="7">Leader</text>
+      <rect x="265" y="183" width="12" height="8" rx="1" fill="rgba(59,130,246,.4)"/><text x="283" y="190" fill="#94a3b8" font-size="7">Replica (ISR)</text>
+      <text x="430" y="190" text-anchor="middle" fill="#64748b" font-size="7">Bright = Leader partition | Dim = Follower replica</text>
+    </svg>
   </div>
 
-  <!-- Producer / Consumer config -->
+  <!-- SVG: Message Flow Pipeline -->
+  <div class="card" style="margin-bottom:1.2rem">
+    <h3>Message Flow Pipeline</h3>
+    <svg viewBox="0 0 860 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;margin-top:.5rem;font-family:Inter,-apple-system,sans-serif">
+      <!-- Step 1: Flow Start -->
+      <rect x="20" y="20" width="160" height="50" rx="6" fill="rgba(139,92,246,.1)" stroke="rgba(139,92,246,.3)"/>
+      <text x="100" y="42" text-anchor="middle" fill="#8b5cf6" font-size="9" font-weight="700">1. FLOW STARTS</text>
+      <text x="100" y="56" text-anchor="middle" fill="#94a3b8" font-size="8">POST /flows/enigio-instrument</text>
+
+      <!-- Arrow -->
+      <line x1="180" y1="45" x2="220" y2="45" stroke="#8b5cf6" stroke-width="1.5" marker-end="url(#arrowPurple)"/>
+
+      <!-- Step 2: MongoDB (atomic write) -->
+      <rect x="220" y="10" width="180" height="70" rx="6" fill="rgba(16,185,129,.06)" stroke="rgba(16,185,129,.3)"/>
+      <text x="310" y="30" text-anchor="middle" fill="#10b981" font-size="9" font-weight="700">2. ATOMIC WRITE</text>
+      <text x="310" y="44" text-anchor="middle" fill="#94a3b8" font-size="8">MongoDB (single operation)</text>
+      <text x="310" y="58" text-anchor="middle" fill="#64748b" font-size="7">flow state + outbox event</text>
+      <text x="310" y="70" text-anchor="middle" fill="#64748b" font-size="7">published = false</text>
+
+      <!-- Arrow -->
+      <line x1="400" y1="45" x2="440" y2="45" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+
+      <!-- Step 3: Outbox Publisher -->
+      <rect x="440" y="15" width="150" height="60" rx="6" fill="rgba(245,158,11,.08)" stroke="rgba(245,158,11,.3)"/>
+      <text x="515" y="35" text-anchor="middle" fill="#f59e0b" font-size="9" font-weight="700">3. OUTBOX PUBLISHER</text>
+      <text x="515" y="49" text-anchor="middle" fill="#94a3b8" font-size="8">Polls every 500ms</text>
+      <text x="515" y="63" text-anchor="middle" fill="#64748b" font-size="7">publishes to Kafka</text>
+
+      <!-- Arrow -->
+      <line x1="590" y1="45" x2="630" y2="45" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrowAmber)"/>
+
+      <!-- Step 4: Kafka -->
+      <rect x="630" y="10" width="200" height="70" rx="6" fill="rgba(59,130,246,.08)" stroke="rgba(59,130,246,.3)"/>
+      <text x="730" y="30" text-anchor="middle" fill="#3b82f6" font-size="9" font-weight="700">4. KAFKA TOPIC</text>
+      <text x="730" y="44" text-anchor="middle" fill="#94a3b8" font-size="8">dis.instrument.commands</text>
+      <text x="730" y="58" text-anchor="middle" fill="#64748b" font-size="7">key = flowId (partition routing)</text>
+      <text x="730" y="70" text-anchor="middle" fill="#64748b" font-size="7">replication = 3, ISR = 2</text>
+
+      <!-- Arrow down -->
+      <line x1="730" y1="80" x2="730" y2="110" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlueD)"/>
+
+      <!-- Step 5: Consumer -->
+      <rect x="630" y="110" width="200" height="85" rx="6" fill="rgba(59,130,246,.04)" stroke="rgba(59,130,246,.2)"/>
+      <text x="730" y="128" text-anchor="middle" fill="#3b82f6" font-size="9" font-weight="700">5. CONSUMER</text>
+      <text x="730" y="143" text-anchor="middle" fill="#94a3b8" font-size="8">Idempotency Layer 1: processed?</text>
+      <text x="730" y="156" text-anchor="middle" fill="#94a3b8" font-size="8">Idempotency Layer 2: completedWhen?</text>
+      <text x="730" y="170" text-anchor="middle" fill="#10b981" font-size="8" font-weight="600">Execute step → API call</text>
+      <text x="730" y="184" text-anchor="middle" fill="#64748b" font-size="7">Save offset to MongoDB</text>
+
+      <!-- Arrow: success path -->
+      <line x1="630" y1="155" x2="490" y2="155" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowGreenL)"/>
+      <text x="560" y="148" text-anchor="middle" fill="#10b981" font-size="8" font-weight="600">success</text>
+
+      <!-- Reply topic -->
+      <rect x="300" y="130" width="190" height="50" rx="6" fill="rgba(16,185,129,.06)" stroke="rgba(16,185,129,.3)"/>
+      <text x="395" y="150" text-anchor="middle" fill="#10b981" font-size="9" font-weight="700">6. REPLY TOPIC</text>
+      <text x="395" y="165" text-anchor="middle" fill="#94a3b8" font-size="8">dis.instrument.commands.replies</text>
+
+      <!-- Arrow: reply to next step -->
+      <line x1="395" y1="180" x2="395" y2="210" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowGreenD)"/>
+
+      <!-- Next step -->
+      <rect x="310" y="210" width="170" height="40" rx="6" fill="rgba(16,185,129,.1)" stroke="rgba(16,185,129,.3)"/>
+      <text x="395" y="228" text-anchor="middle" fill="#10b981" font-size="9" font-weight="700">7. ADVANCE FLOW</text>
+      <text x="395" y="242" text-anchor="middle" fill="#94a3b8" font-size="8">Outbox → next step → repeat</text>
+
+      <!-- Arrow: failure path -->
+      <line x1="730" y1="195" x2="730" y2="225" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrowRedD)"/>
+      <text x="755" y="215" fill="#ef4444" font-size="8" font-weight="600">failure</text>
+
+      <!-- Retry chain -->
+      <rect x="610" y="225" width="240" height="75" rx="6" fill="rgba(245,158,11,.04)" stroke="rgba(245,158,11,.2)"/>
+      <text x="730" y="243" text-anchor="middle" fill="#f59e0b" font-size="9" font-weight="700">RETRY CHAIN</text>
+      <text x="730" y="258" text-anchor="middle" fill="#94a3b8" font-size="8">retry-0 (5s) → retry-1 (10s) → ... → retry-6 (180s)</text>
+      <text x="730" y="272" text-anchor="middle" fill="#94a3b8" font-size="8">Jittered exponential backoff</text>
+      <text x="730" y="286" text-anchor="middle" fill="#ef4444" font-size="8">Exhausted → DLT (manual review)</text>
+
+      <!-- Retry arrow back to consumer -->
+      <path d="M 610 262 Q 560 262 560 155 L 630 155" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4,3" fill="none" marker-end="url(#arrowAmber)"/>
+      <text x="555" y="210" fill="#f59e0b" font-size="7" transform="rotate(-90,555,210)">re-deliver</text>
+
+      <!-- Defs -->
+      <defs>
+        <marker id="arrowBlueD" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#3b82f6"/></marker>
+        <marker id="arrowGreenD" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#10b981"/></marker>
+        <marker id="arrowGreenL" markerWidth="7" markerHeight="5" refX="0" refY="2.5" orient="auto"><path d="M7,0 L0,2.5 L7,5" fill="#10b981"/></marker>
+        <marker id="arrowRedD" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#ef4444"/></marker>
+        <marker id="arrowAmber" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#f59e0b"/></marker>
+      </defs>
+    </svg>
+  </div>
+
+  <!-- Visual: Producer & Consumer config -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.2rem">
     <div class="card">
-      <h3>Producer Configuration</h3>
+      <h3 style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:50%;background:var(--green)"></span> Producer</h3>
       <table class="tbl">
-        <tr><td>acks</td><td><strong style="color:var(--green)">all</strong> &mdash; wait for ALL in-sync replicas</td></tr>
-        <tr><td>enable.idempotence</td><td><strong style="color:var(--green)">true</strong> &mdash; dedup at broker level</td></tr>
-        <tr><td>retries</td><td>3 &mdash; transient network errors</td></tr>
-        <tr><td>max.in.flight</td><td>5 &mdash; safe with idempotence</td></tr>
-        <tr><td>delivery.timeout.ms</td><td>30000 &mdash; total delivery time</td></tr>
+        <tr><td>acks</td><td><strong style="color:var(--green)">all</strong></td></tr>
+        <tr><td>enable.idempotence</td><td><strong style="color:var(--green)">true</strong></td></tr>
+        <tr><td>retries</td><td>3</td></tr>
+        <tr><td>max.in.flight</td><td>5</td></tr>
+        <tr><td>delivery.timeout.ms</td><td>30,000</td></tr>
       </table>
-      <div style="font-size:.72rem;color:var(--dim);margin-top:6px">
-        With <code>acks=all</code> + <code>min.insync.replicas=2</code>: a message is confirmed only after 2 of 3 brokers persist it. Survives 1 broker death with zero message loss.
+      <div style="margin-top:8px;padding:6px 8px;border-radius:4px;background:rgba(16,185,129,.06);font-size:.7rem;color:var(--dim)">
+        Message confirmed only after <strong style="color:var(--green)">2 of 3 brokers</strong> persist it. Survives 1 broker death.
       </div>
     </div>
     <div class="card">
-      <h3>Consumer Configuration</h3>
+      <h3 style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:50%;background:var(--blue)"></span> Consumer</h3>
       <table class="tbl">
-        <tr><td>auto.offset.reset</td><td><strong>latest</strong> &mdash; safety net only (MongoDB offset store is primary)</td></tr>
-        <tr><td>enable.auto.commit</td><td><strong style="color:var(--green)">false</strong> &mdash; manual commit (RECORD ack mode)</td></tr>
-        <tr><td>partition.assignment</td><td>CooperativeStickyAssignor</td></tr>
-        <tr><td>session.timeout.ms</td><td>30000 &mdash; crash detection in 30s</td></tr>
-        <tr><td>heartbeat.interval.ms</td><td>10000 &mdash; must be &lt; session/3</td></tr>
-        <tr><td>max.poll.records</td><td>50 &mdash; batch size limit</td></tr>
-        <tr><td>max.poll.interval.ms</td><td>300000 &mdash; 5 min for slow steps</td></tr>
+        <tr><td>auto.offset.reset</td><td>latest <span style="color:var(--dim);font-size:.65rem">(MongoDB primary)</span></td></tr>
+        <tr><td>auto.commit</td><td><strong style="color:var(--green)">false</strong> <span style="color:var(--dim);font-size:.65rem">(RECORD ack)</span></td></tr>
+        <tr><td>assignment</td><td>CooperativeStickyAssignor</td></tr>
+        <tr><td>session.timeout</td><td>30s</td></tr>
+        <tr><td>max.poll.records</td><td>50</td></tr>
       </table>
-    </div>
-  </div>
-
-  <!-- Message flow -->
-  <div class="card" style="margin-bottom:1.2rem">
-    <h3>Message Flow: Step Execution</h3>
-    <div style="font-size:.78rem;color:var(--dim);margin-bottom:.8rem">
-      How a single step flows through the Kafka + Outbox + MongoDB pipeline:
-    </div>
-    <div class="code"><span class="c">// 1. Flow starts → outbox event written to MongoDB (atomic with flow state)</span>
-MongoDB: orchestrator_outbox  ← { topic, key=flowId, payload=stepCommand, published=false }
-MongoDB: dis_instrument_flows ← { status=IN_PROGRESS, currentStep=REGISTER_DOCUMENT }
-
-<span class="c">// 2. Outbox publisher polls (every 500ms), publishes to Kafka</span>
-Kafka:   dis.instrument.commands  ← { flowId, stepName, correlationId }
-MongoDB: orchestrator_outbox      ← { published=true }
-
-<span class="c">// 3. Consumer reads message, executes step</span>
-Consumer: consumer.poll() → StepCommandMessage
-          → idempotency check (orchestrator_processed_events)
-          → completedWhen guard (SpEL on flow entity)
-          → step.execute(flow) → API call to Enigio
-          → save result to flow entity
-          → publish reply to replies topic
-
-<span class="c">// 4. Reply consumer advances flow to next step</span>
-Kafka:   dis.instrument.commands.replies  ← { flowId, stepName, status=COMPLETED }
-         → orchestrator reads reply → outbox for next step → repeat from 2
-
-<span class="c">// 5. Offset saved to MongoDB (cross-cluster safe)</span>
-MongoDB: orchestrator_consumer_offsets  ← { topic, partition, offset, timestamp }</div>
-  </div>
-
-  <!-- Topic structure -->
-  <div class="card" style="margin-bottom:1.2rem">
-    <h3>Topic Structure &amp; Retry Chain</h3>
-    <div style="display:flex;flex-direction:column;gap:6px;margin-top:.6rem">
-      <!-- Main flow -->
-      <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:.72rem">
-        <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--blue);background:rgba(59,130,246,.06);text-align:center;min-width:80px">
-          <div style="font-weight:700;color:var(--blue)">commands</div>
-          <div style="color:var(--dim);font-size:.65rem">main topic</div>
-        </div>
-        <span style="color:var(--dim)">&rarr;</span>
-        <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--green);background:rgba(16,185,129,.06);text-align:center;min-width:80px">
-          <div style="font-weight:700;color:var(--green)">replies</div>
-          <div style="color:var(--dim);font-size:.65rem">step results</div>
-        </div>
-      </div>
-      <!-- Retry chain -->
-      <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:.72rem">
-        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
-          <div style="font-weight:600;color:var(--amber)">retry-0</div>
-          <div style="color:var(--dim);font-size:.6rem">5s</div>
-        </div>
-        <span style="color:var(--dim)">&rarr;</span>
-        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
-          <div style="font-weight:600;color:var(--amber)">retry-1</div>
-          <div style="color:var(--dim);font-size:.6rem">10s</div>
-        </div>
-        <span style="color:var(--dim)">&rarr;</span>
-        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
-          <div style="font-weight:600;color:var(--amber)">retry-2</div>
-          <div style="color:var(--dim);font-size:.6rem">20s</div>
-        </div>
-        <span style="color:var(--dim)">&rarr;</span>
-        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
-          <div style="font-weight:600;color:var(--amber)">retry-3</div>
-          <div style="color:var(--dim);font-size:.6rem">40s</div>
-        </div>
-        <span style="color:var(--dim)">&rarr;</span>
-        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
-          <div style="font-weight:600;color:var(--amber)">retry-4</div>
-          <div style="color:var(--dim);font-size:.6rem">80s</div>
-        </div>
-        <span style="color:var(--dim)">&rarr;</span>
-        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
-          <div style="font-weight:600;color:var(--amber)">retry-5</div>
-          <div style="color:var(--dim);font-size:.6rem">160s</div>
-        </div>
-        <span style="color:var(--dim)">&rarr;</span>
-        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
-          <div style="font-weight:600;color:var(--amber)">retry-6</div>
-          <div style="color:var(--dim);font-size:.6rem">180s cap</div>
-        </div>
-        <span style="color:var(--dim)">&rarr;</span>
-        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--red);background:rgba(239,68,68,.06);text-align:center">
-          <div style="font-weight:600;color:var(--red)">DLT</div>
-          <div style="color:var(--dim);font-size:.6rem">manual</div>
-        </div>
-      </div>
-      <!-- Notification -->
-      <div style="display:flex;align-items:center;gap:4px;font-size:.72rem">
-        <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--purple);background:rgba(139,92,246,.06);text-align:center;min-width:80px">
-          <div style="font-weight:700;color:var(--purple)">notifications</div>
-          <div style="color:var(--dim);font-size:.65rem">downstream events</div>
-        </div>
-        <span style="color:var(--dim);font-size:.7rem">PREPARATION_COMPLETE, SIGNATURE_RECEIVED, SIGNING_COMPLETE, FLOW_COMPLETE</span>
+      <div style="margin-top:8px;padding:6px 8px;border-radius:4px;background:rgba(59,130,246,.06);font-size:.7rem;color:var(--dim)">
+        Offset stored in <strong style="color:var(--blue)">MongoDB</strong> (cross-DC safe) + Kafka __consumer_offsets (single-cluster).
       </div>
     </div>
   </div>
 
-  <!-- Broker hardening -->
-  <div class="card" style="margin-bottom:1.2rem">
-    <h3>Broker Hardening</h3>
-    <table class="tbl">
-      <tr><td>unclean.leader.election.enable</td><td><strong style="color:var(--green)">false</strong> &mdash; never elect out-of-sync replica as leader (prevents data loss)</td></tr>
-      <tr><td>offsets.retention.minutes</td><td><strong>43200</strong> (30 days) &mdash; signing flows can wait days; offsets survive inactivity</td></tr>
-      <tr><td>log.message.timestamp.type</td><td><strong>CreateTime</strong> &mdash; enables timestamp-based offset recovery via <code>offsetsForTimes()</code></td></tr>
-      <tr><td>log.retention.hours</td><td><strong>168</strong> (7 days) &mdash; messages available for replay/recovery</td></tr>
-      <tr><td>default.replication.factor</td><td><strong>3</strong> &mdash; every topic replicated to all brokers</td></tr>
-      <tr><td>min.insync.replicas</td><td><strong>2</strong> &mdash; writes require 2 acks; survives 1 broker death</td></tr>
-      <tr><td>auto.create.topics.enable</td><td><strong style="color:var(--red)">false</strong> &mdash; topics created explicitly at startup</td></tr>
-    </table>
-  </div>
-
-  <!-- Two-layer idempotency -->
+  <!-- Visual: Two-Layer Idempotency -->
   <div class="card" style="margin-bottom:1.2rem">
     <h3>Two-Layer Idempotency</h3>
-    <div style="font-size:.78rem;color:var(--dim);margin-bottom:.8rem">
-      Why message replay (from retry, rebalance, or DC failover) never causes duplicate API calls:
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
-      <div style="border:1px solid var(--blue);border-radius:6px;padding:10px;background:rgba(59,130,246,.03)">
-        <div style="font-size:.75rem;font-weight:700;color:var(--blue);margin-bottom:4px">Layer 1: Processed Events</div>
-        <div style="font-size:.75rem;color:var(--dim)">
-          Before executing a step, check <code>orchestrator_processed_events</code> collection.
-          If this eventId was already processed &rarr; <strong>skip entirely</strong>.
-          After execution, mark as processed.
-        </div>
-      </div>
-      <div style="border:1px solid var(--green);border-radius:6px;padding:10px;background:rgba(16,185,129,.03)">
-        <div style="font-size:.75rem;font-weight:700;color:var(--green);margin-bottom:4px">Layer 2: completedWhen Guard</div>
-        <div style="font-size:.75rem;color:var(--dim)">
-          SpEL expression on each <code>@Step</code>: e.g., <code>"traceOriginalId != null"</code>.
-          If the result field is already set &rarr; <strong>skip API call</strong>.
-          Protects against crash between API call and DB save.
-        </div>
-      </div>
-    </div>
+    <svg viewBox="0 0 860 150" xmlns="http://www.w3.org/2000/svg" style="width:100%;margin-top:.5rem;font-family:Inter,-apple-system,sans-serif">
+      <!-- Message arrives -->
+      <rect x="20" y="40" width="120" height="50" rx="6" fill="rgba(59,130,246,.08)" stroke="rgba(59,130,246,.3)"/>
+      <text x="80" y="60" text-anchor="middle" fill="#3b82f6" font-size="9" font-weight="700">Message</text>
+      <text x="80" y="75" text-anchor="middle" fill="#94a3b8" font-size="8">from Kafka topic</text>
+
+      <line x1="140" y1="65" x2="190" y2="65" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlueD)"/>
+
+      <!-- Layer 1 -->
+      <rect x="190" y="25" width="200" height="80" rx="8" fill="rgba(59,130,246,.04)" stroke="rgba(59,130,246,.25)"/>
+      <text x="290" y="45" text-anchor="middle" fill="#3b82f6" font-size="10" font-weight="700">Layer 1</text>
+      <text x="290" y="60" text-anchor="middle" fill="#94a3b8" font-size="8">processed_events collection</text>
+      <text x="290" y="74" text-anchor="middle" fill="#64748b" font-size="8">eventId already seen?</text>
+      <text x="290" y="92" text-anchor="middle" fill="#ef4444" font-size="8" font-weight="600">YES → SKIP (no execution)</text>
+
+      <line x1="390" y1="65" x2="440" y2="65" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowGreenD2)"/>
+      <text x="415" y="58" text-anchor="middle" fill="#10b981" font-size="7">NO</text>
+
+      <!-- Layer 2 -->
+      <rect x="440" y="25" width="200" height="80" rx="8" fill="rgba(16,185,129,.04)" stroke="rgba(16,185,129,.25)"/>
+      <text x="540" y="45" text-anchor="middle" fill="#10b981" font-size="10" font-weight="700">Layer 2</text>
+      <text x="540" y="60" text-anchor="middle" fill="#94a3b8" font-size="8">completedWhen SpEL guard</text>
+      <text x="540" y="74" text-anchor="middle" fill="#64748b" font-size="8">"traceOriginalId != null"?</text>
+      <text x="540" y="92" text-anchor="middle" fill="#ef4444" font-size="8" font-weight="600">TRUE → SKIP API call</text>
+
+      <line x1="640" y1="65" x2="690" y2="65" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrowGreenD2)"/>
+      <text x="665" y="58" text-anchor="middle" fill="#10b981" font-size="7">FALSE</text>
+
+      <!-- Execute -->
+      <rect x="690" y="35" width="150" height="60" rx="8" fill="rgba(16,185,129,.1)" stroke="rgba(16,185,129,.4)"/>
+      <text x="765" y="58" text-anchor="middle" fill="#10b981" font-size="10" font-weight="700">EXECUTE</text>
+      <text x="765" y="74" text-anchor="middle" fill="#94a3b8" font-size="8">API call → save result</text>
+
+      <!-- Bottom note -->
+      <text x="430" y="135" text-anchor="middle" fill="#94a3b8" font-size="8.5">Replayed messages (from retry, rebalance, DC failover) are always safe — duplicate API calls impossible.</text>
+
+      <defs>
+        <marker id="arrowGreenD2" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#10b981"/></marker>
+      </defs>
+    </svg>
   </div>
 
-  <!-- Transactional outbox -->
+  <!-- Visual: Transactional Outbox -->
+  <div class="card" style="margin-bottom:1.2rem">
+    <h3>Transactional Outbox</h3>
+    <svg viewBox="0 0 860 170" xmlns="http://www.w3.org/2000/svg" style="width:100%;margin-top:.5rem;font-family:Inter,-apple-system,sans-serif">
+      <!-- The problem -->
+      <rect x="20" y="10" width="390" height="65" rx="6" fill="rgba(239,68,68,.04)" stroke="rgba(239,68,68,.2)"/>
+      <text x="30" y="28" fill="#ef4444" font-size="9" font-weight="700">WITHOUT OUTBOX (dual-write problem)</text>
+      <text x="30" y="44" fill="#94a3b8" font-size="8">1. db.save(flow) ✓</text>
+      <text x="30" y="58" fill="#94a3b8" font-size="8">2. kafka.send(msg) ← crash here → </text>
+      <text x="250" y="58" fill="#ef4444" font-size="8" font-weight="600">MESSAGE LOST</text>
+
+      <!-- The solution -->
+      <rect x="440" y="10" width="400" height="65" rx="6" fill="rgba(16,185,129,.04)" stroke="rgba(16,185,129,.2)"/>
+      <text x="450" y="28" fill="#10b981" font-size="9" font-weight="700">WITH OUTBOX (atomic guarantee)</text>
+      <text x="450" y="44" fill="#94a3b8" font-size="8">1. db.save(flow + outboxEvent) ← single atomic write</text>
+      <text x="450" y="58" fill="#94a3b8" font-size="8">2. publisher polls → kafka.send() ← retryable, async</text>
+
+      <!-- Flow diagram -->
+      <rect x="30" y="95" width="100" height="35" rx="4" fill="rgba(139,92,246,.1)" stroke="rgba(139,92,246,.3)"/>
+      <text x="80" y="116" text-anchor="middle" fill="#8b5cf6" font-size="8" font-weight="600">Flow State</text>
+      <rect x="160" y="95" width="100" height="35" rx="4" fill="rgba(16,185,129,.1)" stroke="rgba(16,185,129,.3)"/>
+      <text x="210" y="116" text-anchor="middle" fill="#10b981" font-size="8" font-weight="600">Outbox Event</text>
+
+      <rect x="60" y="90" width="220" height="50" rx="6" fill="none" stroke="#64748b" stroke-dasharray="4,3"/>
+      <text x="170" y="150" text-anchor="middle" fill="#64748b" font-size="7">MongoDB (atomic)</text>
+
+      <line x1="280" y1="112" x2="340" y2="112" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrowAmber)"/>
+      <text x="310" y="105" text-anchor="middle" fill="#f59e0b" font-size="7">500ms poll</text>
+
+      <rect x="340" y="95" width="120" height="35" rx="4" fill="rgba(245,158,11,.1)" stroke="rgba(245,158,11,.3)"/>
+      <text x="400" y="110" text-anchor="middle" fill="#f59e0b" font-size="8" font-weight="600">Outbox Publisher</text>
+      <text x="400" y="122" text-anchor="middle" fill="#64748b" font-size="7">retryable</text>
+
+      <line x1="460" y1="112" x2="520" y2="112" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlueD)"/>
+
+      <rect x="520" y="95" width="130" height="35" rx="4" fill="rgba(59,130,246,.1)" stroke="rgba(59,130,246,.3)"/>
+      <text x="585" y="116" text-anchor="middle" fill="#3b82f6" font-size="8" font-weight="600">Kafka Topic</text>
+
+      <text x="700" y="112" fill="#64748b" font-size="8">If Kafka down → events queue in outbox</text>
+      <text x="700" y="125" fill="#10b981" font-size="8" font-weight="600">→ drain on recovery. ZERO loss.</text>
+    </svg>
+  </div>
+
+  <!-- Broker hardening table -->
   <div class="card">
-    <h3>Transactional Outbox Pattern</h3>
-    <div style="font-size:.78rem;color:var(--dim);margin-bottom:.8rem">
-      Why we never lose messages between MongoDB and Kafka:
-    </div>
-    <div class="code"><span class="c">// Problem: dual-write to MongoDB + Kafka is not atomic</span>
-<span class="c">//   db.save(flow)  ← succeeds</span>
-<span class="c">//   kafka.send(msg) ← CRASHES HERE → message lost!</span>
-
-<span class="c">// Solution: write Kafka event to MongoDB outbox in same DB operation</span>
-<span class="c">//   db.save(flow)                    ← atomic</span>
-<span class="c">//   db.save(outboxEvent)             ← atomic (same DB)</span>
-<span class="c">//   outboxPublisher polls (500ms)    ← async, retryable</span>
-<span class="c">//   kafka.send(outboxEvent.payload)  ← if fails, retry on next poll</span>
-<span class="c">//   db.markPublished(outboxEvent)    ← cleanup</span>
-
-<span class="c">// If Kafka is completely down:</span>
-<span class="c">//   Events accumulate in orchestrator_outbox (published=false)</span>
-<span class="c">//   When Kafka recovers, publisher drains the backlog</span>
-<span class="c">//   ZERO MESSAGE LOSS — guaranteed by MongoDB persistence</span></div>
+    <h3>Broker Hardening</h3>
+    <table class="tbl">
+      <tr><td>unclean.leader.election</td><td><strong style="color:var(--green)">false</strong> &mdash; never elect out-of-sync replica (prevents data loss)</td></tr>
+      <tr><td>offsets.retention</td><td><strong>30 days</strong> &mdash; signing flows can wait days</td></tr>
+      <tr><td>log.message.timestamp.type</td><td><strong>CreateTime</strong> &mdash; enables offsetsForTimes() recovery</td></tr>
+      <tr><td>log.retention</td><td><strong>7 days</strong> &mdash; messages available for replay</td></tr>
+      <tr><td>replication.factor</td><td><strong>3</strong> &mdash; all brokers have every message</td></tr>
+      <tr><td>min.insync.replicas</td><td><strong>2</strong> &mdash; survives 1 broker death</td></tr>
+      <tr><td>auto.create.topics</td><td><strong style="color:var(--red)">false</strong> &mdash; explicit topic creation</td></tr>
+    </table>
   </div>
 </div>
 </section>
