@@ -22,9 +22,10 @@ spring:
 
     # ========== Consumer — stretched cluster resilience ==========
     consumer:
-      auto-offset-reset: earliest           # if offsets lost, re-read (not skip)
-                                            # idempotency guards handle duplicates
-                                            # alternative: use offsetsForTimes() for timestamp-based recovery
+      auto-offset-reset: latest              # safety net only — TimestampOffsetRecoveryListener
+                                            # handles offset loss via offsetsForTimes() BEFORE
+                                            # auto.offset.reset applies. 'latest' prevents full
+                                            # topic replay if the listener fails for any reason.
       enable-auto-commit: false             # manual commit after processing (RECORD ack mode)
       properties:
         partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
