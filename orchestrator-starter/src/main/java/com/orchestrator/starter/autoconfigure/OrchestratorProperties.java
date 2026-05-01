@@ -60,6 +60,19 @@ public class OrchestratorProperties {
     public static class RecoveryConfig {
         private long scanIntervalMs = 30000;
         private int staleThresholdMinutes = 5;
+
+        /** Offset recovery strategy when committed offsets are lost.
+         *  EARLIEST: replay from beginning (safe but slow at scale, vendor sees old requests)
+         *  TIMESTAMP: seek to (now - offsetFallbackHours) via offsetsForTimes() — recommended
+         *  LATEST: skip missed messages (risk: flows stuck forever) */
+        private OffsetFallback offsetFallback = OffsetFallback.TIMESTAMP;
+
+        /** Hours to look back when using TIMESTAMP offset fallback. Default 24h. */
+        private int offsetFallbackHours = 24;
+    }
+
+    public enum OffsetFallback {
+        EARLIEST, TIMESTAMP, LATEST
     }
 
     @Data

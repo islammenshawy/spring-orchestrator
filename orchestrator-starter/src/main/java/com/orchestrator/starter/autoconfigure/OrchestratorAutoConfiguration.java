@@ -8,6 +8,7 @@ import com.orchestrator.starter.flow.*;
 import com.orchestrator.starter.idempotency.IdempotencyService;
 import com.orchestrator.starter.idempotency.ProcessedEventRepository;
 import com.orchestrator.starter.kafka.OrchestratorKafkaConsumer;
+import com.orchestrator.starter.kafka.TimestampOffsetRecoveryListener;
 import com.orchestrator.starter.outbox.OutboxEventRepository;
 import com.orchestrator.starter.outbox.OutboxPublisher;
 import com.orchestrator.starter.recovery.StaleFlowRecoveryService;
@@ -254,6 +255,16 @@ public class OrchestratorAutoConfiguration {
                 .partitions(1).build(); // uses broker default replication factor
     }
 
+    @Bean
+    @ConditionalOnMissingBean
+    public TimestampOffsetRecoveryListener timestampOffsetRecoveryListener(OrchestratorProperties props) {
+        return new TimestampOffsetRecoveryListener(props.getRecovery());
+    }
+
+    // Note: @KafkaListener command topic containers are managed by Spring Kafka's
+    // RetryTopicConfiguration which handles its own offset management. The timestamp
+    // recovery listener is applied to programmatic containers (reply + DLT) above.
+
     // ========== Programmatic Kafka Listeners ==========
 
     @Bean
@@ -263,6 +274,7 @@ public class OrchestratorAutoConfiguration {
             ConcurrentKafkaListenerContainerFactory<String, String> containerFactory,
             KafkaTemplate kafkaTemplate,
             OrchestratorProperties props,
+            TimestampOffsetRecoveryListener offsetRecoveryListener,
             org.springframework.core.env.Environment env) {
 
         List<ConcurrentMessageListenerContainer<String, String>> containers = new ArrayList<>();
@@ -276,6 +288,7 @@ public class OrchestratorAutoConfiguration {
         for (String topic : registry.getAllReplyTopics()) {
             var container = containerFactory.createContainer(topic);
             container.getContainerProperties().setGroupId(appName + "-orchestrator");
+            container.getContainerProperties().setConsumerRebalanceListener(offsetRecoveryListener);
             container.getContainerProperties().setMessageListener(
                     (MessageListener<String, String>) record -> consumer.onStepReply(
                             record.value(), record.topic(), record.offset()));
@@ -294,6 +307,7 @@ public class OrchestratorAutoConfiguration {
         for (String topic : dltTopics) {
             var container = containerFactory.createContainer(topic);
             container.getContainerProperties().setGroupId(appName + "-dlt");
+            container.getContainerProperties().setConsumerRebalanceListener(offsetRecoveryListener);
             container.getContainerProperties().setMessageListener(
                     (MessageListener<String, String>) record -> {
                         // Extract exception from headers if available
