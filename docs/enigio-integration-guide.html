@@ -152,6 +152,7 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
   <p>One API call from your downstream system triggers an 11-step orchestrated flow across 3 business phases, 2 approval gates, webhook-driven signing, and the Enigio trace:original platform.</p>
   <div class="hero-links">
     <a href="#architecture" class="btn-p">Architecture</a>
+    <a href="#kafka" class="btn-o">Kafka</a>
     <a href="#flow" class="btn-o">Flow Steps</a>
     <a href="#contract" class="btn-o">Downstream API</a>
     <a href="#sequence" class="btn-o">Sequence Diagram</a>
@@ -199,6 +200,230 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
     <div class="feat"><h4>Webhook-Driven Signing</h4><p>Primary signal from Enigio webhooks (PARTIALLY_SIGNED, FULLY_SIGNED). Poll fallback + configurable expiry (48h).</p></div>
     <div class="feat"><h4>Approval Gates</h4><p>Downstream notified via Kafka topic at each phase boundary. Flow pauses until POST /approve. Expiry after 72h.</p></div>
     <div class="feat"><h4>Crash Recovery</h4><p>Stale flow scanner + WaitingFlowScheduler re-publish stuck flows. Idempotent steps prevent duplicate API calls.</p></div>
+  </div>
+</div>
+</section>
+
+<!-- KAFKA ARCHITECTURE -->
+<section class="dark-section" id="kafka">
+<div class="container">
+  <h2>Kafka <span>Architecture</span></h2>
+  <p class="sub">How messages flow, retry, and survive failures across a stretched Kafka cluster.</p>
+
+  <!-- Cluster topology -->
+  <div class="card" style="margin-bottom:1.2rem">
+    <h3>Stretched Cluster Topology</h3>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:.8rem">
+      <div style="border:1px solid var(--blue);border-radius:6px;padding:10px;text-align:center;background:rgba(59,130,246,.04)">
+        <div style="font-size:.7rem;color:var(--blue);font-weight:700">Rack 1 (AZ-a)</div>
+        <div style="font-size:.85rem;font-weight:600;margin:4px 0">Broker 1</div>
+        <div style="font-size:.7rem;color:var(--dim)">Leader for partitions 0, 3, 6...</div>
+      </div>
+      <div style="border:1px solid var(--amber);border-radius:6px;padding:10px;text-align:center;background:rgba(245,158,11,.04)">
+        <div style="font-size:.7rem;color:var(--amber);font-weight:700">Rack 2 (AZ-b)</div>
+        <div style="font-size:.85rem;font-weight:600;margin:4px 0">Broker 2</div>
+        <div style="font-size:.7rem;color:var(--dim)">Leader for partitions 1, 4, 7...</div>
+      </div>
+      <div style="border:1px solid var(--green);border-radius:6px;padding:10px;text-align:center;background:rgba(16,185,129,.04)">
+        <div style="font-size:.7rem;color:var(--green);font-weight:700">Rack 3 (AZ-c)</div>
+        <div style="font-size:.85rem;font-weight:600;margin:4px 0">Broker 3</div>
+        <div style="font-size:.7rem;color:var(--dim)">Leader for partitions 2, 5, 8...</div>
+      </div>
+    </div>
+    <div style="font-size:.75rem;color:var(--dim);margin-top:8px;text-align:center">
+      Replication Factor: 3 &bull; Min In-Sync Replicas: 2 &bull; Unclean Leader Election: disabled
+    </div>
+  </div>
+
+  <!-- Producer / Consumer config -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.2rem">
+    <div class="card">
+      <h3>Producer Configuration</h3>
+      <table class="tbl">
+        <tr><td>acks</td><td><strong style="color:var(--green)">all</strong> &mdash; wait for ALL in-sync replicas</td></tr>
+        <tr><td>enable.idempotence</td><td><strong style="color:var(--green)">true</strong> &mdash; dedup at broker level</td></tr>
+        <tr><td>retries</td><td>3 &mdash; transient network errors</td></tr>
+        <tr><td>max.in.flight</td><td>5 &mdash; safe with idempotence</td></tr>
+        <tr><td>delivery.timeout.ms</td><td>30000 &mdash; total delivery time</td></tr>
+      </table>
+      <div style="font-size:.72rem;color:var(--dim);margin-top:6px">
+        With <code>acks=all</code> + <code>min.insync.replicas=2</code>: a message is confirmed only after 2 of 3 brokers persist it. Survives 1 broker death with zero message loss.
+      </div>
+    </div>
+    <div class="card">
+      <h3>Consumer Configuration</h3>
+      <table class="tbl">
+        <tr><td>auto.offset.reset</td><td><strong>latest</strong> &mdash; safety net only (MongoDB offset store is primary)</td></tr>
+        <tr><td>enable.auto.commit</td><td><strong style="color:var(--green)">false</strong> &mdash; manual commit (RECORD ack mode)</td></tr>
+        <tr><td>partition.assignment</td><td>CooperativeStickyAssignor</td></tr>
+        <tr><td>session.timeout.ms</td><td>30000 &mdash; crash detection in 30s</td></tr>
+        <tr><td>heartbeat.interval.ms</td><td>10000 &mdash; must be &lt; session/3</td></tr>
+        <tr><td>max.poll.records</td><td>50 &mdash; batch size limit</td></tr>
+        <tr><td>max.poll.interval.ms</td><td>300000 &mdash; 5 min for slow steps</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- Message flow -->
+  <div class="card" style="margin-bottom:1.2rem">
+    <h3>Message Flow: Step Execution</h3>
+    <div style="font-size:.78rem;color:var(--dim);margin-bottom:.8rem">
+      How a single step flows through the Kafka + Outbox + MongoDB pipeline:
+    </div>
+    <div class="code"><span class="c">// 1. Flow starts → outbox event written to MongoDB (atomic with flow state)</span>
+MongoDB: orchestrator_outbox  ← { topic, key=flowId, payload=stepCommand, published=false }
+MongoDB: dis_instrument_flows ← { status=IN_PROGRESS, currentStep=REGISTER_DOCUMENT }
+
+<span class="c">// 2. Outbox publisher polls (every 500ms), publishes to Kafka</span>
+Kafka:   dis.instrument.commands  ← { flowId, stepName, correlationId }
+MongoDB: orchestrator_outbox      ← { published=true }
+
+<span class="c">// 3. Consumer reads message, executes step</span>
+Consumer: consumer.poll() → StepCommandMessage
+          → idempotency check (orchestrator_processed_events)
+          → completedWhen guard (SpEL on flow entity)
+          → step.execute(flow) → API call to Enigio
+          → save result to flow entity
+          → publish reply to replies topic
+
+<span class="c">// 4. Reply consumer advances flow to next step</span>
+Kafka:   dis.instrument.commands.replies  ← { flowId, stepName, status=COMPLETED }
+         → orchestrator reads reply → outbox for next step → repeat from 2
+
+<span class="c">// 5. Offset saved to MongoDB (cross-cluster safe)</span>
+MongoDB: orchestrator_consumer_offsets  ← { topic, partition, offset, timestamp }</div>
+  </div>
+
+  <!-- Topic structure -->
+  <div class="card" style="margin-bottom:1.2rem">
+    <h3>Topic Structure &amp; Retry Chain</h3>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-top:.6rem">
+      <!-- Main flow -->
+      <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:.72rem">
+        <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--blue);background:rgba(59,130,246,.06);text-align:center;min-width:80px">
+          <div style="font-weight:700;color:var(--blue)">commands</div>
+          <div style="color:var(--dim);font-size:.65rem">main topic</div>
+        </div>
+        <span style="color:var(--dim)">&rarr;</span>
+        <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--green);background:rgba(16,185,129,.06);text-align:center;min-width:80px">
+          <div style="font-weight:700;color:var(--green)">replies</div>
+          <div style="color:var(--dim);font-size:.65rem">step results</div>
+        </div>
+      </div>
+      <!-- Retry chain -->
+      <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;font-size:.72rem">
+        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
+          <div style="font-weight:600;color:var(--amber)">retry-0</div>
+          <div style="color:var(--dim);font-size:.6rem">5s</div>
+        </div>
+        <span style="color:var(--dim)">&rarr;</span>
+        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
+          <div style="font-weight:600;color:var(--amber)">retry-1</div>
+          <div style="color:var(--dim);font-size:.6rem">10s</div>
+        </div>
+        <span style="color:var(--dim)">&rarr;</span>
+        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
+          <div style="font-weight:600;color:var(--amber)">retry-2</div>
+          <div style="color:var(--dim);font-size:.6rem">20s</div>
+        </div>
+        <span style="color:var(--dim)">&rarr;</span>
+        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
+          <div style="font-weight:600;color:var(--amber)">retry-3</div>
+          <div style="color:var(--dim);font-size:.6rem">40s</div>
+        </div>
+        <span style="color:var(--dim)">&rarr;</span>
+        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
+          <div style="font-weight:600;color:var(--amber)">retry-4</div>
+          <div style="color:var(--dim);font-size:.6rem">80s</div>
+        </div>
+        <span style="color:var(--dim)">&rarr;</span>
+        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
+          <div style="font-weight:600;color:var(--amber)">retry-5</div>
+          <div style="color:var(--dim);font-size:.6rem">160s</div>
+        </div>
+        <span style="color:var(--dim)">&rarr;</span>
+        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--amber);background:rgba(245,158,11,.04);text-align:center">
+          <div style="font-weight:600;color:var(--amber)">retry-6</div>
+          <div style="color:var(--dim);font-size:.6rem">180s cap</div>
+        </div>
+        <span style="color:var(--dim)">&rarr;</span>
+        <div style="padding:4px 8px;border-radius:4px;border:1px solid var(--red);background:rgba(239,68,68,.06);text-align:center">
+          <div style="font-weight:600;color:var(--red)">DLT</div>
+          <div style="color:var(--dim);font-size:.6rem">manual</div>
+        </div>
+      </div>
+      <!-- Notification -->
+      <div style="display:flex;align-items:center;gap:4px;font-size:.72rem">
+        <div style="padding:6px 10px;border-radius:5px;border:1px solid var(--purple);background:rgba(139,92,246,.06);text-align:center;min-width:80px">
+          <div style="font-weight:700;color:var(--purple)">notifications</div>
+          <div style="color:var(--dim);font-size:.65rem">downstream events</div>
+        </div>
+        <span style="color:var(--dim);font-size:.7rem">PREPARATION_COMPLETE, SIGNATURE_RECEIVED, SIGNING_COMPLETE, FLOW_COMPLETE</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Broker hardening -->
+  <div class="card" style="margin-bottom:1.2rem">
+    <h3>Broker Hardening</h3>
+    <table class="tbl">
+      <tr><td>unclean.leader.election.enable</td><td><strong style="color:var(--green)">false</strong> &mdash; never elect out-of-sync replica as leader (prevents data loss)</td></tr>
+      <tr><td>offsets.retention.minutes</td><td><strong>43200</strong> (30 days) &mdash; signing flows can wait days; offsets survive inactivity</td></tr>
+      <tr><td>log.message.timestamp.type</td><td><strong>CreateTime</strong> &mdash; enables timestamp-based offset recovery via <code>offsetsForTimes()</code></td></tr>
+      <tr><td>log.retention.hours</td><td><strong>168</strong> (7 days) &mdash; messages available for replay/recovery</td></tr>
+      <tr><td>default.replication.factor</td><td><strong>3</strong> &mdash; every topic replicated to all brokers</td></tr>
+      <tr><td>min.insync.replicas</td><td><strong>2</strong> &mdash; writes require 2 acks; survives 1 broker death</td></tr>
+      <tr><td>auto.create.topics.enable</td><td><strong style="color:var(--red)">false</strong> &mdash; topics created explicitly at startup</td></tr>
+    </table>
+  </div>
+
+  <!-- Two-layer idempotency -->
+  <div class="card" style="margin-bottom:1.2rem">
+    <h3>Two-Layer Idempotency</h3>
+    <div style="font-size:.78rem;color:var(--dim);margin-bottom:.8rem">
+      Why message replay (from retry, rebalance, or DC failover) never causes duplicate API calls:
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+      <div style="border:1px solid var(--blue);border-radius:6px;padding:10px;background:rgba(59,130,246,.03)">
+        <div style="font-size:.75rem;font-weight:700;color:var(--blue);margin-bottom:4px">Layer 1: Processed Events</div>
+        <div style="font-size:.75rem;color:var(--dim)">
+          Before executing a step, check <code>orchestrator_processed_events</code> collection.
+          If this eventId was already processed &rarr; <strong>skip entirely</strong>.
+          After execution, mark as processed.
+        </div>
+      </div>
+      <div style="border:1px solid var(--green);border-radius:6px;padding:10px;background:rgba(16,185,129,.03)">
+        <div style="font-size:.75rem;font-weight:700;color:var(--green);margin-bottom:4px">Layer 2: completedWhen Guard</div>
+        <div style="font-size:.75rem;color:var(--dim)">
+          SpEL expression on each <code>@Step</code>: e.g., <code>"traceOriginalId != null"</code>.
+          If the result field is already set &rarr; <strong>skip API call</strong>.
+          Protects against crash between API call and DB save.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Transactional outbox -->
+  <div class="card">
+    <h3>Transactional Outbox Pattern</h3>
+    <div style="font-size:.78rem;color:var(--dim);margin-bottom:.8rem">
+      Why we never lose messages between MongoDB and Kafka:
+    </div>
+    <div class="code"><span class="c">// Problem: dual-write to MongoDB + Kafka is not atomic</span>
+<span class="c">//   db.save(flow)  ← succeeds</span>
+<span class="c">//   kafka.send(msg) ← CRASHES HERE → message lost!</span>
+
+<span class="c">// Solution: write Kafka event to MongoDB outbox in same DB operation</span>
+<span class="c">//   db.save(flow)                    ← atomic</span>
+<span class="c">//   db.save(outboxEvent)             ← atomic (same DB)</span>
+<span class="c">//   outboxPublisher polls (500ms)    ← async, retryable</span>
+<span class="c">//   kafka.send(outboxEvent.payload)  ← if fails, retry on next poll</span>
+<span class="c">//   db.markPublished(outboxEvent)    ← cleanup</span>
+
+<span class="c">// If Kafka is completely down:</span>
+<span class="c">//   Events accumulate in orchestrator_outbox (published=false)</span>
+<span class="c">//   When Kafka recovers, publisher drains the backlog</span>
+<span class="c">//   ZERO MESSAGE LOSS — guaranteed by MongoDB persistence</span></div>
   </div>
 </div>
 </section>
