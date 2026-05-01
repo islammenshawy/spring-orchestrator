@@ -1,6 +1,9 @@
 package com.dis.instrument.core.api;
 
 import com.dis.instrument.vendor.enigio.EnigioInstrumentEntity;
+import com.orchestrator.starter.domain.OrchestratorFlow;
+import com.orchestrator.starter.flow.FlowOrchestrator;
+import com.orchestrator.starter.flow.FlowTypeRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -13,11 +16,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Map;
 
 /**
- * REST endpoint for downstream systems to approve flow progression.
- * Called after receiving a notification from the dis.instrument.notifications topic.
- *
- * Flow: Group 1 completes → notification published → downstream consumes →
- *       downstream calls POST /flows/enigio-instrument/{id}/approve → Group 2 starts
+ * REST endpoint for downstream systems to approve, cancel, or query flow status.
  */
 @Slf4j
 @RestController
@@ -26,6 +25,7 @@ import java.util.Map;
 public class FlowApprovalController {
 
     private final MongoTemplate mongoTemplate;
+    private final FlowTypeRegistry flowTypeRegistry;
 
     /**
      * Approve the next phase of an instrument flow.
@@ -95,5 +95,45 @@ public class FlowApprovalController {
                 "signingNotified", flow.isSigningNotified(),
                 "deliveryApproved", flow.isDeliveryApproved()
         ));
+    }
+
+    /**
+     * Cancel a running flow.
+     * Runs @OnCancel handlers in reverse (invalidate document, cancel transfer),
+     * then marks as CANCELLED.
+     *
+     * Cancellation is NOT allowed when:
+     * - Flow is already COMPLETED (document transferred)
+     * - Flow is already CANCELLED or FAILED
+     * - Document is inTransit on Enigio (transfer in progress, recipient may have opened)
+     */
+    @PostMapping("/{id}/cancel")
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public ResponseEntity<Map<String, Object>> cancelFlow(
+            @PathVariable String id,
+            @RequestBody(required = false) Map<String, Object> body) {
+
+        String reason = body != null ? (String) body.getOrDefault("reason", "user requested") : "user requested";
+
+        try {
+            FlowOrchestrator orch = (FlowOrchestrator) flowTypeRegistry.resolve("enigio-instrument").getOrchestrator();
+            OrchestratorFlow cancelled = orch.cancelFlow(id, reason);
+
+            if (cancelled == null) {
+                return ResponseEntity.badRequest().body(Map.of(
+                        "error", "Cannot cancel — flow not in cancellable state (must be IN_PROGRESS, WAITING_RETRY, or PENDING)",
+                        "flowId", id
+                ));
+            }
+
+            return ResponseEntity.ok(Map.of(
+                    "flowId", cancelled.getId(),
+                    "status", cancelled.getStatus().name(),
+                    "message", "Flow cancelled. " + cancelled.getErrorMessage()
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "error", e.getMessage(), "flowId", id));
+        }
     }
 }

@@ -18,7 +18,7 @@ spring:
       retries: 3                            # retry on transient network errors
       properties:
         max.in.flight.requests.per.connection: 5  # safe with idempotence enabled
-        delivery.timeout.ms: 30000          # total time to deliver including retries
+        delivery.timeout.ms: 120000         # must be > request.timeout.ms (30s) for idempotence
 
     # ========== Consumer — stretched cluster resilience ==========
     consumer:
