@@ -363,26 +363,102 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
     }
 
     // ===== Cancellation Handlers =====
+    //
+    // Runs in reverse order when POST /cancel is called.
+    // Each handler must be idempotent and handle vendor errors gracefully.
+    //
+    // Enigio invalidation rules:
+    //   - Requires versionKey (must be current version)
+    //   - 400 if already invalidated → safe to skip
+    //   - 400 if inTransit → must cancel transfer first
+    //   - 404 if document doesn't exist → safe to skip
 
+    /**
+     * Invalidate the document on Enigio.
+     * This is the primary cancel action — voids the document permanently.
+     * All pending signatures become invalid automatically.
+     */
     @OnCancel(step = "registerDocument")
     public void cancelDocument(EnigioInstrumentEntity flow) {
-        if (flow.getTraceOriginalId() == null) return;
-        log.info("[{}] Cancelling: invalidating document {} on Enigio",
-                flow.getId(), flow.getTraceOriginalId());
-        try {
-            enigioClient.invalidateDocument(flow.getTraceOriginalId());
-        } catch (Exception e) {
-            log.warn("[{}] Failed to invalidate document: {}", flow.getId(), e.getMessage());
+        if (flow.getTraceOriginalId() == null) {
+            log.info("[{}] No traceOriginalId — nothing to invalidate", flow.getId());
+            return;
         }
-        notificationPublisher.notifyPhaseComplete(flow, "FLOW_CANCELLED", "CANCELLED");
+
+        log.info("[{}] Cancelling: invalidating document {} (versionKey={})",
+                flow.getId(), flow.getTraceOriginalId(), flow.getVersionKey());
+
+        try {
+            enigioClient.invalidateDocument(flow.getTraceOriginalId(), flow.getVersionKey(),
+                    "Flow cancelled: " + (flow.getErrorMessage() != null ? flow.getErrorMessage() : "user requested"));
+        } catch (Exception e) {
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            if (msg.contains("404") || msg.contains("not found")) {
+                log.info("[{}] Document not found on Enigio (already removed) — skipping", flow.getId());
+            } else if (msg.contains("already invalidated") || msg.contains("end state")) {
+                log.info("[{}] Document already invalidated — skipping", flow.getId());
+            } else if (msg.contains("inTransit") || msg.contains("in transit")) {
+                log.warn("[{}] Document is inTransit — must cancel transfer first", flow.getId());
+                // Try to cancel transfer before invalidating
+                cancelEnvelopeTransfer(flow);
+                // Retry invalidation
+                try {
+                    enigioClient.invalidateDocument(flow.getTraceOriginalId(), flow.getVersionKey(),
+                            "Flow cancelled after transfer cancellation");
+                } catch (Exception retryEx) {
+                    log.error("[{}] Failed to invalidate after transfer cancel: {}", flow.getId(), retryEx.getMessage());
+                }
+            } else {
+                log.warn("[{}] Failed to invalidate document: {}", flow.getId(), msg);
+            }
+        }
     }
 
+    /**
+     * Invalidate the sealed envelope on Enigio (if created).
+     * Only needed if the envelope was sealed but not yet transferred.
+     */
+    @OnCancel(step = "createEnvelope")
+    public void cancelEnvelope(EnigioInstrumentEntity flow) {
+        if (flow.getEnvelopeTraceId() == null) return;
+
+        log.info("[{}] Cancelling: invalidating envelope {}", flow.getId(), flow.getEnvelopeTraceId());
+        try {
+            enigioClient.invalidateDocument(flow.getEnvelopeTraceId(), flow.getEnvelopeVersionKey(),
+                    "Envelope cancelled: flow voided");
+        } catch (Exception e) {
+            log.warn("[{}] Failed to invalidate envelope: {}", flow.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * Cancel a pending envelope transfer on Enigio.
+     * Only works if the recipient has NOT yet opened the envelope.
+     * If recipient already opened → transfer cannot be cancelled (too late).
+     */
     @OnCancel(step = "transferDocument")
-    public void cancelTransfer(EnigioInstrumentEntity flow) {
+    public void cancelEnvelopeTransfer(EnigioInstrumentEntity flow) {
         if (flow.getTransferId() == null) return;
-        log.info("[{}] Cancelling: revoking transfer {} on Enigio",
-                flow.getId(), flow.getTransferId());
-        // In production: enigioClient.cancelTransfer(flow.getEnvelopeTraceId(), flow.getTransferId());
-        notificationPublisher.notifyPhaseComplete(flow, "TRANSFER_CANCELLED", "CANCELLED");
+
+        log.info("[{}] Cancelling: revoking envelope transfer {} (envelope={})",
+                flow.getId(), flow.getTransferId(), flow.getEnvelopeTraceId());
+
+        try {
+            enigioClient.cancelEnvelopeTransfer(flow.getTransferId());
+            log.info("[{}] Transfer cancelled successfully", flow.getId());
+        } catch (Exception e) {
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            if (msg.contains("already accepted") || msg.contains("already opened")) {
+                log.error("[{}] CANNOT CANCEL — recipient already opened the envelope. " +
+                        "Legal possession transferred. Invalidation requires separate process.",
+                        flow.getId());
+            } else if (msg.contains("404") || msg.contains("not found")) {
+                log.info("[{}] Transfer not found (already completed/cancelled) — skipping", flow.getId());
+            } else {
+                log.warn("[{}] Failed to cancel transfer: {}", flow.getId(), msg);
+            }
+        }
+
+        notificationPublisher.notifyPhaseComplete(flow, "FLOW_CANCELLED", "CANCELLED");
     }
 }

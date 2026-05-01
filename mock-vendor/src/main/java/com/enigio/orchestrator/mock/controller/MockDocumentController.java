@@ -59,7 +59,9 @@ public class MockDocumentController {
 
     /** POST /api/v1/documents/{traceOriginalId}/invalidate — Invalidate document */
     @PostMapping("/documents/{traceOriginalId}/invalidate")
-    public ResponseEntity<Void> invalidateDocument(@PathVariable String traceOriginalId) {
+    public ResponseEntity<Void> invalidateDocument(
+            @PathVariable String traceOriginalId,
+            @RequestBody(required = false) Map<String, String> request) {
         service.invalidateDocument(traceOriginalId);
         return ResponseEntity.ok().build();
     }
@@ -132,6 +134,13 @@ public class MockDocumentController {
     public ResponseEntity<DocumentOperationResponse> sealEnvelopeDraft(
             @PathVariable String draftId) {
         return ResponseEntity.ok(service.sealEnvelopeDraft(draftId));
+    }
+
+    /** DELETE /api/v1/envelopes/{transferId}/transfer-by-email — Cancel envelope transfer */
+    @DeleteMapping("/envelopes/{transferId}/transfer-by-email")
+    public ResponseEntity<Map<String, String>> cancelEnvelopeTransfer(@PathVariable String transferId) {
+        // Mock: always succeeds (recipient hasn't opened)
+        return ResponseEntity.ok(Map.of("status", "cancelled", "transferId", transferId));
     }
 
     /** POST /api/v1/envelopes/{traceOriginalId}/transfer-by-email — Transfer envelope */

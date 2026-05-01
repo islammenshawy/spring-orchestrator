@@ -81,10 +81,34 @@ public class EnigioClient {
                 (String) res.get("versionKey"));
     }
 
-    public void invalidateDocument(String traceOriginalId) {
+    /**
+     * Invalidate a document on Enigio — puts it in end state.
+     * No one can possess, amend, or transfer after invalidation.
+     * Requires current versionKey (from last amendment).
+     *
+     * @throws WebClientResponseException 400 if already invalidated, inTransit, or versionKey mismatch
+     * @throws WebClientResponseException 404 if document not found
+     */
+    public void invalidateDocument(String traceOriginalId, String versionKey, String comment) {
         client.post().uri("/documents/{id}/invalidate", traceOriginalId)
+                .bodyValue(Map.of(
+                        "versionKey", versionKey != null ? versionKey : "",
+                        "comment", comment != null ? comment : "Document voided"
+                ))
                 .retrieve().bodyToMono(Void.class).block();
         log.info("Invalidated document: {}", traceOriginalId);
+    }
+
+    /**
+     * Cancel an initiated envelope transfer.
+     * Only works if recipient has NOT yet opened the envelope.
+     *
+     * @throws WebClientResponseException 400 if recipient already accepted/opened
+     */
+    public void cancelEnvelopeTransfer(String transferId) {
+        client.delete().uri("/envelopes/{transferId}/transfer-by-email", transferId)
+                .retrieve().bodyToMono(Void.class).block();
+        log.info("Cancelled envelope transfer: {}", transferId);
     }
 
     public String validateDocument(String traceOriginalId) {
