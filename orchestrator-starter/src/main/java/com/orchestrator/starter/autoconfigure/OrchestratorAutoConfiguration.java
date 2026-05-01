@@ -314,12 +314,14 @@ public class OrchestratorAutoConfiguration {
             String groupId = appName + "-orchestrator";
             container.getContainerProperties().setMessageListener(
                     (MessageListener<String, String>) record -> {
-                        consumer.onStepReply(record.value(), record.topic(), record.offset());
                         if (saveMongo) {
-                            mongoOffsetStore.saveOffset(groupId, record.topic(),
-                                    record.partition(), record.offset(),
-                                    record.key(), record.timestamp());
+                            try {
+                                mongoOffsetStore.saveOffset(groupId, record.topic(),
+                                        record.partition(), record.offset(),
+                                        record.key(), record.timestamp());
+                            } catch (Exception ignored) {}
                         }
+                        consumer.onStepReply(record.value(), record.topic(), record.offset());
                     });
             container.setBeanName("orchestrator-reply-" + topic.replace(".", "-"));
             container.start();
@@ -363,15 +365,32 @@ public class OrchestratorAutoConfiguration {
     // ========== Command topic @KafkaListener (non-blocking retry topics) ==========
 
     @Bean
-    public OrchestratorCommandListener orchestratorCommandListener(OrchestratorKafkaConsumer<?> consumer) {
-        return new OrchestratorCommandListener(consumer);
+    public OrchestratorCommandListener orchestratorCommandListener(
+            OrchestratorKafkaConsumer<?> consumer,
+            MongoOffsetStore mongoOffsetStore,
+            OrchestratorProperties props,
+            org.springframework.core.env.Environment env) {
+        boolean saveMongo = props.getRecovery().getOffsetStore() == OrchestratorProperties.OffsetStore.MONGO;
+        String appName = env.getProperty("spring.application.name", "orchestrator");
+        return new OrchestratorCommandListener(consumer, mongoOffsetStore, saveMongo, appName + "-executor");
     }
 
     /** Command topic listener using @KafkaListener — supports RetryTopicConfiguration
      *  for non-blocking retry topics. Reply topics use programmatic containers above. */
     public static class OrchestratorCommandListener {
         private final OrchestratorKafkaConsumer<?> consumer;
-        public OrchestratorCommandListener(OrchestratorKafkaConsumer<?> consumer) { this.consumer = consumer; }
+        private final MongoOffsetStore mongoOffsetStore;
+        private final boolean saveMongo;
+        private final String groupId;
+
+        public OrchestratorCommandListener(OrchestratorKafkaConsumer<?> consumer,
+                                           MongoOffsetStore mongoOffsetStore,
+                                           boolean saveMongo, String groupId) {
+            this.consumer = consumer;
+            this.mongoOffsetStore = mongoOffsetStore;
+            this.saveMongo = saveMongo;
+            this.groupId = groupId;
+        }
 
         @org.springframework.kafka.annotation.KafkaListener(
                 topics = "${orchestrator.kafka.command-topic}",
@@ -380,7 +399,25 @@ public class OrchestratorAutoConfiguration {
                               @org.springframework.messaging.handler.annotation.Header(
                                       name = org.springframework.kafka.support.KafkaHeaders.RECEIVED_TOPIC) String topic,
                               @org.springframework.messaging.handler.annotation.Header(
-                                      name = org.springframework.kafka.support.KafkaHeaders.OFFSET) long offset) {
+                                      name = org.springframework.kafka.support.KafkaHeaders.OFFSET) long offset,
+                              @org.springframework.messaging.handler.annotation.Header(
+                                      name = org.springframework.kafka.support.KafkaHeaders.RECEIVED_PARTITION, required = false) Integer partition,
+                              @org.springframework.messaging.handler.annotation.Header(
+                                      name = org.springframework.kafka.support.KafkaHeaders.RECEIVED_TIMESTAMP, required = false) Long timestamp,
+                              @org.springframework.messaging.handler.annotation.Header(
+                                      name = org.springframework.kafka.support.KafkaHeaders.RECEIVED_KEY, required = false) String key) {
+            // Save offset to MongoDB BEFORE processing — records what we received
+            // from this partition. If step throws (retry), the offset is still saved.
+            // On DC failover, dis-2 seeks to this position and re-processes
+            // (idempotency guards handle the duplicate).
+            if (saveMongo && partition != null && timestamp != null) {
+                try {
+                    mongoOffsetStore.saveOffset(groupId, topic,
+                            partition, offset, key, timestamp);
+                } catch (Exception e) {
+                    // Don't block processing if offset save fails
+                }
+            }
             consumer.onStepCommand(payload, topic, offset);
         }
 
