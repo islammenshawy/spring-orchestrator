@@ -155,6 +155,7 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
     <a href="#flow" class="btn-o">Flow Steps</a>
     <a href="#contract" class="btn-o">Downstream API</a>
     <a href="#sequence" class="btn-o">Sequence Diagram</a>
+    <a href="#multidc" class="btn-o">Multi-DC Failover</a>
     <a href="https://docs.traceoriginal.com" class="btn-o" target="_blank">Enigio API Docs</a>
   </div>
 </section>
@@ -712,6 +713,127 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
 </div>
 </section>
 
+<!-- MULTI-DC FAILOVER -->
+<section id="multidc">
+<div class="container">
+  <h2>Multi-DC <span>Failover</span></h2>
+  <p class="sub">How the system survives a full data center failure with zero data loss.</p>
+
+  <!-- Architecture diagram -->
+  <div class="card" style="margin-bottom:1.5rem">
+    <h3>Cross-Cluster Architecture</h3>
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:1rem;align-items:start;margin-top:1rem">
+      <!-- DC-1 -->
+      <div style="border:1px solid var(--blue);border-radius:8px;padding:1rem;background:rgba(59,130,246,.03)">
+        <div style="font-size:.7rem;font-weight:700;color:var(--blue);text-transform:uppercase;margin-bottom:8px">DC-1 (Primary)</div>
+        <div style="font-size:.8rem;margin-bottom:4px">Kafka Cluster A <span style="color:var(--dim);font-size:.7rem">(3 brokers)</span></div>
+        <div style="font-size:.8rem;margin-bottom:4px">DIS Instance 1 <span style="color:var(--green);font-size:.7rem">ACTIVE</span></div>
+        <div style="font-size:.8rem;margin-bottom:4px">MongoDB Primary</div>
+        <div style="font-size:.8rem">Mock Vendor</div>
+      </div>
+      <!-- Cross-DC -->
+      <div style="display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:1rem">
+        <div style="font-size:.65rem;color:var(--amber);text-align:center">MirrorMaker 2<br><span style="color:var(--dim)">(messages only)</span></div>
+        <div style="width:60px;border-top:2px solid var(--amber)"></div>
+        <div style="font-size:.65rem;color:var(--green);text-align:center">MongoDB Replica Set<br><span style="color:var(--dim)">(state + offsets)</span></div>
+        <div style="width:60px;border-top:2px solid var(--green)"></div>
+        <div style="font-size:.6rem;color:var(--red);text-align:center;border:1px dashed var(--red);padding:2px 6px;border-radius:4px">__consumer_offsets<br>NOT replicated</div>
+      </div>
+      <!-- DC-2 -->
+      <div style="border:1px dashed var(--dim2);border-radius:8px;padding:1rem;background:rgba(100,116,139,.03)">
+        <div style="font-size:.7rem;font-weight:700;color:var(--dim2);text-transform:uppercase;margin-bottom:8px">DC-2 (Standby)</div>
+        <div style="font-size:.8rem;margin-bottom:4px">Kafka Cluster B <span style="color:var(--dim);font-size:.7rem">(3 brokers)</span></div>
+        <div style="font-size:.8rem;margin-bottom:4px">DIS Instance 2 <span style="color:var(--dim);font-size:.7rem">STANDBY</span></div>
+        <div style="font-size:.8rem">MongoDB Secondary</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- The Problem -->
+  <div class="card" style="margin-bottom:1.5rem">
+    <h3>The Offset Problem</h3>
+    <div style="font-size:.82rem;color:var(--dim);line-height:1.6">
+      When DC-1 fails and dis-2 starts on DC-2's Kafka Cluster B:
+      <ul style="margin-top:6px;padding-left:18px">
+        <li><strong>Messages</strong> are replicated via MirrorMaker 2 (data exists on Cluster B)</li>
+        <li><strong>Consumer offsets</strong> are NOT replicated &mdash; <code>__consumer_offsets</code> is per-cluster</li>
+        <li><strong>Offset numbers differ</strong> between clusters (different ordering, compaction)</li>
+        <li>Offset 1164 on Cluster A &ne; offset 1164 on Cluster B</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- The Solution -->
+  <div class="card" style="margin-bottom:1.5rem;border-color:var(--green)">
+    <h3 style="color:var(--green)">MongoDB Offset Store (Solution)</h3>
+    <div style="font-size:.82rem;color:var(--dim);line-height:1.6;margin-bottom:1rem">
+      Instead of relying on <code>__consumer_offsets</code>, we store offsets in MongoDB &mdash; which IS replicated cross-DC via replica set.
+    </div>
+    <div class="code"><span class="c">// After each processed message, saved to MongoDB:</span>
+{
+  <span class="k">"_id"</span>: <span class="s">"dis-executor|dis.instrument.commands|0"</span>,
+  <span class="k">"consumerGroup"</span>: <span class="s">"digital-instrument-service-executor"</span>,
+  <span class="k">"topic"</span>: <span class="s">"dis.instrument.commands"</span>,
+  <span class="k">"partition"</span>: <span class="n">0</span>,
+  <span class="k">"offset"</span>: <span class="n">1164</span>,                    <span class="c">// Cluster A offset</span>
+  <span class="k">"eventId"</span>: <span class="s">"flow-abc-123"</span>,          <span class="c">// message key</span>
+  <span class="k">"messageTimestamp"</span>: <span class="n">1714500000000</span>, <span class="c">// ← this is the universal coordinate</span>
+  <span class="k">"updatedAt"</span>: <span class="s">"2026-05-01T..."</span>
+}
+
+<span class="c">// On DC-2 failover, MongoOffsetRecoveryListener:</span>
+<span class="c">// 1. Reads messageTimestamp from MongoDB (1714500000000)</span>
+<span class="c">// 2. Calls kafkaB.offsetsForTimes(1714500000000)</span>
+<span class="c">//    → Kafka B returns: "that timestamp = my offset 1170"</span>
+<span class="c">// 3. consumer.seek(partition, 1170)</span>
+<span class="c">// 4. Resumes from EXACT position — zero replay, zero loss</span></div>
+  </div>
+
+  <!-- Recovery Chain -->
+  <div class="card" style="margin-bottom:1.5rem">
+    <h3>Offset Recovery Chain</h3>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:.6rem;font-size:.75rem">
+      <div style="padding:8px 12px;border-radius:6px;border:1px solid var(--blue);background:rgba(59,130,246,.06);text-align:center;min-width:120px">
+        <div style="font-weight:700;color:var(--blue)">1. Kafka Offset</div>
+        <div style="color:var(--dim);font-size:.7rem">__consumer_offsets<br>Normal operation</div>
+      </div>
+      <div style="display:flex;align-items:center;color:var(--dim)">&rarr; not found &rarr;</div>
+      <div style="padding:8px 12px;border-radius:6px;border:1px solid var(--green);background:rgba(16,185,129,.06);text-align:center;min-width:120px">
+        <div style="font-weight:700;color:var(--green)">2. MongoDB Offset</div>
+        <div style="color:var(--dim);font-size:.7rem">orchestrator_consumer_offsets<br>Seek by timestamp</div>
+      </div>
+      <div style="display:flex;align-items:center;color:var(--dim)">&rarr; not found &rarr;</div>
+      <div style="padding:8px 12px;border-radius:6px;border:1px solid var(--amber);background:rgba(245,158,11,.06);text-align:center;min-width:120px">
+        <div style="font-weight:700;color:var(--amber)">3. Timestamp Fallback</div>
+        <div style="color:var(--dim);font-size:.7rem">offsetsForTimes(now-24h)<br>Configurable window</div>
+      </div>
+      <div style="display:flex;align-items:center;color:var(--dim)">&rarr; not found &rarr;</div>
+      <div style="padding:8px 12px;border-radius:6px;border:1px solid var(--dim2);background:rgba(100,116,139,.06);text-align:center;min-width:120px">
+        <div style="font-weight:700;color:var(--dim)">4. Latest</div>
+        <div style="color:var(--dim);font-size:.7rem">auto.offset.reset<br>Stale scanner catches rest</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Failover Test Results -->
+  <div class="card" style="border-color:var(--green)">
+    <h3 style="color:var(--green)">Tested Failover Scenario</h3>
+    <table class="tbl">
+      <thead><tr><th>Step</th><th>Action</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Submit flow on DC-1 (dis-1 &rarr; kafka-a)</td><td>Steps 1-7 completed, Gate 1 approved, signing done</td></tr>
+        <tr><td>2</td><td>Flow reaches Gate 2 (AWAIT_DELIVERY_APPROVAL)</td><td>Offsets saved to MongoDB: 6 entries across topics</td></tr>
+        <tr><td>3</td><td>Kill kafka-a + dis-1 (DC-1 dead)</td><td>37 messages already mirrored to kafka-b</td></tr>
+        <tr><td>4</td><td>Start dis-2 on DC-2 (kafka-b)</td><td>"Offset recovery: MongoDB-backed" logged</td></tr>
+        <tr><td>5</td><td>Approve Gate 2 via dis-2 (:8088)</td><td>Flow advances to Group 3</td></tr>
+        <tr><td>6</td><td>Steps 9-11 complete on DC-2</td><td style="color:var(--green);font-weight:600">COMPLETED, transferId assigned</td></tr>
+      </tbody>
+    </table>
+    <div style="margin-top:8px;font-size:.78rem;color:var(--green);font-weight:600">Zero data loss. Zero message replay. Flow started on DC-1, completed on DC-2.</div>
+  </div>
+</div>
+</section>
+
 <!-- CONFIG -->
 <section id="config">
 <div class="container">
@@ -728,6 +850,10 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
     <span class="k">max-interval-ms</span>: <span class="n">180000</span>    <span class="c"># 3 min cap</span>
     <span class="k">max-attempts</span>: <span class="n">8</span>
     <span class="k">jitter-factor</span>: <span class="n">0.5</span>
+  <span class="k">recovery</span>:
+    <span class="k">offset-store</span>: <span class="s">MONGO</span>       <span class="c"># MONGO | KAFKA</span>
+    <span class="k">offset-fallback</span>: <span class="s">TIMESTAMP</span> <span class="c"># TIMESTAMP | EARLIEST | LATEST</span>
+    <span class="k">offset-fallback-hours</span>: <span class="n">24</span>
 
 <span class="k">dis</span>:
   <span class="k">signing</span>:
@@ -756,6 +882,7 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
         <tr><td>orchestrator_outbox</td><td>7d</td></tr>
         <tr><td>orchestrator_processed_events</td><td>30d</td></tr>
         <tr><td>orchestrator_step_log</td><td>90d</td></tr>
+        <tr><td>orchestrator_consumer_offsets</td><td>&mdash;</td></tr>
       </table>
     </div>
   </div>
