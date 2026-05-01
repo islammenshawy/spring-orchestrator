@@ -1,0 +1,19 @@
+# Profile for multi-DC testing with single-broker Kafka clusters
+# Usage: --spring.profiles.active=multidc
+spring:
+  kafka:
+    producer:
+      acks: 1
+      enable-idempotence: false
+      retries: 3
+      properties:
+        max.in.flight.requests.per.connection: 1
+        delivery.timeout.ms: 120000
+    consumer:
+      auto-offset-reset: latest
+
+orchestrator:
+  recovery:
+    offset-store: MONGO
+    offset-fallback: TIMESTAMP
+    offset-fallback-hours: 24

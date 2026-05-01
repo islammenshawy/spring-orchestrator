@@ -90,13 +90,11 @@ services:
       mock-vendor:
         condition: service_healthy
     environment:
+      SPRING_PROFILES_ACTIVE: multidc
       SPRING_MONGODB_URI: mongodb://mongodb:27017/dis_multi_dc
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-a:29092
-      SPRING_KAFKA_PRODUCER_ACKS: 1
-      SPRING_KAFKA_PRODUCER_PROPERTIES_ENABLE_IDEMPOTENCE: false
       VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
       DIS_WEBHOOK_CALLBACK_URL: http://dis-1:8087/webhooks/enigio
-      ORCHESTRATOR_RECOVERY_OFFSET_STORE: MONGO
     healthcheck:
       test: wget -qO- http://localhost:8087/actuator/health || exit 1
       interval: 5s
@@ -160,13 +158,11 @@ services:
       mock-vendor:
         condition: service_healthy
     environment:
+      SPRING_PROFILES_ACTIVE: multidc
       SPRING_MONGODB_URI: mongodb://mongodb:27017/dis_multi_dc
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-b:29192
-      SPRING_KAFKA_PRODUCER_ACKS: 1
-      SPRING_KAFKA_PRODUCER_PROPERTIES_ENABLE_IDEMPOTENCE: false
       VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
       DIS_WEBHOOK_CALLBACK_URL: http://dis-2:8087/webhooks/enigio
-      ORCHESTRATOR_RECOVERY_OFFSET_STORE: MONGO
     healthcheck:
       test: wget -qO- http://localhost:8087/actuator/health || exit 1
       interval: 5s
