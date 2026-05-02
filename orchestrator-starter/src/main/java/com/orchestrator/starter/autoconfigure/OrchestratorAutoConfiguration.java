@@ -77,8 +77,10 @@ public class OrchestratorAutoConfiguration {
         return new TopicValidator(kafkaAdmin, props);
     }
 
+    /** Index creation — skipped if Mongock is present (Mongock handles migrations) */
     @Bean
     @ConditionalOnMissingBean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass("io.mongock.runner.springboot.EnableMongock")
     public IndexInitializer orchestratorIndexInitializer(MongoTemplate mongoTemplate, OrchestratorProperties props) {
         return new IndexInitializer(mongoTemplate, props);
     }

@@ -8,6 +8,10 @@ spring:
   mongodb:
     uri: mongodb://mongodb:27017/digital_instrument_service
 
+mongock:
+  migration-scan-package: com.dis.instrument.config.migration
+  enabled: true
+
   kafka:
     bootstrap-servers: kafka-1:29092,kafka-2:29093,kafka-3:29094
 
