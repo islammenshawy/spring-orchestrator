@@ -35,6 +35,11 @@ public class OrchestratorProperties {
          *  Defaults to commandTopic + ".replies". Set to empty string to disable (inline mode). */
         private String replyTopic;
 
+        /** Number of partitions for auto-created topics. Default 3.
+         *  More partitions = more consumers can process in parallel.
+         *  Must be >= number of DIS instances for even distribution. */
+        private int partitions = 3;
+
         /** Resolve reply topic — defaults to commandTopic + ".replies" if not explicitly set. */
         public String getReplyTopic() {
             if (replyTopic == null) return commandTopic + ".replies";

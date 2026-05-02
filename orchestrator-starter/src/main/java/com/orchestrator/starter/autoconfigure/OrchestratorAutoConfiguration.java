@@ -250,14 +250,22 @@ public class OrchestratorAutoConfiguration {
     public org.apache.kafka.clients.admin.NewTopic orchestratorReplyTopic(OrchestratorProperties props) {
         if (!props.getKafka().isReplyEnabled()) return null;
         return org.springframework.kafka.config.TopicBuilder.name(props.getKafka().getReplyTopic())
-                .partitions(1).build(); // uses broker default replication factor
+                .partitions(props.getKafka().getPartitions()).build();
     }
 
     @Bean
     public org.apache.kafka.clients.admin.NewTopic orchestratorReplyDltTopic(OrchestratorProperties props) {
         if (!props.getKafka().isReplyEnabled()) return null;
         return org.springframework.kafka.config.TopicBuilder.name(props.getKafka().getReplyTopic() + "-dlt")
-                .partitions(1).build(); // uses broker default replication factor
+                .partitions(1).build(); // DLT is low-volume, 1 partition is fine
+    }
+
+    /** Command topic — created explicitly with configured partitions.
+     *  RetryTopicConfiguration creates retry/DLT topics automatically. */
+    @Bean
+    public org.apache.kafka.clients.admin.NewTopic orchestratorCommandTopic(OrchestratorProperties props) {
+        return org.springframework.kafka.config.TopicBuilder.name(props.getKafka().getCommandTopic())
+                .partitions(props.getKafka().getPartitions()).build();
     }
 
     @Bean
