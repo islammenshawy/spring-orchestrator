@@ -35,10 +35,11 @@ public class OrchestratorProperties {
          *  Defaults to commandTopic + ".replies". Set to empty string to disable (inline mode). */
         private String replyTopic;
 
-        /** Number of partitions for auto-created topics. Default 3.
+        /** Number of partitions for auto-created topics. Default 6.
          *  More partitions = more consumers can process in parallel.
-         *  Must be >= number of DIS instances for even distribution. */
-        private int partitions = 3;
+         *  Must be >= number of DIS instances for even distribution.
+         *  Use even numbers for balanced assignment across N instances. */
+        private int partitions = 6;
 
         /** Resolve reply topic — defaults to commandTopic + ".replies" if not explicitly set. */
         public String getReplyTopic() {
@@ -112,6 +113,9 @@ public class OrchestratorProperties {
         private int processedEventsDays = 30;
         /** Auto-delete step audit logs after N days (TTL index). 0 = keep forever. */
         private int stepLogDays = 90;
+        /** Kafka DLT topic retention in hours. Dead-lettered flows are already marked in MongoDB —
+         *  the DLT message is for alerting only. Default 24h to prevent accumulation. */
+        private int dltRetentionHours = 24;
     }
 
     @Data

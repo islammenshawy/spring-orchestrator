@@ -28,8 +28,12 @@ import java.util.stream.Collectors;
 public class EnigioClient {
 
     private final WebClient client;
+    private final Duration sealTimeout;
+    private final Duration transferTimeout;
 
-    public EnigioClient(@Value("${vendor.enigio.base-url}") String baseUrl) {
+    public EnigioClient(@Value("${vendor.enigio.base-url}") String baseUrl,
+                        @Value("${vendor.enigio.seal-timeout-seconds:30}") int sealTimeoutSec,
+                        @Value("${vendor.enigio.transfer-timeout-seconds:30}") int transferTimeoutSec) {
         HttpClient httpClient = HttpClient.create()
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5_000)
                 .responseTimeout(Duration.ofSeconds(10));
@@ -38,6 +42,8 @@ public class EnigioClient {
                 .baseUrl(baseUrl)
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
                 .build();
+        this.sealTimeout = Duration.ofSeconds(sealTimeoutSec);
+        this.transferTimeout = Duration.ofSeconds(transferTimeoutSec);
     }
 
     // ===== Documents =====
@@ -222,7 +228,9 @@ public class EnigioClient {
 
     public DocumentResponse sealEnvelopeDraft(String draftId) {
         var res = client.post().uri("/envelopes/drafts/{id}/seal", draftId)
-                .retrieve().bodyToMono(Map.class).block();
+                .retrieve().bodyToMono(Map.class)
+                .timeout(sealTimeout)
+                .block();
 
         return new DocumentResponse(
                 (String) res.get("traceOriginalId"),
@@ -267,7 +275,9 @@ public class EnigioClient {
                         "transferEmailMessage", emailMessage,
                         "versionKey", versionKey
                 ))
-                .retrieve().bodyToMono(Map.class).block();
+                .retrieve().bodyToMono(Map.class)
+                .timeout(transferTimeout)
+                .block();
 
         return (String) res.get("transferId");
     }

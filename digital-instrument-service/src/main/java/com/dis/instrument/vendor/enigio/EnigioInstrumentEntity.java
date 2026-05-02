@@ -90,6 +90,11 @@ public class EnigioInstrumentEntity extends AbstractFlow {
     private java.time.Instant signingNotifiedAt;  // for approval expiry
     private boolean deliveryApproved;      // downstream approved via API
 
+    // ===== Notification dedup — prevents publishing same phase+status repeatedly =====
+
+    private String lastNotifiedPhase;
+    private String lastNotifiedStatus;
+
     // ===== Group 3 results — Packaging & Delivery =====
 
     private String validationResult; // VALID | NOT_VALID | OUTDATED

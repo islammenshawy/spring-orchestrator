@@ -40,6 +40,13 @@ public class FlowNotificationPublisher {
 
     @SuppressWarnings("unchecked")
     public void notifyPhaseComplete(EnigioInstrumentEntity flow, String phase, String status) {
+        // Dedup: skip if same phase+status was already published for this flow
+        if (phase.equals(flow.getLastNotifiedPhase()) && status.equals(flow.getLastNotifiedStatus())) {
+            log.debug("[{}] Notification dedup: phase={}, status={} already published — skipping",
+                    flow.getId(), phase, status);
+            return;
+        }
+
         String flowPath = "/flows/enigio-instrument/" + flow.getId();
 
         FlowNotification notification = FlowNotification.builder()
@@ -71,6 +78,8 @@ public class FlowNotificationPublisher {
         try {
             String json = objectMapper.writeValueAsString(notification);
             kafkaTemplate.send(notificationTopic, flow.getId(), json);
+            flow.setLastNotifiedPhase(phase);
+            flow.setLastNotifiedStatus(status);
             log.info("[{}] Published notification: phase={}, status={}",
                     flow.getId(), phase, status);
         } catch (Exception e) {

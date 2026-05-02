@@ -44,6 +44,8 @@ mongock:
 vendor:
   enigio:
     base-url: http://mock-vendor:8081/api/v1
+    seal-timeout-seconds: 30                  # envelope sealing is slowest vendor call (~450ms mock, potentially seconds on real API)
+    transfer-timeout-seconds: 30              # transfer involves email ceremony initiation
 
 # Digital Instrument Service settings
 dis:
@@ -62,6 +64,7 @@ dis:
 orchestrator:
   kafka:
     command-topic: dis.instrument.commands
+    partitions: 6                             # even number for balanced multi-instance distribution
 
   retry:
     initial-interval-ms: 5000             # 5s first retry

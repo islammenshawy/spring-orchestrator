@@ -268,6 +268,17 @@ public class OrchestratorAutoConfiguration {
                 .partitions(props.getKafka().getPartitions()).build();
     }
 
+    /** DLT topic — short retention since dead-lettered flows are already marked in MongoDB.
+     *  Prevents DLT accumulation across test runs and deployments. */
+    @Bean
+    public org.apache.kafka.clients.admin.NewTopic orchestratorCommandDltTopic(OrchestratorProperties props) {
+        long retentionMs = props.getRetention().getDltRetentionHours() * 3600_000L;
+        return org.springframework.kafka.config.TopicBuilder.name(props.getKafka().getCommandTopic() + "-dlt")
+                .partitions(1)
+                .config(org.apache.kafka.common.config.TopicConfig.RETENTION_MS_CONFIG, String.valueOf(retentionMs))
+                .build();
+    }
+
     @Bean
     @ConditionalOnMissingBean
     public MongoOffsetStore mongoOffsetStore(MongoTemplate mongoTemplate) {
