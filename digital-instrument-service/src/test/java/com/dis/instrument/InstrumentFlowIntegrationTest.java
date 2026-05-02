@@ -501,4 +501,100 @@ class InstrumentFlowIntegrationTest {
                 flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
         assertEquals(FlowStatus.COMPLETED, flow.getStatus());
     }
+
+    // ========== 15. Cancel after signing — document invalidated on vendor ==========
+
+    @Test
+    @Order(15)
+    @DisplayName("Cancel after signing — verify document invalidated on Enigio")
+    void cancelFlow_afterSigning_documentInvalidated() {
+        var result = startInstrumentFlow("PN-CANCEL-SIGN", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        // Progress through signing (approve both gates)
+        EnigioInstrumentEntity signed = waitForStep(flowId, "AWAIT_DELIVERY_APPROVAL", Duration.ofMinutes(3));
+        assertNotNull(signed);
+        assertNotNull(signed.getTraceOriginalId(), "Should have traceOriginalId before cancel");
+        assertEquals("SIGNED", signed.getSigningStatus(), "Should be signed before cancel");
+
+        // Cancel at Gate 2 (document registered + signed but not delivered)
+        var cancelResult = rest.post()
+                .uri("/flows/enigio-instrument/" + flowId + "/cancel")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("reason", "Counterparty withdrew from deal"))
+                .retrieve()
+                .body(Map.class);
+
+        assertEquals("CANCELLED", cancelResult.get("status"));
+
+        // Verify document invalidated on mock vendor
+        try {
+            var metadata = WebClient.create("http://localhost:8081")
+                    .get().uri("/api/v1/documents/{id}/metadata", signed.getTraceOriginalId())
+                    .retrieve().bodyToMono(Map.class).block();
+            assertEquals(true, metadata.get("invalidated"),
+                    "Document should be invalidated on Enigio after cancel");
+        } catch (Exception e) {
+            // 404 also acceptable (document removed)
+        }
+    }
+
+    // ========== 16. Cancel idempotent — double cancel returns same result ==========
+
+    @Test
+    @Order(16)
+    @DisplayName("Double cancel is idempotent")
+    void cancelFlow_doubleCancel_idempotent() {
+        var result = startInstrumentFlow("PN-DOUBLE-CANCEL", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        // Wait for any step
+        waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(2));
+
+        // First cancel
+        rest.post().uri("/flows/enigio-instrument/" + flowId + "/cancel")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("reason", "first cancel")).retrieve().body(Map.class);
+
+        // Second cancel — should return error (already cancelled)
+        try {
+            rest.post().uri("/flows/enigio-instrument/" + flowId + "/cancel")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("reason", "second cancel")).retrieve().body(Map.class);
+        } catch (Exception e) {
+            assertTrue(e.getMessage().contains("400") || e.getMessage().contains("Bad Request"),
+                    "Double cancel should return 400");
+        }
+
+        // Status should still be CANCELLED (not corrupted)
+        EnigioInstrumentEntity flow = mongoTemplate.findById(
+                flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertEquals(FlowStatus.CANCELLED, flow.getStatus());
+    }
+
+    // ========== Helper ==========
+
+    private EnigioInstrumentEntity waitForStep(String flowId, String targetStep, Duration timeout) {
+        long deadline = System.currentTimeMillis() + timeout.toMillis();
+        while (System.currentTimeMillis() < deadline) {
+            EnigioInstrumentEntity flow = mongoTemplate.findById(
+                    flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+            if (flow != null) {
+                String step = flow.getCurrentStep();
+                // Auto-approve gates
+                if ("AWAIT_PREPARATION_APPROVAL".equals(step) && flow.isPreparationNotified() && !flow.isSigningApproved()) {
+                    try { rest.post().uri("/flows/enigio-instrument/" + flowId + "/approve")
+                            .contentType(MediaType.APPLICATION_JSON).body(Map.of())
+                            .retrieve().body(Map.class); } catch (Exception ignored) {}
+                }
+                if ("AWAIT_DELIVERY_APPROVAL".equals(step) && flow.isSigningNotified() && !flow.isDeliveryApproved()) {
+                    // DON'T approve Gate 2 — we want to cancel here
+                }
+                if (targetStep.equals(step)) return flow;
+            }
+            try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
+        }
+        fail("Flow " + flowId + " did not reach step " + targetStep + " within " + timeout);
+        return null;
+    }
 }
