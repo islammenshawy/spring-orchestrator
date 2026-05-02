@@ -57,6 +57,10 @@ public class EnigioInstrumentEntity extends AbstractFlow {
     private Map<String, Object> customData;
     private String callbackUrl;
 
+    /** MongoDB document IDs for additional documents to attach to the envelope.
+     *  Only IDs go through Kafka — binary content stays in MongoDB. */
+    private List<String> additionalDocumentIds;
+
     // ===== Group 1 results — Document Preparation =====
 
     private boolean pdfGenerated;
@@ -90,6 +94,7 @@ public class EnigioInstrumentEntity extends AbstractFlow {
 
     private String validationResult; // VALID | NOT_VALID | OUTDATED
     private String envelopeDraftId;
+    private boolean additionalDocsUploaded; // tracks whether additional docs were sent to Enigio draft
     private String envelopeTraceId;
     private String envelopeVersionKey;
     private String transferId;

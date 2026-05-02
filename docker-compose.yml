@@ -226,5 +226,53 @@ services:
       timeout: 5s
       retries: 15
 
+  # ========== Nginx Load Balancer (for multi-instance DIS) ==========
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./scripts/nginx-dis.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      digital-instrument-service:
+        condition: service_healthy
+      digital-instrument-service-2:
+        condition: service_healthy
+    profiles:
+      - multi-instance
+    healthcheck:
+      test: wget -qO- http://localhost:8090/actuator/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ========== DIS Instance 2 (for load testing + failover) ==========
+  digital-instrument-service-2:
+    build:
+      context: .
+      args:
+        JAR_FILE: digital-instrument-service/target/digital-instrument-service-0.0.1-SNAPSHOT.jar
+    ports:
+      - "8088:8087"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka-1:
+        condition: service_healthy
+      mock-vendor:
+        condition: service_healthy
+    environment:
+      SPRING_MONGODB_URI: mongodb://mongodb:27017/digital_instrument_service
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29093,kafka-3:29094
+      VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
+      DIS_BASE_URL: http://digital-instrument-service-2:8087
+    profiles:
+      - multi-instance
+    healthcheck:
+      test: wget -qO- http://localhost:8087/actuator/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
 volumes:
   mongo-data:

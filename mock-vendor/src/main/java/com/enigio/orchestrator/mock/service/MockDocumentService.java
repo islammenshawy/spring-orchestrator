@@ -272,6 +272,36 @@ public class MockDocumentService {
         return new EnvelopeDraftResponse(draftId);
     }
 
+    public Map<String, Object> uploadAdditionalDocument(String draftId, String filename,
+                                                          String fileHash, byte[] data) {
+        applyFailure("uploadAdditionalDocument");
+        simulateDelay(100, 300);
+
+        MockDocument draft = envelopeDrafts.get(draftId);
+        if (draft == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Envelope draft not found: " + draftId);
+        }
+
+        String fileId = UUID.randomUUID().toString();
+        draft.getAdditionalDocuments().add(Map.of(
+                "fileId", fileId,
+                "filename", filename,
+                "fileHash", fileHash,
+                "fileSize", data.length
+        ));
+
+        log.info("Added additional document '{}' to draft {} → fileId={}", filename, draftId, fileId);
+        return Map.of("fileId", fileId);
+    }
+
+    public List<Map<String, Object>> getAdditionalDocumentMetadata(String draftId) {
+        MockDocument draft = envelopeDrafts.get(draftId);
+        if (draft == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Envelope draft not found: " + draftId);
+        }
+        return draft.getAdditionalDocuments();
+    }
+
     public DocumentOperationResponse sealEnvelopeDraft(String draftId) {
         applyFailure("sealEnvelopeDraft");
         simulateDelay(300, 600);

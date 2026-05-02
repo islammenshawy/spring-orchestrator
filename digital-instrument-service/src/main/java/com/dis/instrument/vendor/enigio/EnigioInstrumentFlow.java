@@ -1,6 +1,8 @@
 package com.dis.instrument.vendor.enigio;
 
 import com.dis.instrument.core.api.FlowNotificationPublisher;
+import com.dis.instrument.core.model.AdditionalDocument;
+import com.dis.instrument.core.model.AdditionalDocumentRepository;
 import com.dis.instrument.core.model.Attachment;
 import com.dis.instrument.core.model.Signer;
 import com.orchestrator.starter.annotation.*;
@@ -35,17 +37,20 @@ import java.util.Map;
 public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity> {
 
     private final EnigioClient enigioClient;
+    private final AdditionalDocumentRepository additionalDocumentRepository;
     private final FlowNotificationPublisher notificationPublisher;
     private final long signingExpiryHours;
     private final long approvalExpiryHours;
     private final String webhookCallbackUrl;
 
     public EnigioInstrumentFlow(EnigioClient enigioClient,
+                                AdditionalDocumentRepository additionalDocumentRepository,
                                 FlowNotificationPublisher notificationPublisher,
                                 @Value("${dis.signing.expiry-hours:48}") long signingExpiryHours,
                                 @Value("${dis.approval.expiry-hours:72}") long approvalExpiryHours,
                                 @Value("${dis.webhook.callback-url:http://digital-instrument-service:8087/webhooks/enigio}") String webhookCallbackUrl) {
         this.enigioClient = enigioClient;
+        this.additionalDocumentRepository = additionalDocumentRepository;
         this.notificationPublisher = notificationPublisher;
         this.signingExpiryHours = signingExpiryHours;
         this.approvalExpiryHours = approvalExpiryHours;
@@ -328,17 +333,52 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         log.info("[{}] Creating and sealing envelope for document {}", flow.getId(),
                 flow.getTraceOriginalId());
 
-        String draftId = enigioClient.createEnvelopeDraft(
-                "ENV-" + flow.getReference(),
-                "Signed " + flow.getInstrumentType().toEnigioValue() + " — " + flow.getTitle(),
-                flow.getTraceOriginalId()
-        );
-        flow.setEnvelopeDraftId(draftId);
-        checkpoint(flow);
+        // 1. Create draft (if not already created on a previous retry)
+        if (flow.getEnvelopeDraftId() == null) {
+            String draftId = enigioClient.createEnvelopeDraft(
+                    "ENV-" + flow.getReference(),
+                    "Signed " + flow.getInstrumentType().toEnigioValue() + " — " + flow.getTitle(),
+                    flow.getTraceOriginalId()
+            );
+            flow.setEnvelopeDraftId(draftId);
+            checkpoint(flow);
+        }
 
-        var sealed = enigioClient.sealEnvelopeDraft(draftId);
+        // 2. Upload additional documents from MongoDB (if any, and not already uploaded)
+        if (!flow.isAdditionalDocsUploaded()
+                && flow.getAdditionalDocumentIds() != null
+                && !flow.getAdditionalDocumentIds().isEmpty()) {
+
+            List<AdditionalDocument> docs = additionalDocumentRepository
+                    .findAllById(flow.getAdditionalDocumentIds());
+
+            if (docs.size() != flow.getAdditionalDocumentIds().size()) {
+                log.warn("[{}] Expected {} additional documents but found {} in MongoDB — some may have been deleted",
+                        flow.getId(), flow.getAdditionalDocumentIds().size(), docs.size());
+            }
+
+            log.info("[{}] Uploading {} additional document(s) to envelope draft {}",
+                    flow.getId(), docs.size(), flow.getEnvelopeDraftId());
+
+            for (AdditionalDocument doc : docs) {
+                byte[] decoded = java.util.Base64.getDecoder().decode(doc.getData());
+                enigioClient.uploadAdditionalDocument(
+                        flow.getEnvelopeDraftId(),
+                        doc.getFilename(),
+                        doc.getSha256Hash(),
+                        decoded
+                );
+            }
+
+            flow.setAdditionalDocsUploaded(true);
+            checkpoint(flow);
+        }
+
+        // 3. Seal the draft
+        var sealed = enigioClient.sealEnvelopeDraft(flow.getEnvelopeDraftId());
         flow.setEnvelopeTraceId(sealed.traceOriginalId());
         flow.setEnvelopeVersionKey(sealed.versionKey());
+        checkpoint(flow);
     }
 
     @Step(order = 11, completedWhen = "transferId != null")

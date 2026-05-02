@@ -52,9 +52,27 @@ public class SwaggerConfig {
     }
 
     @Bean
+    public GroupedOpenApi additionalDocuments() {
+        return GroupedOpenApi.builder()
+                .group("3-additional-documents")
+                .displayName("Additional Documents")
+                .pathsToMatch("/documents/additional/**")
+                .build();
+    }
+
+    @Bean
+    public GroupedOpenApi vendorSync() {
+        return GroupedOpenApi.builder()
+                .group("4-vendor-sync")
+                .displayName("Vendor Sync")
+                .pathsToMatch("/vendor/**")
+                .build();
+    }
+
+    @Bean
     public GroupedOpenApi webhooks() {
         return GroupedOpenApi.builder()
-                .group("3-webhooks")
+                .group("5-webhooks")
                 .displayName("Enigio Webhooks")
                 .pathsToMatch("/webhooks/**")
                 .build();

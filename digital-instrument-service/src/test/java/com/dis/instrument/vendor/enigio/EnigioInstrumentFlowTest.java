@@ -30,6 +30,9 @@ class EnigioInstrumentFlowTest {
     private EnigioClient enigioClient;
 
     @Mock
+    private AdditionalDocumentRepository additionalDocumentRepository;
+
+    @Mock
     private FlowNotificationPublisher notificationPublisher;
 
     @Mock
@@ -39,7 +42,8 @@ class EnigioInstrumentFlowTest {
 
     @BeforeEach
     void setUp() {
-        flow = new EnigioInstrumentFlow(enigioClient, notificationPublisher, 48, 72,
+        flow = new EnigioInstrumentFlow(enigioClient, additionalDocumentRepository,
+                notificationPublisher, 48, 72,
                 "http://localhost:8087/webhooks/enigio");
         ReflectionTestUtils.setField(flow, "rawRepository", repository);
     }

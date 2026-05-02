@@ -1,6 +1,15 @@
 spring:
   application:
     name: dis-test
+  mongodb:
+    uri: mongodb://localhost:27117/dis-test
+
+vendor:
+  enigio:
+    base-url: http://localhost:8081/api/v1
+
+mongock:
+  enabled: false
 
 orchestrator:
   kafka:

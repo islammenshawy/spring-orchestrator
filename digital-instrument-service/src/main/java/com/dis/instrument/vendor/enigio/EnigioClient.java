@@ -2,6 +2,10 @@ package com.dis.instrument.vendor.enigio;
 
 import com.dis.instrument.core.model.Attachment;
 import com.dis.instrument.core.model.Signer;
+import com.dis.instrument.vendor.enigio.dto.VendorDocumentMetadata;
+import com.dis.instrument.vendor.enigio.dto.VendorDocumentResponse;
+import com.dis.instrument.vendor.enigio.dto.VendorRequiredSignature;
+import com.dis.instrument.vendor.enigio.dto.VendorTechnicalDetails;
 import io.netty.channel.ChannelOption;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -119,6 +123,21 @@ public class EnigioClient {
         return (String) res.get("result");
     }
 
+    public VendorDocumentResponse getDocument(String traceOriginalId) {
+        return client.get().uri("/documents/{id}", traceOriginalId)
+                .retrieve().bodyToMono(VendorDocumentResponse.class).block();
+    }
+
+    public VendorDocumentMetadata getDocumentMetadata(String traceOriginalId) {
+        return client.get().uri("/documents/{id}/metadata", traceOriginalId)
+                .retrieve().bodyToMono(VendorDocumentMetadata.class).block();
+    }
+
+    public VendorTechnicalDetails getTechnicalDetails(String traceOriginalId) {
+        return client.get().uri("/documents/{id}/technical-details/latest", traceOriginalId)
+                .retrieve().bodyToMono(VendorTechnicalDetails.class).block();
+    }
+
     // ===== Required Signatures =====
 
     public void addRequiredSignatures(String traceOriginalId, List<Signer> signers) {
@@ -177,6 +196,14 @@ public class EnigioClient {
         }
     }
 
+    public List<VendorRequiredSignature> getRequiredSignatures(String traceOriginalId) {
+        return client.get()
+                .uri("/required-signatures/original/{id}", traceOriginalId)
+                .retrieve()
+                .bodyToMono(new org.springframework.core.ParameterizedTypeReference<List<VendorRequiredSignature>>() {})
+                .block();
+    }
+
     // ===== Envelopes =====
 
     public String createEnvelopeDraft(String reference, String coverMessage,
@@ -200,6 +227,33 @@ public class EnigioClient {
         return new DocumentResponse(
                 (String) res.get("traceOriginalId"),
                 (String) res.get("versionKey"));
+    }
+
+    /**
+     * Upload an additional document to an envelope draft.
+     * Must be called after createEnvelopeDraft and before sealEnvelopeDraft.
+     * Matches Enigio POST /envelopes/drafts/{draftId}/additional-documents.
+     *
+     * @param draftId  envelope draft ID
+     * @param filename original filename (sent as File-Name header)
+     * @param sha256   SHA-256 hash of the raw bytes (sent as File-Hash header)
+     * @param data     raw binary content
+     * @return fileId assigned by Enigio
+     */
+    @SuppressWarnings("unchecked")
+    public String uploadAdditionalDocument(String draftId, String filename,
+                                           String sha256, byte[] data) {
+        var res = client.post()
+                .uri("/envelopes/drafts/{draftId}/additional-documents", draftId)
+                .header("File-Name", filename)
+                .header("File-Hash", sha256)
+                .header("Content-Length", String.valueOf(data.length))
+                .bodyValue(data)
+                .retrieve().bodyToMono(Map.class).block();
+
+        String fileId = (String) res.get("fileId");
+        log.info("Uploaded additional document '{}' to draft {} → fileId={}", filename, draftId, fileId);
+        return fileId;
     }
 
     public String transferByEmail(String envelopeTraceId, String versionKey,

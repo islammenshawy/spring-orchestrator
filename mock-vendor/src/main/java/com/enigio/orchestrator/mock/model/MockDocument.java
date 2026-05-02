@@ -44,6 +44,8 @@ public class MockDocument {
     private String envelopeDraftId;
     private String envelopeTraceId;
     private String envelopeVersionKey;
+    @Builder.Default
+    private List<Map<String, Object>> additionalDocuments = new ArrayList<>();
 
     // Transfer
     private String transferId;

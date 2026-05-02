@@ -129,6 +129,24 @@ public class MockDocumentController {
         return ResponseEntity.ok(service.createEnvelopeDraft(request));
     }
 
+    /** POST /api/v1/envelopes/drafts/{draftId}/additional-documents — Upload additional document */
+    @PostMapping(value = "/envelopes/drafts/{draftId}/additional-documents",
+            consumes = "application/octet-stream")
+    public ResponseEntity<Map<String, Object>> uploadAdditionalDocument(
+            @PathVariable String draftId,
+            @RequestHeader("File-Name") String fileName,
+            @RequestHeader("File-Hash") String fileHash,
+            @RequestBody byte[] data) {
+        return ResponseEntity.ok(service.uploadAdditionalDocument(draftId, fileName, fileHash, data));
+    }
+
+    /** GET /api/v1/envelopes/drafts/{draftId}/additional-documents/metadata — List additional docs */
+    @GetMapping("/envelopes/drafts/{draftId}/additional-documents/metadata")
+    public ResponseEntity<List<Map<String, Object>>> getAdditionalDocumentMetadata(
+            @PathVariable String draftId) {
+        return ResponseEntity.ok(service.getAdditionalDocumentMetadata(draftId));
+    }
+
     /** POST /api/v1/envelopes/drafts/{draftId}/seal — Seal envelope draft */
     @PostMapping("/envelopes/drafts/{draftId}/seal")
     public ResponseEntity<DocumentOperationResponse> sealEnvelopeDraft(
