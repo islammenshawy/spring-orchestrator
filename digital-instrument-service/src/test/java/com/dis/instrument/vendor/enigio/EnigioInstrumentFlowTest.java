@@ -5,6 +5,7 @@ import com.dis.instrument.core.model.*;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.exception.NonRetryableStepException;
 import com.orchestrator.starter.exception.RetryableStepException;
+import com.orchestrator.starter.exception.WaitingStepException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -122,7 +123,7 @@ class EnigioInstrumentFlowTest {
             e.setTraceOriginalId("to_abc123");
 
             assertThatThrownBy(() -> flow.awaitPreparationApproval(e))
-                    .isInstanceOf(RetryableStepException.class)
+                    .isInstanceOf(WaitingStepException.class)
                     .hasMessageContaining("approve");
 
             assertThat(e.isPreparationNotified()).isTrue();
@@ -150,7 +151,7 @@ class EnigioInstrumentFlowTest {
             e.setSigningApproved(false);
 
             assertThatThrownBy(() -> flow.awaitPreparationApproval(e))
-                    .isInstanceOf(RetryableStepException.class);
+                    .isInstanceOf(WaitingStepException.class);
 
             verifyNoInteractions(notificationPublisher);
         }
@@ -255,7 +256,7 @@ class EnigioInstrumentFlowTest {
             when(enigioClient.getSigningStatus("to_abc123")).thenReturn("PENDING");
 
             assertThatThrownBy(() -> flow.awaitSignatures(e))
-                    .isInstanceOf(RetryableStepException.class);
+                    .isInstanceOf(WaitingStepException.class);
             assertThat(e.getSigningStatus()).isEqualTo("PENDING");
             verify(enigioClient).getSigningStatus("to_abc123");
         }
@@ -338,7 +339,7 @@ class EnigioInstrumentFlowTest {
             e.setSigningStatus("SIGNED");
 
             assertThatThrownBy(() -> flow.awaitDeliveryApproval(e))
-                    .isInstanceOf(RetryableStepException.class)
+                    .isInstanceOf(WaitingStepException.class)
                     .hasMessageContaining("approve");
 
             assertThat(e.isSigningNotified()).isTrue();

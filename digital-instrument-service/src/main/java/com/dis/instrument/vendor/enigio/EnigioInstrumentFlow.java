@@ -8,6 +8,7 @@ import com.dis.instrument.core.model.Signer;
 import com.orchestrator.starter.annotation.*;
 import com.orchestrator.starter.exception.NonRetryableStepException;
 import com.orchestrator.starter.exception.RetryableStepException;
+import com.orchestrator.starter.exception.WaitingStepException;
 import com.orchestrator.starter.flow.FlowDefinition;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -147,7 +148,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         }
 
         if (!flow.isSigningApproved()) {
-            throw new RetryableStepException(
+            throw new WaitingStepException(
                     "Awaiting downstream approval for signing phase. " +
                     "Call POST /flows/enigio-instrument/" + flow.getId() + "/approve");
         }
@@ -272,9 +273,9 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             throw new NonRetryableStepException("Signature rejected by signer");
         }
 
-        // Still pending — retry via Kafka topic
+        // Still pending — poll again with short delay (not exponential backoff)
         flow.setSigningStatus(status);
-        throw new RetryableStepException(
+        throw new WaitingStepException(
                 "Awaiting signatures: " + flow.getSignaturesReceived() + "/" +
                 flow.getSignaturesRequired() + " signed. Webhook or next poll will advance.");
     }
@@ -304,7 +305,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         }
 
         if (!flow.isDeliveryApproved()) {
-            throw new RetryableStepException(
+            throw new WaitingStepException(
                     "Awaiting downstream approval for delivery phase. " +
                     "Call POST /flows/enigio-instrument/" + flow.getId() + "/approve");
         }

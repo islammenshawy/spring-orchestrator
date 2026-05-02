@@ -7,6 +7,7 @@ import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.exception.NonRetryableStepException;
 import com.orchestrator.starter.exception.RetryableStepException;
+import com.orchestrator.starter.exception.WaitingStepException;
 import com.orchestrator.starter.kafka.StepCommandMessage;
 import com.orchestrator.starter.kafka.StepReplyMessage;
 import com.orchestrator.starter.outbox.OutboxEvent;
@@ -197,6 +198,12 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
         try {
             handler.execute(flow);
+        } catch (WaitingStepException e) {
+            // Gate/polling step — fixed short delay with jitter, bypass exponential retry topics
+            logStep(flowId, stepName, "WAITING", flow.getRetryCount(),
+                    flowBefore, null, e.getMessage(), startedAt);
+            handleWaitingStep(flow, e);
+            return; // Do NOT throw — we re-publish directly, bypassing Spring Kafka retry
         } catch (RetryableStepException e) {
             logStep(flowId, stepName, "RETRYING", flow.getRetryCount() + 1,
                     flowBefore, null, e.getMessage(), startedAt);
@@ -553,6 +560,43 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
     }
 
+    /**
+     * Gate/polling step — re-publish to main command topic with a short fixed delay + jitter.
+     * Bypasses Spring Kafka's exponential retry topics entirely.
+     * Does NOT increment retryCount (this isn't an error, just waiting).
+     */
+    private void handleWaitingStep(F flow, WaitingStepException e) {
+        String errorMsg = e.getMessage() != null ? e.getMessage() : "waiting for external event";
+        Instant nextRetry = Instant.now().plusMillis(e.getDelayMs());
+
+        if (mongoTemplate != null && entityClass != null) {
+            updateFlowPartial(flow.getId(), java.util.Map.of(
+                    "status", FlowStatus.WAITING_RETRY.name(),
+                    "nextRetryAt", nextRetry,
+                    "errorMessage", errorMsg,
+                    "updatedAt", Instant.now()));
+        } else {
+            flow.setStatus(FlowStatus.WAITING_RETRY);
+            flow.setNextRetryAt(nextRetry);
+            flow.setErrorMessage(errorMsg);
+            flow.setUpdatedAt(Instant.now());
+            saveFlow(flow);
+        }
+
+        // Schedule direct re-publish to main command topic after the delay
+        Thread.startVirtualThread(() -> {
+            try {
+                Thread.sleep(e.getDelayMs());
+                publishStepCommand(flow.getId(), flow.getCurrentStep());
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            } catch (Exception ex) {
+                log.warn("[Saga] Failed to re-publish waiting step {} for flow {}: {}",
+                        flow.getCurrentStep(), flow.getId(), ex.getMessage());
+            }
+        });
+    }
+
     private void handleRetryableFailure(F flow, RetryableStepException e) {
         int retryCount = flow.getRetryCount() + 1;
         int backoff = (int) Math.min(Math.pow(2, retryCount), 60);
@@ -631,6 +675,23 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     private void writeOutboxEvent(F flow) {
         writeOutboxEvent(flow, flow.getCurrentStep());
+    }
+
+    /** Direct publish to main command topic — used by waiting steps to bypass retry topics. */
+    @SuppressWarnings("unchecked")
+    private void publishStepCommand(String flowId, String stepName) {
+        try {
+            StepCommandMessage cmd = StepCommandMessage.builder()
+                    .eventId(UUID.randomUUID().toString())
+                    .flowId(flowId)
+                    .correlationId(flowId)
+                    .stepName(stepName)
+                    .flowType(flowType)
+                    .build();
+            kafkaTemplate.send(commandTopic, flowId, objectMapper.writeValueAsString(cmd));
+        } catch (Exception e) {
+            log.warn("[Saga] Failed to publish waiting step command for {}: {}", flowId, e.getMessage());
+        }
     }
 
     private void writeOutboxEvent(F flow, String stepNameOverride) {
