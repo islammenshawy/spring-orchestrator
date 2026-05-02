@@ -4,6 +4,7 @@ import com.dis.instrument.vendor.enigio.EnigioInstrumentEntity;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.flow.FlowOrchestrator;
 import com.orchestrator.starter.flow.FlowTypeRegistry;
+import com.orchestrator.starter.kafka.StepCommandMessage;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -13,7 +14,10 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.kafka.core.KafkaTemplate;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
@@ -21,6 +25,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * REST endpoints for downstream systems to approve, cancel, or query flow status.
@@ -48,6 +53,11 @@ public class FlowApprovalController {
 
     private final MongoTemplate mongoTemplate;
     private final FlowTypeRegistry flowTypeRegistry;
+    @SuppressWarnings("rawtypes")
+    private final KafkaTemplate kafkaTemplate;
+    private final ObjectMapper objectMapper;
+    @Value("${orchestrator.kafka.command-topic:dis.instrument.commands}")
+    private String commandTopic;
 
     @Operation(
             summary = "Approve the next phase of a flow",
@@ -123,11 +133,15 @@ public class FlowApprovalController {
             ));
         }
 
+        // Re-activate: publish step command to Kafka so the gate step re-executes
+        // and finds the approval flag set → advances to next group
+        reactivateFlow(id, currentStep);
+
         return ResponseEntity.ok(Map.of(
                 "instrumentId", id,
                 "approvedPhase", approvedPhase,
                 "phase", stepToPhase(currentStep),
-                "message", "Next phase will start on next retry cycle"
+                "message", "Flow re-activated — next group starting"
         ));
     }
 
@@ -242,6 +256,24 @@ public class FlowApprovalController {
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of(
                     "error", e.getMessage(), "instrumentId", id));
+        }
+    }
+
+    /** Re-activate a parked flow by publishing a step command to Kafka. */
+    @SuppressWarnings("unchecked")
+    private void reactivateFlow(String flowId, String stepName) {
+        try {
+            StepCommandMessage cmd = StepCommandMessage.builder()
+                    .eventId(UUID.randomUUID().toString())
+                    .flowId(flowId)
+                    .correlationId(flowId)
+                    .stepName(stepName)
+                    .flowType("enigio-instrument")
+                    .build();
+            kafkaTemplate.send(commandTopic, flowId, objectMapper.writeValueAsString(cmd));
+            log.info("[{}] Re-activated flow at step {} via Kafka", flowId, stepName);
+        } catch (Exception e) {
+            log.error("[{}] Failed to re-activate flow: {}", flowId, e.getMessage());
         }
     }
 

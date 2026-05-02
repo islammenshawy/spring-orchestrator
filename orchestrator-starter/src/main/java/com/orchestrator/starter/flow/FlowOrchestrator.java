@@ -199,11 +199,12 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         try {
             handler.execute(flow);
         } catch (WaitingStepException e) {
-            // Gate/polling step — mark as waiting, let Spring Kafka retry with standard backoff
+            // Gate/polling step — park flow in MongoDB, exit Kafka entirely.
+            // Re-activation via: approval API, webhook, or expiry scheduler.
             logStep(flowId, stepName, "WAITING", flow.getRetryCount(),
                     flowBefore, null, e.getMessage(), startedAt);
             handleWaitingStep(flow, e);
-            throw new RetryableStepException(e.getMessage()); // Route through retry topics
+            return; // Swallow — no throw, no retry topic, no re-publish
         } catch (RetryableStepException e) {
             logStep(flowId, stepName, "RETRYING", flow.getRetryCount() + 1,
                     flowBefore, null, e.getMessage(), startedAt);

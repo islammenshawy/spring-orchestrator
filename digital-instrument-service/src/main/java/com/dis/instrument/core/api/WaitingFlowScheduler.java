@@ -20,19 +20,18 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Safety-net scheduler for flows in wait states (webhook gates + approval gates).
+ * Expiry + safety-net scheduler for parked flows.
  *
- * Flow architecture for wait steps:
- *   1. Webhook (primary) — real-time, sets the flag directly in MongoDB
- *   2. Kafka retry (short-term) — catches webhook if it arrives within retry window
- *   3. This scheduler (long-term) — re-publishes flows that exhausted Kafka retries
- *      but the signal (webhook/approval) hasn't arrived yet
+ * Gate steps (AWAIT_*_APPROVAL, AWAIT_SIGNATURES) park flows in MongoDB and
+ * exit Kafka entirely. Re-activation is event-driven:
+ *   1. POST /approve (downstream) → publishes step command to Kafka
+ *   2. Webhook (Enigio) → publishes step command to Kafka
+ *   3. This scheduler (safety net) → re-publishes stale flows every 5 min
  *
- * The step's completedWhen guard prevents duplicate work — if the webhook
- * already set the flag, the re-published command just advances the flow.
- *
- * Expiry is checked by the step itself on each execution (Kafka retry or scheduler).
- * When elapsed > threshold, the step throws NonRetryableStepException → FAILED.
+ * The scheduler catches:
+ *   - Missed webhooks (Enigio failed to deliver)
+ *   - Missed approvals (downstream didn't call approve)
+ *   - Expiry detection (step checks threshold on re-execution, fails if expired)
  */
 @Slf4j
 @Component
@@ -64,10 +63,11 @@ public class WaitingFlowScheduler {
     }
 
     /**
-     * Scan for flows stuck in wait states and re-publish their current step.
-     * Runs at dis.signing.poll-interval-minutes (default 30min).
+     * Scan for parked flows and re-publish their current step.
+     * Runs every 5 min (default). Acts as safety net for missed webhooks/approvals
+     * and triggers expiry checks on re-execution.
      */
-    @Scheduled(fixedDelayString = "${dis.signing.poll-interval-ms:1800000}")
+    @Scheduled(fixedDelayString = "${dis.expiry.poll-interval-ms:300000}")
     public void pollWaitingFlows() {
         // Find flows that are WAITING_RETRY at a wait step and haven't been updated recently
         Instant staleThreshold = Instant.now().minus(pollIntervalMinutes, ChronoUnit.MINUTES);
