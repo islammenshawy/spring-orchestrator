@@ -86,8 +86,8 @@ wait_healthy() {
     echo "FAIL: $2 not healthy" >&2; exit 1
 }
 
-approve() { curl -s -X POST "$DIS_URL_1/flows/enigio-instrument/$1/approve" -H "Content-Type: application/json" -d '{}' 2>/dev/null || true; }
-get_field() { curl -s "$DIS_URL_1/flows/enigio-instrument/$1" 2>/dev/null | jq -r ".$2 // empty"; }
+approve() { curl -s -X POST "$DIS_URL_1/flows/enigio-instrument/$1/approve" -H "Content-Type: application/json" -d '{}' -m 2 2>/dev/null || true; }
+get_field() { curl -s "$DIS_URL_1/flows/enigio-instrument/$1" -m 2 2>/dev/null | jq -r ".$2 // empty"; }
 
 start_instrument_flow() {
     local ref=$1 type=$2 extra=${3:-}
@@ -215,17 +215,30 @@ capture_metrics_loop() {
 }
 
 # ===== Auto-approve daemon (runs in background) =====
+# Fires approve calls in parallel batches for speed.
+# With 885 flows, sequential polling is too slow (~60 min for one pass).
 
 auto_approve_loop() {
     while true; do
+        # Batch: fire up to 50 parallel approve calls
+        batch=0
         while read fid; do
             grep -q "^$fid " "$DONE_FIDS" 2>/dev/null && continue
-            step=$(get_field "$fid" "currentStep")
-            status=$(get_field "$fid" "status")
-            case "$status" in COMPLETED|FAILED|CANCELLED) echo "$fid $(now_ms) $status" >> "$DONE_FIDS"; continue ;; esac
-            case "$step" in AWAIT_PREPARATION_APPROVAL|AWAIT_DELIVERY_APPROVAL) approve "$fid" > /dev/null ;; esac
+            (
+                resp=$(curl -s "$DIS_URL_1/flows/enigio-instrument/$fid" -m 2 2>/dev/null)
+                fstatus=$(echo "$resp" | jq -r '.status // empty')
+                fstep=$(echo "$resp" | jq -r '.currentStep // empty')
+                case "$fstatus" in COMPLETED|FAILED|CANCELLED) echo "$fid $(now_ms) $fstatus" >> "$DONE_FIDS" ;; esac
+                case "$fstep" in AWAIT_PREPARATION_APPROVAL|AWAIT_DELIVERY_APPROVAL)
+                    curl -s -X POST "$DIS_URL_1/flows/enigio-instrument/$fid/approve" \
+                        -H "Content-Type: application/json" -d '{}' -m 2 > /dev/null 2>&1 ;;
+                esac
+            ) &
+            batch=$((batch + 1))
+            [ "$batch" -ge 50 ] && wait && batch=0
         done < "$ALL_FIDS"
-        sleep 2
+        wait
+        sleep 1
     done
 }
 

@@ -158,6 +158,7 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
     <a href="#sequence" class="btn-o">Sequence Diagram</a>
     <a href="#cancel" class="btn-o">Cancellation</a>
     <a href="#multidc" class="btn-o">Multi-DC Failover</a>
+    <a href="#loadtest" class="btn-o">Load Test</a>
     <a href="https://docs.traceoriginal.com" class="btn-o" target="_blank">Enigio API Docs</a>
   </div>
 </section>
@@ -804,8 +805,11 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
     <button class="ep-tab" onclick="showEp('approve',this)">Approve</button>
     <button class="ep-tab" onclick="showEp('status',this)">Poll Status</button>
     <button class="ep-tab" onclick="showEp('approval-status',this)">Approval Status</button>
+    <button class="ep-tab" onclick="showEp('cancel',this)">Cancel</button>
     <button class="ep-tab" onclick="showEp('webhook',this)">Webhook</button>
     <button class="ep-tab" onclick="showEp('notify',this)">Notifications</button>
+    <button class="ep-tab" onclick="showEp('upload-doc',this)">Upload Document</button>
+    <button class="ep-tab" onclick="showEp('vendor-sync',this)">Vendor Sync</button>
   </div>
 
   <!-- Start Flow -->
@@ -1033,6 +1037,125 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
 { <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"FLOW_COMPLETE"</span>, <span class="k">"status"</span>:<span class="s">"COMPLETED"</span>, <span class="k">"transferId"</span>:<span class="s">"..."</span> }</div>
     </div>
   </div>
+
+  <!-- Cancel Flow -->
+  <div class="ep-panel" id="ep-cancel" style="display:none">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div><span class="badge badge-green" style="font-size:.7rem">POST</span> <span style="font-family:monospace;font-size:.85rem;margin-left:6px">/flows/enigio-instrument/{id}/cancel</span></div>
+        <div style="display:flex;gap:4px">
+          <button class="vt active" onclick="showView(this,'req')">Request</button>
+          <button class="vt" onclick="showView(this,'res')">Response</button>
+          <button class="vt" onclick="showView(this,'curl')">cURL</button>
+        </div>
+      </div>
+      <div class="ep-view" data-v="req">
+        <p style="font-size:.8rem;color:var(--dim);margin-bottom:8px">Runs compensation handlers in reverse: cancel transfer → invalidate envelope → invalidate document on Enigio ledger (permanent).<br>Only when flow is IN_PROGRESS, WAITING_RETRY, or PENDING. Cannot cancel COMPLETED flows.</p>
+        <div class="code">{
+  <span class="k">"reason"</span>: <span class="s">"Compliance review failed — voiding instrument"</span>  <span class="tag tag-o">optional</span>
+}</div>
+      </div>
+      <div class="ep-view" data-v="res" style="display:none">
+        <div style="font-size:.7rem;color:var(--dim);margin-bottom:4px">200 OK</div>
+        <div class="code">{
+  <span class="k">"instrumentId"</span>: <span class="s">"69f33c7a64e97bd048c2c195"</span>,
+  <span class="k">"status"</span>: <span class="s">"CANCELLED"</span>,
+  <span class="k">"message"</span>: <span class="s">"Flow cancelled. Compliance review failed — voiding instrument"</span>
+}</div>
+      </div>
+      <div class="ep-view" data-v="curl" style="display:none">
+        <div class="code">curl -X POST http://localhost:8087/flows/enigio-instrument/{INSTRUMENT_ID}/cancel \
+  -H 'Content-Type: application/json' \
+  -d '{"reason": "Compliance review failed"}'</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload Additional Document -->
+  <div class="ep-panel" id="ep-upload-doc" style="display:none">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div><span class="badge badge-green" style="font-size:.7rem">POST</span> <span style="font-family:monospace;font-size:.85rem;margin-left:6px">/documents/additional</span></div>
+        <div style="display:flex;gap:4px">
+          <button class="vt active" onclick="showView(this,'req')">Request</button>
+          <button class="vt" onclick="showView(this,'res')">Response</button>
+          <button class="vt" onclick="showView(this,'curl')">cURL</button>
+        </div>
+      </div>
+      <div class="ep-view" data-v="req">
+        <p style="font-size:.8rem;color:var(--dim);margin-bottom:8px">Upload supporting documents (PDFs, certificates) to MongoDB. Include returned IDs in the flow's <code>additionalDocumentIds</code> array. Max 10 MB. Attached to Enigio envelope at step 10.</p>
+        <div class="code">{
+  <span class="k">"filename"</span>: <span class="s">"compliance-report-Q4.pdf"</span>,       <span class="tag tag-r">required</span>
+  <span class="k">"contentType"</span>: <span class="s">"application/pdf"</span>,              <span class="tag tag-o">optional</span>
+  <span class="k">"data"</span>: <span class="s">"JVBERi0xLjQKJcOkw7zDtsO..."</span>,        <span class="tag tag-r">required</span>  <span class="c">// base64</span>
+  <span class="k">"instrumentId"</span>: <span class="s">"69f33c7a..."</span>                  <span class="tag tag-o">optional</span>  <span class="c">// pre-link</span>
+}</div>
+      </div>
+      <div class="ep-view" data-v="res" style="display:none">
+        <div style="font-size:.7rem;color:var(--dim);margin-bottom:4px">200 OK</div>
+        <div class="code">{
+  <span class="k">"id"</span>: <span class="s">"6829a1f30000000000000042"</span>,              <span class="c">// use in additionalDocumentIds</span>
+  <span class="k">"filename"</span>: <span class="s">"compliance-report-Q4.pdf"</span>,
+  <span class="k">"sha256Hash"</span>: <span class="s">"b84667575710aaa1..."</span>,
+  <span class="k">"sizeBytes"</span>: <span class="n">245760</span>,
+  <span class="k">"uploadedAt"</span>: <span class="s">"2024-04-16T14:30:00Z"</span>
+}</div>
+      </div>
+      <div class="ep-view" data-v="curl" style="display:none">
+        <div class="code">curl -X POST http://localhost:8087/documents/additional \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "filename": "compliance-report-Q4.pdf",
+    "contentType": "application/pdf",
+    "data": "'$(base64 &lt; report.pdf)'"
+  }'</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Vendor Sync -->
+  <div class="ep-panel" id="ep-vendor-sync" style="display:none">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div><span class="badge badge-blue" style="font-size:.7rem">GET</span> <span style="font-family:monospace;font-size:.85rem;margin-left:6px">/vendor/enigio/documents/{traceOriginalId}</span></div>
+        <div style="display:flex;gap:4px">
+          <button class="vt active" onclick="showView(this,'req')">Params</button>
+          <button class="vt" onclick="showView(this,'res')">Response</button>
+          <button class="vt" onclick="showView(this,'curl')">cURL</button>
+        </div>
+      </div>
+      <div class="ep-view" data-v="req">
+        <p style="font-size:.8rem;color:var(--dim);margin-bottom:8px">Read-only pass-through to Enigio for reconciliation. Fetches sections in parallel. Default: <code>metadata</code> + <code>technicalDetails</code>.</p>
+        <div class="code"><span class="c">?include=metadata,technicalDetails</span>   <span class="tag tag-o">default</span>
+<span class="c">?include=requiredSignatures</span>           <span class="c">// check signing status</span>
+<span class="c">?include=document</span>                      <span class="c">// full base64 content (large)</span></div>
+      </div>
+      <div class="ep-view" data-v="res" style="display:none">
+        <div style="font-size:.7rem;color:var(--dim);margin-bottom:4px">200 OK (only requested sections populated)</div>
+        <div class="code">{
+  <span class="k">"traceOriginalId"</span>: <span class="s">"62af0ad4c68e..."</span>,
+  <span class="k">"metadata"</span>: {
+    <span class="k">"reference"</span>: <span class="s">"PN-2026-00142"</span>, <span class="k">"documentType"</span>: <span class="s">"Promissory note"</span>,
+    <span class="k">"invalidated"</span>: <span class="n">false</span>, <span class="k">"inTransit"</span>: <span class="n">false</span>
+  },
+  <span class="k">"technicalDetails"</span>: {
+    <span class="k">"versionKey"</span>: <span class="s">"5fa21e68..."</span>
+  },
+  <span class="k">"requiredSignatures"</span>: [
+    { <span class="k">"status"</span>: <span class="s">"SIGNED"</span>, <span class="k">"capacityOfSignatory"</span>: <span class="s">"CEO"</span> }
+  ]
+}</div>
+      </div>
+      <div class="ep-view" data-v="curl" style="display:none">
+        <div class="code"><span class="c"># Default (metadata + technicalDetails):</span>
+curl http://localhost:8087/vendor/enigio/documents/{TRACE_ID}
+
+<span class="c"># With signing status:</span>
+curl "http://localhost:8087/vendor/enigio/documents/{TRACE_ID}?include=metadata,technicalDetails,requiredSignatures"</div>
+      </div>
+    </div>
+  </div>
+
 </div>
 </section>
 
@@ -1374,6 +1497,140 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
   </div>
 </div>
 </section>
+
+<!-- LOAD TEST -->
+<section class="dark-section" id="loadtest">
+<div class="container">
+  <h2>Load &amp; Stability <span>Test Results</span></h2>
+  <p class="sub">30-minute soak test — 2 DIS instances + Nginx LB, 3-broker Kafka, MongoDB 7.0</p>
+
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0">
+    <div class="card"><div style="font-size:.7rem;color:var(--dim);text-transform:uppercase">Total Flows</div><div id="lt-total" style="font-size:1.6rem;font-weight:700;color:var(--blue)">—</div></div>
+    <div class="card"><div style="font-size:.7rem;color:var(--dim);text-transform:uppercase">Completed</div><div id="lt-completed" style="font-size:1.6rem;font-weight:700;color:var(--green)">—</div></div>
+    <div class="card"><div style="font-size:.7rem;color:var(--dim);text-transform:uppercase">Throughput</div><div id="lt-throughput" style="font-size:1.6rem;font-weight:700;color:var(--amber)">—</div></div>
+    <div class="card"><div style="font-size:.7rem;color:var(--dim);text-transform:uppercase">p50 Latency</div><div id="lt-p50" style="font-size:1.6rem;font-weight:700">—</div></div>
+  </div>
+
+  <h3>Test Environment</h3>
+  <table style="max-width:600px">
+    <tr><td style="color:var(--dim);width:180px">DIS</td><td>Spring Boot 4.0.5, Java 21, virtual threads — 2 instances behind Nginx</td></tr>
+    <tr><td style="color:var(--dim)">Kafka</td><td>3-broker, 6 partitions, acks=all, min.insync.replicas=2</td></tr>
+    <tr><td style="color:var(--dim)">MongoDB</td><td>7.0 standalone</td></tr>
+    <tr><td style="color:var(--dim)">Mock Vendor</td><td>Enigio trace:original v3.3 (200-600ms simulated latency)</td></tr>
+    <tr><td style="color:var(--dim)">Scenarios</td><td>40% happy path · 20% attachments · 10% additional docs · 10% cancel · 10% flaky · 10% sync</td></tr>
+  </table>
+
+  <h3>Container CPU &amp; Memory</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0">
+    <div class="card"><canvas id="lt-cpu"></canvas></div>
+    <div class="card"><canvas id="lt-mem"></canvas></div>
+  </div>
+
+  <h3>JVM Heap &amp; Threads</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0">
+    <div class="card"><canvas id="lt-jvm"></canvas></div>
+    <div class="card"><canvas id="lt-threads"></canvas></div>
+  </div>
+
+  <h3>Kafka Topics &amp; Throughput</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0">
+    <div class="card"><canvas id="lt-waves"></canvas></div>
+    <div class="card"><canvas id="lt-vendor"></canvas></div>
+  </div>
+
+  <h3>MongoDB</h3>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0">
+    <div class="card"><canvas id="lt-mongopool"></canvas></div>
+    <div class="card"><canvas id="lt-mongocache"></canvas></div>
+  </div>
+
+  <p style="margin-top:20px;font-size:.8rem;color:var(--dim)">
+    Full reports with CSV data: <code>scripts/load-test-results/</code><br>
+    Run: <code>DURATION=30 WAVE_SIZE=15 bash scripts/load-test.sh</code><br>
+    HTML report: open <code>scripts/load-test-results/report_*.html</code>
+  </p>
+</div>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script>
+// Load test data — updated by scripts/update-docs-loadtest.sh after each run
+// LOADTEST_DATA_START
+var LT = {
+  total: 885, completed: 712, failed: 85, cancelled: 84, timedOut: 4,
+  throughput: "0.33", p50: "911s", p95: "1736s",
+  cpuLabels: ["0m","5m","10m","15m","20m","25m","30m"],
+  dis1Cpu: [143,105,104,148,196,131,103],
+  dis2Cpu: [24,6,4,8,5,3,1],
+  kafkaCpu: [12,8,10,15,11,9,7],
+  mongoCpu: [32,15,20,25,30,18,12],
+  dis1Mem: [1343,1343,1343,1430,1352,1343,1640],
+  dis2Mem: [399,399,414,428,411,429,430],
+  jvmLabels: ["0m","5m","10m","15m","20m","25m","30m"],
+  jvmHeap: [715,357,319,440,679,336,461],
+  jvmNonHeap: [193,193,194,198,189,192,195],
+  jvmThreads: [91,102,102,103,103,101,97],
+  waveLabels: ["W1","W10","W20","W30","W40","W50","W59"],
+  waveSubmitted: [15,135,285,435,585,735,885],
+  waveDone: [0,117,265,416,565,710,850],
+  vendorLabels: ["createDoc","amend","addSigners","sendEmails","pollStatus","validate","createDraft","seal","transfer","webhook","invalidate"],
+  vendorCalls: [1730,207,1007,829,1345,821,902,758,712,829,84],
+  mongoPoolLabels: ["0m","5m","10m","15m","20m","25m","30m"],
+  mongoPool: [10,10,10,10,10,10,10],
+  mongoChecked: [2,3,4,3,3,2,1],
+  mongoCache: [46,48,52,58,55,50,48]
+};
+// LOADTEST_DATA_END
+
+document.getElementById('lt-total').textContent = LT.total;
+document.getElementById('lt-completed').textContent = LT.completed;
+document.getElementById('lt-throughput').textContent = LT.throughput + ' flows/sec';
+document.getElementById('lt-p50').textContent = LT.p50;
+
+Chart.defaults.color='#94a3b8';
+Chart.defaults.borderColor='#334155';
+Chart.defaults.font.size=10;
+var lo={responsive:true,interaction:{intersect:false,mode:'index'},plugins:{legend:{position:'bottom',labels:{boxWidth:10}}},scales:{y:{beginAtZero:true}}};
+
+new Chart(document.getElementById('lt-cpu'),{type:'line',data:{labels:LT.cpuLabels,datasets:[
+  {label:'DIS-1 CPU%',data:LT.dis1Cpu,borderColor:'#3b82f6',tension:.3},
+  {label:'DIS-2 CPU%',data:LT.dis2Cpu,borderColor:'#a855f7',tension:.3},
+  {label:'Kafka-1 CPU%',data:LT.kafkaCpu,borderColor:'#f59e0b',tension:.3},
+  {label:'MongoDB CPU%',data:LT.mongoCpu,borderColor:'#10b981',tension:.3}
+]},options:{...lo,plugins:{...lo.plugins,title:{display:true,text:'Container CPU %',color:'#e2e8f0'}}}});
+
+new Chart(document.getElementById('lt-mem'),{type:'line',data:{labels:LT.cpuLabels,datasets:[
+  {label:'DIS-1 MiB',data:LT.dis1Mem,borderColor:'#3b82f6',fill:true,backgroundColor:'rgba(59,130,246,.1)',tension:.3},
+  {label:'DIS-2 MiB',data:LT.dis2Mem,borderColor:'#a855f7',tension:.3}
+]},options:{...lo,plugins:{...lo.plugins,title:{display:true,text:'Container Memory (MiB)',color:'#e2e8f0'}}}});
+
+new Chart(document.getElementById('lt-jvm'),{type:'line',data:{labels:LT.jvmLabels,datasets:[
+  {label:'Heap MiB',data:LT.jvmHeap,borderColor:'#3b82f6',fill:true,backgroundColor:'rgba(59,130,246,.1)',tension:.3},
+  {label:'Non-Heap MiB',data:LT.jvmNonHeap,borderColor:'#f59e0b',tension:.3}
+]},options:{...lo,plugins:{...lo.plugins,title:{display:true,text:'JVM Memory',color:'#e2e8f0'}}}});
+
+new Chart(document.getElementById('lt-threads'),{type:'line',data:{labels:LT.jvmLabels,datasets:[
+  {label:'Live Threads',data:LT.jvmThreads,borderColor:'#a855f7',tension:.3}
+]},options:{...lo,plugins:{...lo.plugins,title:{display:true,text:'JVM Threads',color:'#e2e8f0'}}}});
+
+new Chart(document.getElementById('lt-waves'),{type:'line',data:{labels:LT.waveLabels,datasets:[
+  {label:'Submitted',data:LT.waveSubmitted,borderColor:'#3b82f6',tension:.3},
+  {label:'Completed',data:LT.waveDone,borderColor:'#10b981',tension:.3}
+]},options:{...lo,plugins:{...lo.plugins,title:{display:true,text:'Throughput Over Time',color:'#e2e8f0'}}}});
+
+new Chart(document.getElementById('lt-vendor'),{type:'bar',data:{labels:LT.vendorLabels,datasets:[
+  {label:'Calls',data:LT.vendorCalls,backgroundColor:'rgba(59,130,246,.6)',borderColor:'#3b82f6',borderWidth:1}
+]},options:{...lo,indexAxis:'y',plugins:{...lo.plugins,title:{display:true,text:'Vendor API Calls',color:'#e2e8f0'},legend:{display:false}}}});
+
+new Chart(document.getElementById('lt-mongopool'),{type:'line',data:{labels:LT.mongoPoolLabels,datasets:[
+  {label:'Pool Size',data:LT.mongoPool,borderColor:'#3b82f6',tension:.3},
+  {label:'Checked Out',data:LT.mongoChecked,borderColor:'#ef4444',tension:.3}
+]},options:{...lo,plugins:{...lo.plugins,title:{display:true,text:'MongoDB Connection Pool',color:'#e2e8f0'}}}});
+
+new Chart(document.getElementById('lt-mongocache'),{type:'line',data:{labels:LT.mongoPoolLabels,datasets:[
+  {label:'WiredTiger Cache MiB',data:LT.mongoCache,borderColor:'#f59e0b',fill:true,backgroundColor:'rgba(245,158,11,.1)',tension:.3}
+]},options:{...lo,plugins:{...lo.plugins,title:{display:true,text:'MongoDB WiredTiger Cache',color:'#e2e8f0'}}}});
+</script>
 
 <footer>
 <div class="container">
