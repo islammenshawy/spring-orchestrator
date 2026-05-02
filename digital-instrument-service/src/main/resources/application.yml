@@ -67,10 +67,10 @@ orchestrator:
     partitions: 6                             # even number for balanced multi-instance distribution
 
   retry:
-    initial-interval-ms: 5000             # 5s first retry
-    multiplier: 2.0                       # ladder: 5s → 10s → 20s → 40s → 80s → 160s (capped at 180s)
-    max-interval-ms: 180000               # cap at 3 minutes
-    max-attempts: 8                       # 1 initial + 7 retries before DLT
+    initial-interval-ms: 3000             # 3s first retry
+    multiplier: 2.0                       # ladder: 3s → 6s → 10s (capped)
+    max-interval-ms: 10000                # cap at 10s — gate steps need fast polling
+    max-attempts: 20                      # more attempts since backoff is shorter (10s cap × 20 = 200s budget)
     jitter-factor: 0.5                    # equal jitter to avoid thundering herd
 
 management:
