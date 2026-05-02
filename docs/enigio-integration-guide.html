@@ -544,11 +544,23 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
 <!-- SEQUENCE DIAGRAM -->
 <section id="sequence">
 <div class="container">
-  <h2>Sequence <span>Diagram</span></h2>
-  <p class="sub">End-to-end message flow including webhooks, notifications, and approval gates.</p>
+  <h2>Sequence <span>Diagrams</span></h2>
+  <p class="sub">Happy path and void/cancel flow with distinct arrow types.</p>
 
+  <!-- Legend -->
+  <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:1rem;font-size:.75rem;color:var(--dim)">
+    <div style="display:flex;align-items:center;gap:4px"><div style="width:30px;border-top:2px solid #3b82f6"></div> Request</div>
+    <div style="display:flex;align-items:center;gap:4px"><div style="width:30px;border-top:2px dashed #10b981"></div> Response</div>
+    <div style="display:flex;align-items:center;gap:4px"><div style="width:30px;border-top:2px dotted #f59e0b"></div> Webhook (async)</div>
+    <div style="display:flex;align-items:center;gap:4px"><div style="width:30px;border-top:2px dotted #8b5cf6"></div> Kafka Notification</div>
+    <div style="display:flex;align-items:center;gap:4px"><div style="width:30px;border-top:2px solid #ef4444"></div> Void / Cancel</div>
+  </div>
+
+  <!-- Happy Path -->
+  <div class="card" style="margin-bottom:1.2rem">
+    <h3>Happy Path — Full 11-Step Flow</h3>
   <div class="seq-box" style="padding:1rem .5rem">
-    <svg viewBox="0 0 900 1180" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:900px;margin:0 auto;display:block;font-family:Inter,-apple-system,sans-serif">
+    <svg viewBox="0 0 900 1280" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:900px;margin:0 auto;display:block;font-family:Inter,-apple-system,sans-serif">
       <!-- Actor boxes -->
       <rect x="65" y="10" width="130" height="36" rx="6" fill="rgba(139,92,246,.12)" stroke="rgba(139,92,246,.35)"/>
       <text x="130" y="33" text-anchor="middle" fill="#8b5cf6" font-size="12" font-weight="600">Downstream</text>
@@ -688,6 +700,92 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
         <marker id="arrowBlue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#3b82f6"/></marker>
         <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto"><path d="M8,0 L0,3 L8,6" fill="#10b981"/></marker>
         <marker id="arrowPurple" markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto"><path d="M8,0 L0,3 L8,6" fill="#8b5cf6"/></marker>
+      </defs>
+    </svg>
+  </div>
+  </div>
+
+  <!-- Void / Cancel Flow -->
+  <div class="card">
+    <h3>Void Flow — Cancel at Any Point</h3>
+    <div style="font-size:.78rem;color:var(--dim);margin-bottom:.8rem">
+      Downstream sends a single <strong>VOID</strong> request. The orchestrator determines which Enigio cleanup actions are needed based on how far the flow progressed.
+    </div>
+    <svg viewBox="0 0 900 480" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:900px;margin:0 auto;display:block;font-family:Inter,-apple-system,sans-serif">
+      <!-- Actors -->
+      <rect x="65" y="10" width="130" height="36" rx="6" fill="rgba(139,92,246,.12)" stroke="rgba(139,92,246,.35)"/>
+      <text x="130" y="33" text-anchor="middle" fill="#8b5cf6" font-size="12" font-weight="600">Downstream</text>
+      <rect x="355" y="10" width="190" height="36" rx="6" fill="rgba(59,130,246,.12)" stroke="rgba(59,130,246,.35)"/>
+      <text x="450" y="33" text-anchor="middle" fill="#3b82f6" font-size="12" font-weight="600">DIS Orchestrator</text>
+      <rect x="685" y="10" width="140" height="36" rx="6" fill="rgba(16,185,129,.12)" stroke="rgba(16,185,129,.35)"/>
+      <text x="755" y="33" text-anchor="middle" fill="#10b981" font-size="12" font-weight="600">Enigio API</text>
+
+      <!-- Lifelines -->
+      <line x1="130" y1="50" x2="130" y2="470" stroke="#2a3548" stroke-dasharray="6,4"/>
+      <line x1="450" y1="50" x2="450" y2="470" stroke="#2a3548" stroke-dasharray="6,4"/>
+      <line x1="755" y1="50" x2="755" y2="470" stroke="#2a3548" stroke-dasharray="6,4"/>
+
+      <!-- VOID Request -->
+      <line x1="135" y1="75" x2="445" y2="75" stroke="#ef4444" stroke-width="2" marker-end="url(#arrowRed)"/>
+      <text x="290" y="70" text-anchor="middle" fill="#ef4444" font-size="10" font-weight="700">POST /{id}/cancel  {"reason": "..."}</text>
+
+      <!-- Status check -->
+      <rect x="370" y="90" width="160" height="30" rx="4" fill="rgba(59,130,246,.06)" stroke="rgba(59,130,246,.2)"/>
+      <text x="450" y="108" text-anchor="middle" fill="#94a3b8" font-size="8">Check: is flow cancellable?</text>
+      <text x="450" y="118" text-anchor="middle" fill="#64748b" font-size="7">PENDING, IN_PROGRESS, WAITING_RETRY</text>
+
+      <!-- Set CANCELLING -->
+      <rect x="385" y="130" width="130" height="22" rx="3" fill="rgba(239,68,68,.08)" stroke="rgba(239,68,68,.3)"/>
+      <text x="450" y="145" text-anchor="middle" fill="#ef4444" font-size="9" font-weight="600">status = CANCELLING</text>
+
+      <!-- Group: Cancel handlers in reverse -->
+      <rect x="40" y="165" width="840" height="220" rx="6" fill="rgba(239,68,68,.02)" stroke="rgba(239,68,68,.15)"/>
+      <text x="55" y="183" fill="#ef4444" font-size="10" font-weight="700">@OnCancel handlers (reverse order)</text>
+
+      <!-- Cancel transfer (if step 11 completed) -->
+      <rect x="60" y="195" width="260" height="45" rx="4" fill="rgba(100,116,139,.04)" stroke="rgba(100,116,139,.15)"/>
+      <text x="70" y="210" fill="#94a3b8" font-size="8">If transferId exists:</text>
+      <line x1="455" y1="220" x2="750" y2="220" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+      <text x="600" y="215" text-anchor="middle" fill="#ef4444" font-size="8.5">DELETE /envelopes/{transferId}/transfer-by-email</text>
+      <line x1="750" y1="232" x2="455" y2="232" stroke="#10b981" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrowGreenSeq)"/>
+      <text x="600" y="228" text-anchor="middle" fill="#10b981" font-size="7">200 OK  |  400 if recipient already opened</text>
+
+      <!-- Invalidate envelope (if step 10 completed) -->
+      <rect x="60" y="248" width="260" height="40" rx="4" fill="rgba(100,116,139,.04)" stroke="rgba(100,116,139,.15)"/>
+      <text x="70" y="263" fill="#94a3b8" font-size="8">If envelopeTraceId exists:</text>
+      <line x1="455" y1="268" x2="750" y2="268" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+      <text x="600" y="263" text-anchor="middle" fill="#ef4444" font-size="8.5">POST /documents/{envId}/invalidate</text>
+      <line x1="750" y1="280" x2="455" y2="280" stroke="#10b981" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrowGreenSeq)"/>
+      <text x="600" y="276" text-anchor="middle" fill="#10b981" font-size="7">200 OK  |  400 if already invalidated (skip)</text>
+
+      <!-- Invalidate document (if step 2 completed) -->
+      <rect x="60" y="296" width="260" height="45" rx="4" fill="rgba(100,116,139,.04)" stroke="rgba(100,116,139,.15)"/>
+      <text x="70" y="311" fill="#94a3b8" font-size="8">If traceOriginalId exists:</text>
+      <line x1="455" y1="318" x2="750" y2="318" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+      <text x="600" y="313" text-anchor="middle" fill="#ef4444" font-size="8.5">POST /documents/{id}/invalidate {versionKey, comment}</text>
+      <line x1="750" y1="330" x2="455" y2="330" stroke="#10b981" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrowGreenSeq)"/>
+      <text x="600" y="326" text-anchor="middle" fill="#10b981" font-size="7">200 OK  |  404 not found (skip)  |  400 inTransit (cancel transfer first)</text>
+
+      <!-- Skip in-flight -->
+      <rect x="60" y="350" width="340" height="25" rx="4" fill="rgba(245,158,11,.06)" stroke="rgba(245,158,11,.2)"/>
+      <text x="70" y="367" fill="#f59e0b" font-size="8">Kafka retry messages in-flight → silently skipped (status check at execution)</text>
+
+      <!-- Set CANCELLED -->
+      <rect x="385" y="400" width="130" height="22" rx="3" fill="rgba(239,68,68,.1)" stroke="rgba(239,68,68,.4)"/>
+      <text x="450" y="415" text-anchor="middle" fill="#ef4444" font-size="9" font-weight="700">status = CANCELLED</text>
+
+      <!-- Notify downstream -->
+      <line x1="445" y1="435" x2="135" y2="435" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="3,3" marker-end="url(#arrowPurpleSeq)"/>
+      <text x="290" y="430" text-anchor="middle" fill="#8b5cf6" font-size="8.5">topic: FLOW_CANCELLED { reason, flowId }</text>
+
+      <!-- Response -->
+      <line x1="445" y1="455" x2="135" y2="455" stroke="#10b981" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowGreenSeq)"/>
+      <text x="290" y="450" text-anchor="middle" fill="#10b981" font-size="9">200 { status: "CANCELLED", message: "..." }</text>
+
+      <defs>
+        <marker id="arrowRed" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#ef4444"/></marker>
+        <marker id="arrowGreenSeq" markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto"><path d="M8,0 L0,3 L8,6" fill="#10b981"/></marker>
+        <marker id="arrowPurpleSeq" markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto"><path d="M8,0 L0,3 L8,6" fill="#8b5cf6"/></marker>
       </defs>
     </svg>
   </div>
