@@ -229,8 +229,9 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         if (flow.getSigningStartedAt() != null) {
             Duration elapsed = Duration.between(flow.getSigningStartedAt(), Instant.now());
             if (elapsed.toHours() >= signingExpiryHours) {
-                log.warn("[{}] Signing expired after {}h (threshold: {}h). Final status check.",
-                        flow.getId(), elapsed.toHours(), signingExpiryHours);
+                log.error("[{}] Signing expired after {}h (threshold: {}h). traceOriginalId={}, signers={}/{}",
+                        flow.getId(), elapsed.toHours(), signingExpiryHours,
+                        flow.getTraceOriginalId(), flow.getSignaturesReceived(), flow.getSignaturesRequired());
 
                 // One final poll before expiring
                 String finalStatus = enigioClient.getSigningStatus(flow.getTraceOriginalId());
@@ -251,7 +252,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         }
 
         // 3. Safety-net poll via GET /required-signatures/original/{id}/status
-        log.info("[{}] Safety-net poll: GET signing status. Current: {}/{} signed, elapsed: {}",
+        log.debug("[{}] Safety-net poll: GET signing status. Current: {}/{} signed, elapsed: {}",
                 flow.getId(), flow.getSignaturesReceived(), flow.getSignaturesRequired(),
                 flow.getSigningStartedAt() != null
                         ? Duration.between(flow.getSigningStartedAt(), Instant.now()).toMinutes() + "m"
@@ -353,7 +354,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
                     .findAllById(flow.getAdditionalDocumentIds());
 
             if (docs.size() != flow.getAdditionalDocumentIds().size()) {
-                log.warn("[{}] Expected {} additional documents but found {} in MongoDB — some may have been deleted",
+                log.error("[{}] Expected {} additional documents but found {} in MongoDB — some may have been deleted",
                         flow.getId(), flow.getAdditionalDocumentIds().size(), docs.size());
             }
 
@@ -383,8 +384,8 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
 
     @Step(order = 11, completedWhen = "transferId != null")
     public void transferDocument(EnigioInstrumentEntity flow) {
-        log.info("[{}] Transferring envelope {} to {}", flow.getId(),
-                flow.getEnvelopeTraceId(), flow.getRecipient().getEmail());
+        log.info("[{}] Transferring envelope {} to recipient", flow.getId(),
+                flow.getEnvelopeTraceId());
 
         String transferId = enigioClient.transferByEmail(
                 flow.getEnvelopeTraceId(),
@@ -449,7 +450,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
                     log.error("[{}] Failed to invalidate after transfer cancel: {}", flow.getId(), retryEx.getMessage());
                 }
             } else {
-                log.warn("[{}] Failed to invalidate document: {}", flow.getId(), msg);
+                log.error("[{}] Failed to invalidate document: {} traceOriginalId={}", flow.getId(), msg, flow.getTraceOriginalId());
             }
         }
     }
@@ -467,7 +468,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             enigioClient.invalidateDocument(flow.getEnvelopeTraceId(), flow.getEnvelopeVersionKey(),
                     "Envelope cancelled: flow voided");
         } catch (Exception e) {
-            log.warn("[{}] Failed to invalidate envelope: {}", flow.getId(), e.getMessage());
+            log.error("[{}] Failed to invalidate envelope: {} envelopeTraceId={}", flow.getId(), e.getMessage(), flow.getEnvelopeTraceId());
         }
     }
 
@@ -495,7 +496,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             } else if (msg.contains("404") || msg.contains("not found")) {
                 log.info("[{}] Transfer not found (already completed/cancelled) — skipping", flow.getId());
             } else {
-                log.warn("[{}] Failed to cancel transfer: {}", flow.getId(), msg);
+                log.error("[{}] Failed to cancel transfer: {} transferId={}", flow.getId(), msg, flow.getTransferId());
             }
         }
 

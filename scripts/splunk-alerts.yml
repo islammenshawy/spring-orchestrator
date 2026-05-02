@@ -1,0 +1,290 @@
+# =============================================================================
+# DIS Splunk Alert Definitions
+# =============================================================================
+#
+# Import into Splunk as saved searches or use as reference for alert configuration.
+# All searches assume index=dis_application sourcetype=json
+#
+# Severity levels:
+#   P1 — Page on-call immediately. Data loss or unrecoverable state.
+#   P2 — Alert team channel within 15 minutes. Degraded service.
+#   P3 — Review next business day. Operational concern.
+# =============================================================================
+
+alerts:
+
+  # ==================== P1 — CRITICAL (Page On-Call) ====================
+
+  - name: dis_vendor_unreachable
+    severity: P1
+    description: >
+      Enigio vendor API is returning 5xx or connection refused.
+      All in-flight flows will stall at the current vendor step.
+    search: >
+      index=dis_application level=ERROR
+      ("502 Bad Gateway" OR "503 Service Unavailable" OR "Connection refused" OR "Connection timed out")
+      | stats count by _time span=5m
+      | where count >= 3
+    threshold: 3 occurrences in 5 minutes
+    window: 5m
+    action: >
+      1. Check Enigio status page / contact vendor support
+      2. Verify mock-vendor health if in staging: curl http://mock-vendor:8081/actuator/health
+      3. Flows will auto-retry via Kafka — no immediate manual action needed
+      4. If vendor is down >1h, consider pausing new flow submissions
+
+  - name: dis_compensation_failed
+    severity: P1
+    description: >
+      A compensation or cancellation handler failed. The flow is in an inconsistent
+      state — the document may exist on Enigio but not be properly invalidated.
+    search: >
+      index=dis_application level=ERROR
+      ("Compensation failed" OR "Cancel handler failed" OR "Failed to invalidate after transfer cancel")
+    threshold: Any occurrence
+    window: realtime
+    action: >
+      1. Get instrumentId from log → GET /flows/enigio-instrument/{id}
+      2. Check vendor state → GET /vendor/enigio/documents/{traceOriginalId}?include=metadata
+      3. If document is not invalidated, manually invalidate via vendor API
+      4. Update flow status in MongoDB if needed
+
+  - name: dis_recipient_opened_envelope
+    severity: P1
+    description: >
+      Cancellation failed because recipient already opened the envelope.
+      Legal possession has transferred. Requires manual/legal process to resolve.
+    search: >
+      index=dis_application level=ERROR
+      "CANNOT CANCEL" "recipient already opened the envelope"
+    threshold: Any occurrence
+    window: realtime
+    action: >
+      1. This is a legal/business event — escalate to operations team
+      2. Document cannot be recalled once opened
+      3. Contact recipient if voiding is required (separate legal process)
+
+  - name: dis_notification_publish_failed
+    severity: P1
+    description: >
+      Failed to publish flow progress notification to Kafka.
+      Downstream systems will not receive phase completion events.
+    search: >
+      index=dis_application level=ERROR "Failed to publish notification"
+    threshold: Any occurrence
+    window: realtime
+    action: >
+      1. Check Kafka broker health: kafka-consumer-groups --bootstrap-server ...
+      2. Verify dis.instrument.notifications topic exists
+      3. Flow will still progress, but downstream won't know about phase changes
+      4. Downstream can poll GET /flows/enigio-instrument/{id}/approval-status
+
+  - name: dis_outbox_publish_failed
+    severity: P1
+    description: >
+      Outbox publisher failed to send event to Kafka. Message ordering may be affected.
+      Events will be retried on next poll cycle (500ms default).
+    search: >
+      index=dis_application level=ERROR "[Outbox] Failed to publish event"
+    threshold: 5 occurrences in 1 minute
+    window: 1m
+    action: >
+      1. Check Kafka broker connectivity
+      2. Verify broker disk space and replication health
+      3. Outbox will retry automatically — only alert if sustained
+
+  # ==================== P2 — HIGH (Alert Team Channel) ====================
+
+  - name: dis_dlt_message
+    severity: P2
+    description: >
+      A flow message exhausted all retry attempts and landed in the Dead Letter Topic.
+      The flow is stuck and requires manual investigation.
+    search: >
+      index=dis_application level=ERROR "[DLT]"
+    threshold: Any occurrence
+    window: realtime
+    action: >
+      1. Get flow ID from DLT message
+      2. Check flow status: GET /flows/enigio-instrument/{id}
+      3. Check vendor state: GET /vendor/enigio/documents/{traceOriginalId}
+      4. If retriable, replay by resetting flow status to IN_PROGRESS in MongoDB
+      5. If permanent, mark as FAILED and notify downstream
+
+  - name: dis_flow_failure_rate
+    severity: P2
+    description: >
+      Flow failure rate exceeds 5% over a 15-minute window.
+      Indicates systemic issue (vendor degraded, config error, schema drift).
+    search: >
+      index=dis_application "status" ("FAILED" OR "COMPLETED")
+      | stats count(eval(status="FAILED")) as failed, count as total by _time span=15m
+      | eval failure_rate=failed/total*100
+      | where failure_rate > 5
+    threshold: ">5% failure rate"
+    window: 15m
+    action: >
+      1. Check if failures are concentrated on one step (grep for step name)
+      2. Check vendor failure config: GET http://mock-vendor:8081/admin/failure-config
+      3. Check for deployment issues (new version, config change)
+
+  - name: dis_kafka_consumer_lag
+    severity: P2
+    description: >
+      Kafka consumer lag exceeds threshold. Flows are accumulating faster than processing.
+    search: >
+      index=dis_metrics kafka.consumer.coordinator.assigned.partitions > 0
+      kafka.consumer.records.lag.max > 1000
+      | stats max(kafka.consumer.records.lag.max) as max_lag by consumer_group
+      | where max_lag > 1000
+    threshold: "Lag > 1000 for 5 minutes"
+    window: 5m
+    action: >
+      1. Check DIS container CPU/memory — may need horizontal scaling
+      2. Check MongoDB latency — slow writes cause processing backlog
+      3. Consider adding more topic partitions + DIS instances
+      4. Check for stuck flows (gate steps waiting for approval)
+
+  - name: dis_mongodb_pool_exhausted
+    severity: P2
+    description: >
+      MongoDB connection pool wait queue is non-zero. Requests are queuing for connections.
+    search: >
+      index=dis_metrics mongodb.driver.pool.waitqueuesize > 0
+      | stats count by _time span=2m
+      | where count > 0
+    threshold: "Wait queue > 0 for 2 minutes"
+    window: 2m
+    action: >
+      1. Check MongoDB server load: db.serverStatus().connections
+      2. Increase pool size: spring.data.mongodb.maxPoolSize (default 100)
+      3. Check for slow queries: db.currentOp({secs_running: {$gt: 5}})
+      4. Verify indexes exist on dis_instrument_flows collection
+
+  - name: dis_deserialization_error
+    severity: P2
+    description: >
+      Kafka message deserialization failed. Indicates schema drift, corrupt message,
+      or version mismatch between producer and consumer.
+    search: >
+      index=dis_application level=ERROR "Deserialization failed"
+    threshold: Any occurrence
+    window: realtime
+    action: >
+      1. Check if a new DIS version was recently deployed
+      2. Compare message schema version with consumer expectations
+      3. Message is skipped — check if corresponding flow is stuck
+      4. If persistent, may need consumer code update or DLT replay
+
+  - name: dis_stale_flow_buildup
+    severity: P2
+    description: >
+      Large number of stale flows detected by the recovery service.
+      Indicates processing is stuck or consumer is not consuming.
+    search: >
+      index=dis_application "[Recovery] Found" "stale flows"
+      | rex "Found (?<count>\d+) stale flows"
+      | where count > 50
+    threshold: ">50 stale flows"
+    window: realtime
+    action: >
+      1. Check Kafka consumer group status
+      2. Verify DIS containers are running and healthy
+      3. Check for recent rebalances that may have caused gaps
+      4. Stale flows will be re-published automatically
+
+  # ==================== P3 — LOW (Review Next Business Day) ====================
+
+  - name: dis_signing_expired
+    severity: P3
+    description: >
+      Document signing ceremony expired — signers did not complete within the configured window.
+    search: >
+      index=dis_application level=ERROR "Signing expired after"
+      | stats count by _time span=1h
+      | where count > 3
+    threshold: ">3 per hour"
+    window: 1h
+    action: >
+      1. Check dis.signing.expiry-hours configuration (default 48h)
+      2. Verify signing emails were delivered (check sendSigningEmails step)
+      3. Contact signers if needed — business process issue, not technical
+
+  - name: dis_approval_expired
+    severity: P3
+    description: >
+      Downstream system did not approve the next phase within the configured window.
+    search: >
+      index=dis_application level=ERROR "approval expired"
+      | stats count by _time span=1h
+      | where count > 3
+    threshold: ">3 per hour"
+    window: 1h
+    action: >
+      1. Check dis.approval.expiry-hours configuration (default 72h)
+      2. Verify downstream consumer is processing notification topic
+      3. Check downstream system health — may not be calling POST /approve
+
+  - name: dis_rebalance_storm
+    severity: P3
+    description: >
+      Frequent Kafka consumer rebalances indicate unstable consumer group membership
+      (containers restarting, network issues, long GC pauses).
+    search: >
+      index=dis_application "onPartitionsAssigned"
+      | stats count by _time span=10m
+      | where count > 5
+    threshold: ">5 rebalances in 10 minutes"
+    window: 10m
+    action: >
+      1. Check container health and restart counts
+      2. Check GC pause times (jvm.gc.pause metric)
+      3. Verify session.timeout.ms and max.poll.interval.ms settings
+      4. Check network connectivity between DIS containers and Kafka brokers
+
+  - name: dis_webhook_registration_failed
+    severity: P3
+    description: >
+      Failed to register webhook with Enigio. Signing status will fall back to polling.
+    search: >
+      index=dis_application level=WARN "Failed to register webhook"
+    threshold: ">10 per hour"
+    window: 1h
+    action: >
+      1. Verify webhook callback URL is reachable from Enigio
+      2. Check dis.webhook.callback-url configuration
+      3. Polling fallback is automatic — no immediate data loss
+      4. Webhook reduces latency for signing completion detection
+
+# =============================================================================
+# Dashboard Queries (for Splunk dashboards, not alerts)
+# =============================================================================
+
+dashboards:
+
+  flow_throughput: >
+    index=dis_application "Flow started" OR "Flow completed" OR "Flow cancelled"
+    | timechart span=5m count by status
+
+  vendor_api_latency: >
+    index=dis_application source=mock-vendor http.server.requests
+    | stats avg(duration) p95(duration) max(duration) by uri
+
+  step_execution_time: >
+    index=dis_application "[Saga] Executing step"
+    | rex "\[Saga\] Executing step (?<step>\w+) for flow (?<flowId>\w+)"
+    | transaction flowId step maxspan=60s
+    | stats avg(duration) p95(duration) by step
+
+  dlt_backlog: >
+    index=dis_metrics kafka.consumer.records.lag
+    | where consumer_group="*-dlt"
+    | timechart span=1m max(lag) by topic
+
+  mongodb_health: >
+    index=dis_metrics (mongodb.driver.pool.size OR mongodb.driver.pool.checkedout OR mongodb.driver.pool.waitqueuesize)
+    | timechart span=30s avg(value) by metric_name
+
+  jvm_memory: >
+    index=dis_metrics jvm.memory.used
+    | timechart span=30s avg(value) by area

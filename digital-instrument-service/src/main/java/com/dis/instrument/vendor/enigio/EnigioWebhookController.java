@@ -98,8 +98,9 @@ public class EnigioWebhookController {
             @RequestBody Map<String, Object> payload) {
         String eventType = (String) payload.get("eventType");
         String traceOriginalId = (String) payload.get("traceOriginalId");
+        String messageId = (String) payload.getOrDefault("messageId", "unknown");
 
-        log.info("[webhook] Received {} for traceOriginalId={}", eventType, traceOriginalId);
+        log.info("[webhook] Received {} for traceOriginalId={} messageId={}", eventType, traceOriginalId, messageId);
 
         if (traceOriginalId == null || eventType == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "Missing traceOriginalId or eventType"));
