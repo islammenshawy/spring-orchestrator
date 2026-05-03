@@ -227,18 +227,32 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
-        // Step succeeded — clear retry state via partial $set.
-        // Uses updateFlowPartial (not saveFlow) to avoid overwriting lastCompletedStep
-        // which is set atomically by the CAS reply gate below.
+        // Step succeeded — clear retry state via $set (no @Version conflict).
         // Domain fields are already persisted by checkpoint() in the step handler.
-        var clearRetryFields = new java.util.HashMap<String, Object>();
-        clearRetryFields.put("retryCount", 0);
-        clearRetryFields.put("backoffSeconds", 0);
-        clearRetryFields.put("nextRetryAt", null);
-        clearRetryFields.put("errorMessage", null);
-        clearRetryFields.put("status", FlowStatus.IN_PROGRESS.name());
-        clearRetryFields.put("updatedAt", Instant.now());
-        updateFlowPartial(flow.getId(), clearRetryFields);
+        flow.setRetryCount(0);
+        flow.setBackoffSeconds(0);
+        flow.setNextRetryAt(null);
+        flow.setErrorMessage(null);
+        flow.setUpdatedAt(Instant.now());
+
+        // Save flow with version conflict retry.
+        // The reply consumer may have incremented the version via $set.
+        // On conflict: re-read latest version, copy it to our flow object, retry save.
+        // This preserves all domain fields set by the step handler.
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                saveFlow(flow);
+                break;
+            } catch (org.springframework.dao.OptimisticLockingFailureException e) {
+                log.debug("[Saga] Version conflict saving flow {} (attempt {}), retrying", flowId, attempt + 1);
+                F fresh = flowRepository.findById(flowId).orElse(null);
+                if (fresh instanceof com.orchestrator.starter.domain.AbstractFlow af
+                        && flow instanceof com.orchestrator.starter.domain.AbstractFlow afFlow) {
+                    afFlow.setVersion(af.getVersion());
+                    afFlow.setCurrentStep(af.getCurrentStep()); // reply may have advanced
+                }
+            }
+        }
 
         if (replyEnabled) {
             publishReply(flowId, stepName, "COMPLETED", null, serialize(flow));
