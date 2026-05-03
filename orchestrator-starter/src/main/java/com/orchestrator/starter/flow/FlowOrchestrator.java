@@ -171,20 +171,20 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                     stepName, group);
         }
 
-        // Layer 2 idempotency — skip if step already completed
+        // Layer 2 idempotency — skip if flow already advanced past this step
         if (handler.isAlreadyCompleted(flow)) {
             String currentStep = flow.getCurrentStep();
             if (currentStep != null && !currentStep.equals(stepName)) {
-                // Flow already advanced past this step — consume silently
                 log.debug("[Saga] Step {} completed, flow at {} — skipping", stepName, currentStep);
                 return;
             }
-            // Flow still at this step — advance (gate re-activation or duplicate)
-            // Cascade prevention: startFlow() uses outbox-only (no double-publish),
-            // and stale recovery filters pending outbox events.
-            log.info("[Saga] Step {} completed for flow {}, advancing", stepName, flowId);
-            markParallelStepCompleted(flow, stepName, handler);
-            return;
+            // Step completed but flow still here (gate re-activation or duplicate).
+            // Don't advance here — fall through and re-execute the step (no-op).
+            // The step handler's own guard returns immediately, publishReply fires,
+            // reply consumer advances exactly once via CAS. This eliminates the
+            // duplicate advancement path that caused 508 msgs/flow cascade.
+            log.debug("[Saga] Step {} already completed for flow {}, re-executing (no-op)",
+                    stepName, flowId);
         }
 
         flow.setStatus(FlowStatus.IN_PROGRESS);
