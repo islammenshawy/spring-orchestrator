@@ -614,6 +614,16 @@ class InstrumentFlowIntegrationTest {
                             .contentType(MediaType.APPLICATION_JSON).body(Map.of())
                             .retrieve().body(Map.class); } catch (Exception ignored) {}
                 }
+                // Fire signing webhook if parked at AWAIT_SIGNATURES
+                if ("AWAIT_SIGNATURES".equals(step) && flow.isSigningEmailsSent()
+                        && !"SIGNED".equals(flow.getSigningStatus()) && flow.getTraceOriginalId() != null) {
+                    try { rest.post().uri("/webhooks/enigio")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body(Map.of("messageId", java.util.UUID.randomUUID().toString(),
+                                    "traceOriginalId", flow.getTraceOriginalId(),
+                                    "eventType", "FULLY_SIGNED"))
+                            .retrieve().body(Map.class); } catch (Exception ignored) {}
+                }
                 if ("AWAIT_DELIVERY_APPROVAL".equals(step) && flow.isSigningNotified() && !flow.isDeliveryApproved()) {
                     // DON'T approve Gate 2 — we want to cancel here
                 }
