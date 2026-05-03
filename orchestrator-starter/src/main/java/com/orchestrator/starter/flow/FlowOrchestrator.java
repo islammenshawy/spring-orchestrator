@@ -111,26 +111,11 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             return f;
         }, flow);
 
-        // Publish to Kafka synchronously — message is in Kafka before we return
-        try {
-            StepCommandMessage cmd = StepCommandMessage.builder()
-                    .eventId(UUID.randomUUID().toString())
-                    .flowId(savedFlow.getId())
-                    .correlationId(savedFlow.getCorrelationId())
-                    .stepName(savedFlow.getCurrentStep())
-                    .flowType(flowType)
-                    .build();
-            // Use correlationId (UUID) as partition key for uniform distribution.
-            // MongoDB ObjectIds are sequential and hash poorly across partitions.
-            String partitionKey = savedFlow.getCorrelationId() != null
-                    ? savedFlow.getCorrelationId() : savedFlow.getId();
-            kafkaTemplate.send(commandTopic, partitionKey,
-                    objectMapper.writeValueAsString(cmd)).get();
-        } catch (Exception e) {
-            // Kafka publish failed — outbox publisher will pick it up (~500ms)
-            log.warn("[Saga] Direct Kafka publish failed for flow {}, outbox will retry: {}",
-                    savedFlow.getId(), e.getMessage());
-        }
+        // Outbox event (line 110) handles Kafka delivery via OutboxPublisher (~500ms).
+        // No direct kafkaTemplate.send() here — avoids double-publish cascade where
+        // both direct send and outbox produce messages for step 1, causing the consumer
+        // to process the duplicate as "already completed" → advance → write outbox for
+        // step 2 → cascade (measured: 1,116 msgs/flow instead of ~22).
 
         return savedFlow;
     }
@@ -188,15 +173,14 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
         // Layer 2 idempotency — skip if step already completed
         if (handler.isAlreadyCompleted(flow)) {
-            // Only advance if flow is still at this step (prevents infinite loop)
             String currentStep = flow.getCurrentStep();
             if (currentStep != null && !currentStep.equals(stepName)) {
-                log.debug("[Saga] Step {} already completed and flow already past it (at {}), skipping",
-                        stepName, currentStep);
+                // Flow already advanced past this step — consume silently
+                log.debug("[Saga] Step {} completed, flow at {} — skipping", stepName, currentStep);
                 return;
             }
-            log.info("[Saga] Step {} already completed for flow {}, advancing",
-                    stepName, flowId);
+            // Flow still at this step (e.g., approval just set the flag) — advance once
+            log.info("[Saga] Step {} completed for flow {}, advancing", stepName, flowId);
             markParallelStepCompleted(flow, stepName, handler);
             return;
         }
