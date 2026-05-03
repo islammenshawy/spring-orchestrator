@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DIS Load Test Report</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f172a;--sf:#1e293b;--bd:#334155;--tx:#e2e8f0;--dim:#94a3b8;--green:#10b981;--blue:#3b82f6;--amber:#f59e0b;--red:#ef4444;--purple:#a855f7}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--tx);line-height:1.6}
+.container{max-width:1400px;margin:0 auto;padding:20px}
+h1{font-size:1.8rem;margin-bottom:4px} h2{font-size:1.3rem;color:var(--blue);margin:30px 0 15px;border-bottom:1px solid var(--bd);padding-bottom:8px}
+h3{font-size:1rem;color:var(--dim);margin:20px 0 10px}
+.hero{background:linear-gradient(135deg,#1e3a5f,#0f172a);padding:30px;border-radius:12px;margin-bottom:30px;border:1px solid var(--bd)}
+.hero .sub{color:var(--dim);font-size:.9rem}
+.grid{display:grid;gap:20px} .grid-2{grid-template-columns:1fr 1fr} .grid-3{grid-template-columns:1fr 1fr 1fr} .grid-4{grid-template-columns:1fr 1fr 1fr 1fr}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:8px;padding:16px}
+.card .label{font-size:.75rem;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
+.card .value{font-size:1.8rem;font-weight:700;margin-top:4px}
+.card .value.green{color:var(--green)} .card .value.blue{color:var(--blue)} .card .value.amber{color:var(--amber)} .card .value.red{color:var(--red)}
+.chart-box{background:var(--sf);border:1px solid var(--bd);border-radius:8px;padding:16px;margin-bottom:20px}
+.chart-box canvas{max-height:300px}
+table{width:100%;border-collapse:collapse;font-size:.85rem;margin-bottom:20px}
+th{background:var(--sf);color:var(--dim);text-align:left;padding:8px 12px;border-bottom:2px solid var(--bd);font-weight:600;text-transform:uppercase;font-size:.7rem;letter-spacing:1px}
+td{padding:8px 12px;border-bottom:1px solid var(--bd)} tr:hover{background:rgba(59,130,246,.05)}
+code{background:var(--sf);padding:2px 6px;border-radius:4px;font-size:.85rem}
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:600}
+.tag-g{background:rgba(16,185,129,.15);color:var(--green)} .tag-b{background:rgba(59,130,246,.15);color:var(--blue)}
+.tag-a{background:rgba(245,158,11,.15);color:var(--amber)} .tag-r{background:rgba(239,68,68,.15);color:var(--red)}
+.env-table td:first-child{color:var(--dim);width:200px}
+@media(max-width:900px){.grid-2,.grid-3,.grid-4{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="hero">
+  <h1>DIS Load &amp; Stability Test Report</h1>
+  <p class="sub">2026-05-03 16:27 &nbsp;|&nbsp; Duration: 15min &nbsp;|&nbsp; 59 waves &times; 10 flows &nbsp;|&nbsp; 2 DIS instances + Nginx LB</p>
+</div>
+
+<!-- ===== Highlight Cards ===== -->
+<div class="grid grid-4" style="margin-bottom:30px">
+  <div class="card"><div class="label">Total Flows</div><div class="value blue">590</div></div>
+  <div class="card"><div class="label">Completed</div><div class="value green">303</div></div>
+  <div class="card"><div class="label">Throughput</div><div class="value amber">.25 flows/sec</div></div>
+  <div class="card"><div class="label">p50 Latency</div><div class="value">535869ms</div></div>
+</div>
+<div class="grid grid-4" style="margin-bottom:30px">
+  <div class="card"><div class="label">Failed (flaky vendor)</div><div class="value">0</div></div>
+  <div class="card"><div class="label">Cancelled (intentional)</div><div class="value">48</div></div>
+  <div class="card"><div class="label">Timed Out</div><div class="value red">239</div></div>
+  <div class="card"><div class="label">Wall Time</div><div class="value">1204s</div></div>
+</div>
+
+<h2>Environment</h2>
+<table class="env-table">
+  <tr><td>DIS</td><td>Spring Boot 4.0.5, Java 21, virtual threads — <strong>2 instances</strong> (8087 + 8088) + Nginx LB (8090)</td></tr>
+  <tr><td>Kafka</td><td>3-broker cluster (Confluent 7.5.0), acks=all, min.insync.replicas=2</td></tr>
+  <tr><td>MongoDB</td><td>7.0 standalone</td></tr>
+  <tr><td>Mock Vendor</td><td>Enigio trace:original v3.3 simulation (200-600ms latency per call)</td></tr>
+  <tr><td>Scenarios</td><td>40% happy path (PN/BoE/BoL) · 20% attachments · 10% additional docs · 10% cancel · 10% flaky · 10% vendor sync</td></tr>
+</table>
+
+<h2>Latency Distribution</h2>
+<table>
+  <tr><th>Min</th><th>p50</th><th>p95</th><th>p99</th><th>Max</th><th>Avg</th></tr>
+  <tr><td>11728ms</td><td><strong>535869ms</strong></td><td>892070ms</td><td>914792ms</td><td>929345ms</td><td>508214ms</td></tr>
+</table>
+
+<!-- ===== Charts ===== -->
+
+<h2>Throughput Over Time</h2>
+<div class="chart-box"><canvas id="waveChart"></canvas></div>
+
+<h2>Container CPU</h2>
+<div class="chart-box"><canvas id="cpuChart"></canvas></div>
+
+<h2>Container Memory (MiB)</h2>
+<div class="chart-box"><canvas id="memChart"></canvas></div>
+
+<h2>JVM Heap &amp; Non-Heap (MiB)</h2>
+<div class="chart-box"><canvas id="jvmChart"></canvas></div>
+
+<h2>JVM Live Threads</h2>
+<div class="chart-box"><canvas id="threadChart"></canvas></div>
+
+<h2>MongoDB Connection Pool (DIS Actuator)</h2>
+<div class="chart-box"><canvas id="mongoPoolChart"></canvas></div>
+
+<h2>MongoDB Server — Connections &amp; WiredTiger Cache</h2>
+<div class="grid grid-2">
+  <div class="chart-box"><canvas id="mongoConnChart"></canvas></div>
+  <div class="chart-box"><canvas id="mongoCacheChart"></canvas></div>
+</div>
+
+<h2>MongoDB OpCounters (cumulative)</h2>
+<div class="chart-box"><canvas id="mongoOpsChart"></canvas></div>
+
+<h2>Vendor API Calls</h2>
+<div class="chart-box"><canvas id="vendorChart"></canvas></div>
+
+<script>
+Chart.defaults.color='#94a3b8';
+Chart.defaults.borderColor='#334155';
+Chart.defaults.font.size=11;
+const line=(id,labels,datasets)=>new Chart(document.getElementById(id),{type:'line',data:{labels,datasets},options:{responsive:true,interaction:{intersect:false,mode:'index'},plugins:{legend:{position:'bottom'}},scales:{y:{beginAtZero:true}}}});
+const bar=(id,labels,data,color)=>new Chart(document.getElementById(id),{type:'bar',data:{labels,datasets:[{data,backgroundColor:color||'rgba(59,130,246,.6)',borderColor:'rgba(59,130,246,1)',borderWidth:1}]},options:{responsive:true,indexAxis:'y',plugins:{legend:{display:false}}}});
+
+// Throughput
+line('waveChart',["16:06:33","16:06:48","16:07:04","16:07:19","16:07:34","16:07:50","16:08:05","16:08:20","16:08:35","16:08:51","16:09:06","16:09:21","16:09:36","16:09:52","16:10:07","16:10:22","16:10:38","16:10:53","16:11:08","16:11:23","16:11:39","16:11:54","16:12:09","16:12:25","16:12:40","16:12:55","16:13:11","16:13:26","16:13:41","16:13:56","16:14:12","16:14:27","16:14:42","16:14:58","16:15:13","16:15:28","16:15:44","16:15:59","16:16:14","16:16:30","16:16:45","16:17:00","16:17:16","16:17:31","16:17:46","16:18:01","16:18:17","16:18:32","16:18:47","16:19:03","16:19:18","16:19:33","16:19:49","16:20:04","16:20:19","16:20:34","16:20:50","16:21:05","16:21:20",],[
+  {label:'Submitted',data:[0,10,20,30,40,50,60,70,80,90,100,110,120,130,140,150,160,170,180,190,200,210,220,230,240,250,260,270,280,290,300,310,320,330,340,350,360,370,380,390,400,410,420,430,440,450,460,470,480,490,500,510,520,530,540,550,560,570,580,],borderColor:'#3b82f6',tension:.3},
+  {label:'Completed',data:[0,2,8,13,20,25,28,32,35,40,47,55,60,66,69,75,78,85,88,90,96,101,106,111,116,117,121,129,137,140,143,151,158,166,171,175,180,184,190,196,203,208,215,222,233,237,242,252,259,265,278,282,291,300,309,312,318,325,330,],borderColor:'#10b981',tension:.3}
+]);
+
+// CPU
+line('cpuChart',["16:06:33","16:07:11","16:07:49","16:08:26","16:09:04","16:09:42","16:10:20","16:10:57","16:11:35","16:12:14","16:12:52","16:13:30","16:14:09","16:14:47","16:15:26","16:16:04","16:16:43","16:17:22","16:18:01","16:18:40","16:19:19","16:19:57","16:20:36","16:21:15","16:21:54","16:22:33","16:23:12","16:23:51","16:24:30","16:25:08","16:25:46","16:26:24",],[
+  {label:'DIS-1 CPU%',data:[33.0,60.4,29.4,38.3,30.4,23.1,30.4,72.6,30.3,74.9,12.8,35.8,6.1,61.1,9.2,65.6,85.8,19.3,66.1,9.0,28.6,65.6,101.4,69.9,23.7,36.8,31.7,44.5,5.6,8.8,16.3,18.9,],borderColor:'#3b82f6',tension:.3},
+  {label:'DIS-2 CPU%',data:[42.2,19.8,23.9,3.2,42.4,3.3,4.0,13.8,10.5,16.4,2.3,5.1,5.5,38.6,13.3,34.9,21.9,16.9,22.3,15.8,6.0,51.7,4.0,33.3,2.3,26.8,38.7,48.3,3.3,5.7,3.2,2.7,],borderColor:'#a855f7',tension:.3},
+  {label:'Kafka-1 CPU%',data:[7.4,7.4,3.9,10.2,6.6,6.7,9.2,14.5,7.0,6.6,2.3,10.2,5.0,15.1,3.1,6.8,13.7,3.8,5.4,2.6,9.7,9.2,98.9,4.7,15.6,20.6,29.7,23.8,1.8,2.6,6.5,1.7,],borderColor:'#f59e0b',tension:.3},
+  {label:'MongoDB CPU%',data:[30.2,8.2,6.7,9.8,19.0,45.9,51.3,50.5,28.6,67.5,4.4,21.4,3.3,76.0,19.1,102.5,98.0,8.6,69.1,49.4,26.7,94.1,103.4,118.1,22.7,16.0,11.1,47.0,37.2,2.0,4.7,4.9,],borderColor:'#10b981',tension:.3}
+]);
+
+// Memory
+line('memChart',["16:06:33","16:07:11","16:07:49","16:08:26","16:09:04","16:09:42","16:10:20","16:10:57","16:11:35","16:12:14","16:12:52","16:13:30","16:14:09","16:14:47","16:15:26","16:16:04","16:16:43","16:17:22","16:18:01","16:18:40","16:19:19","16:19:57","16:20:36","16:21:15","16:21:54","16:22:33","16:23:12","16:23:51","16:24:30","16:25:08","16:25:46","16:26:24",],[
+  {label:'DIS-1 MiB',data:[343552,381747,387789,392192,415232,473498,474931,475546,477389,477389,478106,478413,478618,479232,479642,480051,481075,481280,484557,484762,484864,485581,486298,486912,487322,487834,528077,470938,418918,421683,423117,425574,],borderColor:'#3b82f6',fill:true,backgroundColor:'rgba(59,130,246,.1)',tension:.3},
+  {label:'DIS-2 MiB',data:[347034,396186,401203,402432,402944,403866,404582,404685,431411,431514,431821,432230,432742,433254,433766,434586,435098,435712,436326,436634,436838,437453,437965,438374,438784,442163,515584,483738,455270,455987,456909,457523,],borderColor:'#a855f7',tension:.3}
+]);
+
+// JVM
+line('jvmChart',["16:06:33","16:07:11","16:07:49","16:08:26","16:09:04","16:09:42","16:10:20","16:10:57","16:11:35","16:12:14","16:12:52","16:13:30","16:14:09","16:14:47","16:15:26","16:16:04","16:16:43","16:17:22","16:18:01","16:18:40","16:19:19","16:19:57","16:20:36","16:21:15","16:21:54","16:22:33","16:23:12","16:23:51","16:24:30","16:25:08","16:25:46","16:26:24",],[
+  {label:'Heap MiB',data:[80,51,59,84,87,46,139,129,108,143,110,55,122,119,64,83,123,78,74,85,88,127,88,143,104,91,141,91,96,131,159,73,],borderColor:'#3b82f6',fill:true,backgroundColor:'rgba(59,130,246,.1)',tension:.3},
+  {label:'Non-Heap MiB',data:[135,152,145,143,144,146,147,148,150,151,151,152,152,153,154,154,155,155,156,157,157,157,158,158,159,159,160,160,160,160,160,160,],borderColor:'#f59e0b',tension:.3}
+]);
+
+// Threads
+line('threadChart',["16:06:33","16:07:11","16:07:49","16:08:26","16:09:04","16:09:42","16:10:20","16:10:57","16:11:35","16:12:14","16:12:52","16:13:30","16:14:09","16:14:47","16:15:26","16:16:04","16:16:43","16:17:22","16:18:01","16:18:40","16:19:19","16:19:57","16:20:36","16:21:15","16:21:54","16:22:33","16:23:12","16:23:51","16:24:30","16:25:08","16:25:46","16:26:24",],[
+  {label:'Live Threads',data:[99,113,122,121,123,122,126,125,124,123,125,124,125,124,127,126,125,124,126,125,124,123,125,124,122,121,120,118,117,116,115,115,],borderColor:'#a855f7',tension:.3}
+]);
+
+// MongoDB pool
+line('mongoPoolChart',["16:06:33","16:07:11","16:07:49","16:08:26","16:09:04","16:09:42","16:10:20","16:10:57","16:11:35","16:12:14","16:12:52","16:13:30","16:14:09","16:14:47","16:15:26","16:16:04","16:16:43","16:17:22","16:18:01","16:18:40","16:19:19","16:19:57","16:20:36","16:21:15","16:21:54","16:22:33","16:23:12","16:23:51","16:24:30","16:25:08","16:25:46","16:26:24",],[
+  {label:'Pool Size',data:[3,3,5,5,5,5,5,5,5,5,5,5,5,6,7,7,7,7,7,7,7,8,8,8,9,9,9,9,9,9,9,9,],borderColor:'#3b82f6',tension:.3},
+  {label:'Checked Out',data:[0,1,0,1,0,0,0,1,3,0,0,0,2,0,1,0,1,0,1,0,0,2,0,1,1,2,0,1,0,0,0,0,],borderColor:'#ef4444',tension:.3}
+]);
+
+// MongoDB connections
+line('mongoConnChart',["16:06:33","16:07:11","16:07:49","16:08:26","16:09:04","16:09:42","16:10:20","16:10:57","16:11:35","16:12:14","16:12:52","16:13:30","16:14:09","16:14:47","16:15:26","16:16:04","16:16:43","16:17:22","16:18:01","16:18:40","16:19:19","16:19:57","16:20:36","16:21:15","16:21:54","16:22:33","16:23:12","16:23:51","16:24:30","16:25:08","16:25:46","16:26:24",],[
+  {label:'Current Connections',data:[18,19,21,22,21,22,22,21,21,21,21,20,22,22,22,23,24,24,23,24,22,25,25,25,26,24,25,26,25,26,26,26,],borderColor:'#10b981',tension:.3}
+]);
+
+// WiredTiger cache
+line('mongoCacheChart',["16:06:33","16:07:11","16:07:49","16:08:26","16:09:04","16:09:42","16:10:20","16:10:57","16:11:35","16:12:14","16:12:52","16:13:30","16:14:09","16:14:47","16:15:26","16:16:04","16:16:43","16:17:22","16:18:01","16:18:40","16:19:19","16:19:57","16:20:36","16:21:15","16:21:54","16:22:33","16:23:12","16:23:51","16:24:30","16:25:08","16:25:46","16:26:24",],[
+  {label:'Cache MiB',data:[0.3,2.2,3.8,8.0,11.6,16.5,21.5,26.9,35.3,41.6,52.0,63.1,70.8,76.0,38.8,71.3,86.0,99.2,111.3,79.5,111.4,128.6,129.0,146.3,147.0,149.0,140.7,145.7,149.1,149.3,149.7,149.7,],borderColor:'#f59e0b',fill:true,backgroundColor:'rgba(245,158,11,.1)',tension:.3}
+]);
+
+// MongoDB ops
+line('mongoOpsChart',["16:06:33","16:07:11","16:07:49","16:08:26","16:09:04","16:09:42","16:10:20","16:10:57","16:11:35","16:12:14","16:12:52","16:13:30","16:14:09","16:14:47","16:15:26","16:16:04","16:16:43","16:17:22","16:18:01","16:18:40","16:19:19","16:19:57","16:20:36","16:21:15","16:21:54","16:22:33","16:23:12","16:23:51","16:24:30","16:25:08","16:25:46","16:26:24",],[
+  {label:'Insert',data:[15,37,75,97,135,157,189,217,244,277,310,337,364,397,435,457,495,517,555,577,615,637,675,697,708,708,708,708,708,708,708,708,],borderColor:'#10b981',tension:.3},
+  {label:'Query',data:[168,2420,7222,14952,25128,37308,51684,67071,86493,107824,132632,159112,182822,213563,246815,280098,318605,357560,402727,445570,487735,537192,584725,632208,684444,692046,699252,705877,711541,715592,719728,723849,],borderColor:'#3b82f6',tension:.3},
+  {label:'Update',data:[224,4615,12645,26094,41850,60260,82588,105586,136564,168483,207225,247824,280387,324526,372843,422962,479394,534697,603036,662994,715547,782235,850939,920691,991895,1005669,1021820,1035582,1044916,1045036,1045304,1045400,],borderColor:'#f59e0b',tension:.3}
+]);
+
+// Vendor API
+bar('vendorChart',["documents","documents/{traceOriginalId}/amend","documents/{traceOriginalId}/invalidate","documents/validate","documents/{traceOriginalId}","documents/{traceOriginalId}/metadata","documents/{traceOriginalId}/technical-details/latest","required-signatures/original/{traceOriginalId}","required-signatures/send-sign-emails","required-signatures/original/{traceOriginalId}/status","notifications/webhooks","envelopes/drafts","envelopes/drafts/{draftId}/seal","envelopes/{traceOriginalId}/transfer-by-email","envelopes/drafts/{draftId}/additional-documents",],[1147,118,48,542,33,66,66,575,542,717,542,542,542,542,59,]);
+</script>
+</div>
+</body>
+</html>
