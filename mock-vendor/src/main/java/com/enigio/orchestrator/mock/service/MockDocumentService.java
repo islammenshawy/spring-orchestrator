@@ -363,25 +363,28 @@ public class MockDocumentService {
         Thread.startVirtualThread(() -> {
             try {
                 Thread.sleep(3000); // Simulate recipient reviewing + accepting after 3s
+                log.info("Simulating TRANSFER acceptance for envelope {} ({} webhook(s) registered)",
+                        envelopeTraceId, registeredWebhooks.size());
                 var webClient = org.springframework.web.reactive.function.client.WebClient.create();
-                for (String url : registeredWebhooks.stream()
-                        .map(w -> (String) w.get("url")).filter(u -> u != null).toList()) {
+                for (Map<String, Object> webhook : registeredWebhooks) {
+                    String url = (String) webhook.get("url");
+                    if (url == null) continue;
                     try {
                         webClient.post().uri(url)
-                                .bodyValue(java.util.Map.of(
+                                .bodyValue(Map.of(
                                         "messageId", UUID.randomUUID().toString(),
                                         "traceOriginalId", envelopeTraceId,
                                         "eventType", "TRANSFER",
                                         "timestamp", java.time.Instant.now().toString()
                                 ))
                                 .retrieve().bodyToMono(String.class).block();
-                        log.info("Sent TRANSFER webhook for envelope {} to {}", envelopeTraceId, url);
+                        log.info("Webhook fired: TRANSFER → {} for {}", url, envelopeTraceId);
                     } catch (Exception e) {
                         log.warn("Transfer webhook failed to {}: {}", url, e.getMessage());
                     }
                 }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                log.error("Transfer webhook simulation failed for {}: {}", envelopeTraceId, e.getMessage());
             }
         });
     }

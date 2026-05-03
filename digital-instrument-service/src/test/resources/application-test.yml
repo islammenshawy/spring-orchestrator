@@ -18,7 +18,7 @@ orchestrator:
     initial-interval-ms: 1000
     multiplier: 1.5
     max-interval-ms: 5000
-    max-attempts: 20         # high enough for gate steps to survive approval delay
+    max-attempts: 10
     jitter-factor: 0.2
 
 dis:
