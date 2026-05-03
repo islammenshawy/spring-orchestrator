@@ -179,12 +179,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 return;
             }
             // Step completed but flow still here (gate re-activation or duplicate).
-            // Don't advance here — fall through and re-execute the step (no-op).
-            // The step handler's own guard returns immediately, publishReply fires,
-            // reply consumer advances exactly once via CAS. This eliminates the
-            // duplicate advancement path that caused 508 msgs/flow cascade.
-            log.debug("[Saga] Step {} already completed for flow {}, re-executing (no-op)",
-                    stepName, flowId);
+            // Fall through to execute — step handlers are idempotent.
         }
 
         flow.setStatus(FlowStatus.IN_PROGRESS);
@@ -262,7 +257,6 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         if (replyEnabled) {
             publishReply(flowId, stepName, "COMPLETED", null, serialize(flow));
         } else {
-            // Inline mode: advance in same thread
             markParallelStepCompleted(flow, stepName, handler);
         }
 
