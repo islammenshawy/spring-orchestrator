@@ -1,0 +1,21 @@
+timestamp,container,cpu,mem_usage,mem_pct,net_io,block_io,pids
+23:30:32,spring_orchestrator-nginx-1,0.88%,14.55MiB / 7.653GiB,0.19%,35.6kB / 34.3kB,3.12MB / 4.1kB,15
+23:30:32,spring_orchestrator-dashboard-1,0.37%,266.6MiB / 7.653GiB,3.40%,2.48MB / 159kB,43.6MB / 918kB,67
+23:30:32,spring_orchestrator-digital-instrument-service-2-1,94.96%,373.1MiB / 7.653GiB,4.76%,220MB / 33.7MB,28.6MB / 164kB,123
+23:30:32,spring_orchestrator-digital-instrument-service-1,205.31%,422.1MiB / 7.653GiB,5.39%,1.02GB / 211MB,27MB / 176kB,124
+23:30:32,spring_orchestrator-kafka-2-1,26.46%,550.9MiB / 7.653GiB,7.03%,211MB / 4.72MB,4.57MB / 26.5MB,87
+23:30:32,spring_orchestrator-kafka-1-1,39.12%,875.1MiB / 7.653GiB,11.17%,218MB / 1.65GB,4.75MB / 136MB,88
+23:30:32,spring_orchestrator-kafka-3-1,27.57%,721.6MiB / 7.653GiB,9.21%,213MB / 8.4MB,5.19MB / 136MB,91
+23:30:32,spring_orchestrator-mongodb-1,21.00%,177.1MiB / 7.653GiB,2.26%,30.7MB / 11.9MB,63.6MB / 24.9MB,49
+23:30:32,spring_orchestrator-zookeeper-1,0.12%,123.1MiB / 7.653GiB,1.57%,162kB / 160kB,36.7MB / 1.14MB,75
+23:30:32,spring_orchestrator-mock-vendor-1,19.94%,245MiB / 7.653GiB,3.13%,37.9kB / 33.5kB,56.8MB / 131kB,46
+23:46:20,spring_orchestrator-nginx-1,0.00%,14.55MiB / 7.653GiB,0.19%,35.6kB / 34.3kB,3.12MB / 4.1kB,15
+23:46:20,spring_orchestrator-dashboard-1,0.46%,266.6MiB / 7.653GiB,3.40%,2.49MB / 164kB,43.6MB / 930kB,67
+23:46:20,spring_orchestrator-digital-instrument-service-2-1,17.55%,399.1MiB / 7.653GiB,5.09%,531MB / 55.6MB,28.6MB / 180kB,131
+23:46:20,spring_orchestrator-digital-instrument-service-1,28.60%,456.8MiB / 7.653GiB,5.83%,2.53GB / 519MB,27MB / 193kB,135
+23:46:20,spring_orchestrator-kafka-2-1,5.65%,1009MiB / 7.653GiB,12.87%,502MB / 9.55MB,4.57MB / 449MB,87
+23:46:20,spring_orchestrator-kafka-1-1,16.92%,1.006GiB / 7.653GiB,13.15%,528MB / 4.06GB,5.28MB / 413MB,87
+23:46:20,spring_orchestrator-kafka-3-1,9.56%,1.007GiB / 7.653GiB,13.15%,519MB / 13.3MB,5.19MB / 430MB,91
+23:46:20,spring_orchestrator-mongodb-1,9.09%,231MiB / 7.653GiB,2.95%,53.6MB / 24.9MB,112MB / 40.8MB,50
+23:46:20,spring_orchestrator-zookeeper-1,0.15%,130.3MiB / 7.653GiB,1.66%,164kB / 161kB,44.6MB / 1.15MB,75
+23:46:20,spring_orchestrator-mock-vendor-1,0.27%,277.5MiB / 7.653GiB,3.54%,170kB / 223kB,60.6MB / 147kB,66

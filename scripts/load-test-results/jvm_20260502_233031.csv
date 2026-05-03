@@ -1,0 +1,3 @@
+timestamp,heap_bytes,nonheap_bytes,gc_pause_count,live_threads
+23:30:32,83342944,137545424,92.0,99.0
+23:46:20,103620184,158227624,200.0,111.0
