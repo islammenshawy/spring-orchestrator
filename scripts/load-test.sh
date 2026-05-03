@@ -67,13 +67,17 @@ log()  { echo "[$(date +%H:%M:%S)] $*"; }
 now_ms() { python3 -c "import time; print(int(time.time()*1000))"; }
 
 # Load balancer target — nginx distributes across DIS instances
+SUBMIT_TARGET=""
 submit_url() {
-    # Use nginx LB if available, else fall back to DIS-1 direct
-    if curl -s -o /dev/null -w "%{http_code}" "$DIS_LB/actuator/health" 2>/dev/null | grep -q "200"; then
-        echo "$DIS_LB"
-    else
-        echo "$DIS_URL_1"
+    # Cache: check LB once, reuse for all calls
+    if [ -z "$SUBMIT_TARGET" ]; then
+        if curl -s -o /dev/null -w "%{http_code}" -m 2 "$DIS_LB/actuator/health" 2>/dev/null | grep -q "200"; then
+            SUBMIT_TARGET="$DIS_LB"
+        else
+            SUBMIT_TARGET="$DIS_URL_1"
+        fi
     fi
+    echo "$SUBMIT_TARGET"
 }
 
 # ===== Service helpers =====
@@ -382,7 +386,8 @@ while [ "$(date +%s)" -lt "$END_EPOCH" ]; do
 
     TOTAL_SUBMITTED=$((TOTAL_SUBMITTED + WAVE_SIZE))
 
-    # Between waves: exercise new endpoints under load
+    # Between waves: exercise new endpoints (every 5th wave to reduce overhead)
+    if [ $((WAVE_NUM % 5)) -eq 0 ]; then
     # 1. Upload additional documents (5 concurrent)
     for j in $(seq 1 5); do
         (
@@ -423,7 +428,8 @@ while [ "$(date +%s)" -lt "$END_EPOCH" ]; do
         ) &
     fi
 
-    # Don't wait for background endpoint calls — they log latencies independently
+    fi  # end of every-5th-wave endpoint exercise
+
     sleep "$WAVE_INTERVAL"
 done
 
