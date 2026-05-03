@@ -186,9 +186,16 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                     stepName, group);
         }
 
-        // Layer 2 idempotency
+        // Layer 2 idempotency — skip if step already completed
         if (handler.isAlreadyCompleted(flow)) {
-            log.info("[Saga] Step {} already completed for flow {}, marking parallel + advancing",
+            // Only advance if flow is still at this step (prevents infinite loop)
+            String currentStep = flow.getCurrentStep();
+            if (currentStep != null && !currentStep.equals(stepName)) {
+                log.debug("[Saga] Step {} already completed and flow already past it (at {}), skipping",
+                        stepName, currentStep);
+                return;
+            }
+            log.info("[Saga] Step {} already completed for flow {}, advancing",
                     stepName, flowId);
             markParallelStepCompleted(flow, stepName, handler);
             return;
