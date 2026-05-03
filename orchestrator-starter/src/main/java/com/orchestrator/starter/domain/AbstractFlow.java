@@ -60,9 +60,5 @@ public abstract class AbstractFlow implements OrchestratorFlow {
 
     private Set<String> completedParallelSteps = new HashSet<>();
 
-    /** Tracks the last step that successfully published a reply.
-     *  Used as an atomic CAS gate to prevent duplicate reply publishing. */
-    private String lastCompletedStep;
-
     private Instant createdAt = Instant.now();
 }

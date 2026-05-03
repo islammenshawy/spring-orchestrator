@@ -254,30 +254,6 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
-        // Atomic CAS reply gate: only publish reply if this step hasn't already
-        // been completed by another consumer. Uses MongoDB atomic update — no TOCTOU race.
-        // First execution: lastCompletedStep != stepName → modifiedCount=1 → publish
-        // Duplicate: lastCompletedStep == stepName → modifiedCount=0 → skip
-        if (mongoTemplate != null && entityClass != null) {
-            long published = mongoTemplate.updateFirst(
-                    org.springframework.data.mongodb.core.query.Query.query(
-                            org.springframework.data.mongodb.core.query.Criteria
-                                    .where("_id").is(flowId)
-                                    .and("lastCompletedStep").ne(stepName)),
-                    new org.springframework.data.mongodb.core.query.Update()
-                            .set("lastCompletedStep", stepName),
-                    entityClass
-            ).getModifiedCount();
-
-            if (published == 0) {
-                log.debug("[Saga] Reply already published for step {} on flow {} — skipping",
-                        stepName, flowId);
-                logStep(flowId, stepName, "COMPLETED", 1,
-                        flowBefore, null, "duplicate (reply gate)", startedAt);
-                return;
-            }
-        }
-
         if (replyEnabled) {
             publishReply(flowId, stepName, "COMPLETED", null, serialize(flow));
         } else {
