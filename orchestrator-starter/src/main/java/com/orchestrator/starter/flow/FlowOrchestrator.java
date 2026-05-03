@@ -508,27 +508,47 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             return;
         }
 
-        // Advance to next step — partial update + outbox event.
-        // Dedup is handled upstream: in reply mode, only the reply consumer calls
-        // advanceToNextStep (command consumer skips via isAlreadyCompleted guard).
+        // Advance to next step — update MongoDB then direct-send to Kafka.
+        // Direct send (not outbox) eliminates the cascade where outbox publisher
+        // delivers a delayed duplicate → consumer re-advances → another outbox → loop.
+        // Crash safety: if send fails, StaleFlowRecoveryService re-publishes after 15 min.
         updateFlowPartial(flow.getId(), java.util.Map.of(
                 "currentStep", nextStep,
                 "updatedAt", Instant.now()));
 
-        // Write outbox event for the next step command.
-        F latest = flowRepository.findById(flow.getId()).orElse(flow);
-        latest.setCurrentStep(nextStep);
+        String partitionKey = flow.getCorrelationId() != null
+                ? flow.getCorrelationId() : flow.getId();
 
         List<String> stepsAtNextOrder = stepRegistry.getStepsAtSameOrder(nextStep);
-        if (stepsAtNextOrder.size() > 1) {
-            for (String parallelStep : stepsAtNextOrder) {
-                writeOutboxEvent(latest, parallelStep);
+        try {
+            if (stepsAtNextOrder.size() > 1) {
+                for (String parallelStep : stepsAtNextOrder) {
+                    publishStepDirect(flow, parallelStep, partitionKey);
+                }
+                log.info("[Saga] Published {} parallel steps for flow {}: {}",
+                        stepsAtNextOrder.size(), flow.getId(), stepsAtNextOrder);
+            } else {
+                publishStepDirect(flow, nextStep, partitionKey);
             }
-            log.info("[Saga] Published {} parallel steps for flow {}: {}",
-                    stepsAtNextOrder.size(), latest.getId(), stepsAtNextOrder);
-        } else {
-            writeOutboxEvent(latest);
+        } catch (Exception e) {
+            // Kafka send failed — StaleFlowRecoveryService will re-publish
+            log.warn("[Saga] Direct advance send failed for flow {} step {}: {}",
+                    flow.getId(), nextStep, e.getMessage());
         }
+    }
+
+    /** Direct publish to command topic — used by advanceToNextStep for exactly-once delivery. */
+    @SuppressWarnings("unchecked")
+    private void publishStepDirect(F flow, String stepName, String partitionKey) throws Exception {
+        StepCommandMessage cmd = StepCommandMessage.builder()
+                .eventId(UUID.randomUUID().toString())
+                .flowId(flow.getId())
+                .correlationId(flow.getCorrelationId())
+                .stepName(stepName)
+                .flowType(flowType)
+                .build();
+        kafkaTemplate.send(commandTopic, partitionKey,
+                objectMapper.writeValueAsString(cmd)).get();
     }
 
     /**

@@ -1,3 +1,0 @@
-timestamp,pool_size,pool_checkedout,pool_waitqueue,conn_current,conn_available,op_insert,op_query,op_update,op_command,wt_cache_bytes
-23:30:32,4.0,0.0,0.0,20,100280,24,4587,20083,1071,7207462
-23:46:20,4.0,0.0,0.0,19,100281,24,8776,37082,2990,10074697
