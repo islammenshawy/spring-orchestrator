@@ -60,5 +60,9 @@ public abstract class AbstractFlow implements OrchestratorFlow {
 
     private Set<String> completedParallelSteps = new HashSet<>();
 
+    /** Atomic reply gate: tracks the last step that published a reply.
+     *  Set via MongoDB CAS (ne check) to ensure exactly-once reply per step. */
+    private String lastCompletedStep;
+
     private Instant createdAt = Instant.now();
 }

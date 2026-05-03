@@ -255,13 +255,38 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
 
         if (replyEnabled) {
-            publishReply(flowId, stepName, "COMPLETED", null, serialize(flow));
+            // Atomic reply gate: only publish if this step hasn't already published.
+            // MongoDB CAS: set lastCompletedStep=stepName WHERE lastCompletedStep != stepName.
+            // First execution wins (modifiedCount=1). Duplicates get 0 and skip.
+            // Gate re-activation works: WaitingStepException doesn't set lastCompletedStep,
+            // so the first successful execution always matches.
+            boolean shouldPublish = true;
+            if (mongoTemplate != null && entityClass != null) {
+                long modified = mongoTemplate.updateFirst(
+                        org.springframework.data.mongodb.core.query.Query.query(
+                                org.springframework.data.mongodb.core.query.Criteria
+                                        .where("_id").is(flowId)
+                                        .and("lastCompletedStep").ne(stepName)),
+                        new org.springframework.data.mongodb.core.query.Update()
+                                .set("lastCompletedStep", stepName),
+                        entityClass
+                ).getModifiedCount();
+                shouldPublish = (modified > 0);
+            }
+
+            if (shouldPublish) {
+                publishReply(flowId, stepName, "COMPLETED", null, serialize(flow));
+                logStep(flowId, stepName, "COMPLETED", 1,
+                        flowBefore, includeFlowStateInLogs ? serialize(flow) : null, null, startedAt);
+            } else {
+                log.debug("[Saga] Reply gate: step {} already published for flow {} — skipping",
+                        stepName, flowId);
+            }
         } else {
             markParallelStepCompleted(flow, stepName, handler);
+            logStep(flowId, stepName, "COMPLETED", 1,
+                    flowBefore, includeFlowStateInLogs ? serialize(flow) : null, null, startedAt);
         }
-
-        logStep(flowId, stepName, "COMPLETED", 1,
-                flowBefore, includeFlowStateInLogs ? serialize(flow) : null, null, startedAt);
     }
 
     /**
