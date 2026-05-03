@@ -149,7 +149,7 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
 <section class="hero">
   <div class="badge badge-blue" style="margin-bottom:1.5rem">Integration Guide v3.3</div>
   <h1>Digital Instrument Service<br><span>Enigio trace:original</span></h1>
-  <p>One API call from your downstream system triggers an 11-step orchestrated flow across 3 business phases, 2 approval gates, webhook-driven signing, and the Enigio trace:original platform.</p>
+  <p>One API call from your downstream system triggers an 11-step orchestrated flow across 3 business phases, 3 event-driven gates (2 approval + transfer acceptance), webhook-driven signing, and the Enigio trace:original platform.</p>
   <div class="hero-links">
     <a href="#architecture" class="btn-p">Architecture</a>
     <a href="#kafka" class="btn-o">Kafka</a>
@@ -167,7 +167,7 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
 <section class="dark-section" id="architecture">
 <div class="container">
   <h2>Orchestrator <span>Architecture</span></h2>
-  <p class="sub">One API call in. Eleven steps executed. Three approval checkpoints. Full crash recovery.</p>
+  <p class="sub">One API call in. Eleven steps across 3 phases. 3 event-driven gates (approval × 2, transfer acceptance). Gate steps <strong>exit Kafka</strong> — re-activated by downstream approval, Enigio webhook, or expiry scheduler. 8 webhook events handled.</p>
 
   <div class="arch">
     <div class="arch-box" style="background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.25)">
@@ -199,9 +199,10 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
 
   <div class="feat-grid">
     <div class="feat"><h4>Transactional Outbox</h4><p>Every state change persisted atomically with its Kafka event. No message loss even if broker is down.</p></div>
-    <div class="feat"><h4>Webhook-Driven Signing</h4><p>Primary signal from Enigio webhooks (PARTIALLY_SIGNED, FULLY_SIGNED). Poll fallback + configurable expiry (48h).</p></div>
-    <div class="feat"><h4>Approval Gates</h4><p>Downstream notified via Kafka topic at each phase boundary. Flow pauses until POST /approve. Expiry after 72h.</p></div>
-    <div class="feat"><h4>Crash Recovery</h4><p>Stale flow scanner + WaitingFlowScheduler re-publish stuck flows. Idempotent steps prevent duplicate API calls.</p></div>
+    <div class="feat"><h4>Event-Driven Gates</h4><p>Gate steps <strong>exit Kafka entirely</strong> and park in MongoDB. Re-activated by: downstream approval API, Enigio webhook, or expiry scheduler. Kafka carries only active vendor work.</p></div>
+    <div class="feat"><h4>Full Webhook Coverage</h4><p>8 Enigio events: FULLY_SIGNED, PARTIALLY_SIGNED, SIGNATURE_REJECTED, TRANSFER, TRANSFER_REJECTED, CREATE, AMENDMENT, INVALIDATE. Transfer is a waiting gate — flow completes only when recipient accepts.</p></div>
+    <div class="feat"><h4>Approval + Transfer Gates</h4><p>3 gates: preparation approval (Gate 1), delivery approval (Gate 2), transfer acceptance (Gate 3). Each has configurable expiry. Downstream notified via Kafka at every boundary.</p></div>
+    <div class="feat"><h4>Crash Recovery</h4><p>Expiry scheduler (every 5 min) re-publishes parked flows. Idempotent steps prevent duplicate API calls. PII masked in all logs.</p></div>
   </div>
 </div>
 </section>
@@ -491,7 +492,7 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
 <section id="timeline">
 <div class="container">
   <h2>Document <span>Lifecycle</span></h2>
-  <p class="sub">11 steps across 3 business phases with 2 approval gates.</p>
+  <p class="sub">11 steps across 3 business phases with 3 event-driven gates. Gate steps <strong>exit Kafka</strong> and park in MongoDB — re-activated by approval API, Enigio webhook, or expiry scheduler.</p>
 
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
@@ -1014,27 +1015,35 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
       <div style="margin-bottom:8px">
         <span class="badge badge-purple" style="font-size:.7rem">KAFKA</span> <span style="font-family:monospace;font-size:.85rem;margin-left:6px">dis.instrument.notifications</span>
       </div>
-      <div style="font-size:.78rem;color:var(--dim);margin-bottom:8px">Consume this topic to track flow progress. Published at each phase boundary and on every individual signature.</div>
-      <div class="code"><span class="c">// After Group 1 completes:</span>
-{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"PREPARATION_COMPLETE"</span>, <span class="k">"status"</span>:<span class="s">"AWAITING_APPROVAL"</span>, <span class="k">"approveUrl"</span>:<span class="s">"/flows/enigio-instrument/{id}/approve"</span> }
+      <div style="font-size:.78rem;color:var(--dim);margin-bottom:8px">Consume this topic to track flow progress. Each notification includes <code>instrumentId</code>, <code>approveUrl</code>, <code>cancelUrl</code>, <code>vendorSyncUrl</code>, and all actionable links. Published at every gate and state change.</div>
+      <div class="code"><span class="c">// ━━━ GATE 1: Document Preparation Complete ━━━</span>
+{ <span class="k">"instrumentId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"PREPARATION_COMPLETE"</span>, <span class="k">"status"</span>:<span class="s">"AWAITING_APPROVAL"</span>,
+  <span class="k">"approveUrl"</span>:<span class="s">"http://dis:8087/flows/enigio-instrument/{id}/approve"</span> }
+<span class="c">  → Flow PARKS in DB. Call POST /approve to start signing.</span>
 
-<span class="c">// Each individual signature:</span>
-{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"SIGNATURE_RECEIVED"</span>, <span class="k">"status"</span>:<span class="s">"1/2 signed"</span> }
+<span class="c">// ━━━ SIGNING CEREMONY (Enigio webhook-driven) ━━━</span>
+{ <span class="k">"instrumentId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"SIGNATURE_RECEIVED"</span>, <span class="k">"status"</span>:<span class="s">"1/2 signed"</span> }
+{ <span class="k">"instrumentId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"ALL_SIGNATURES_COMPLETE"</span>, <span class="k">"status"</span>:<span class="s">"SIGNED"</span> }
 
-<span class="c">// All signatures done:</span>
-{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"ALL_SIGNATURES_COMPLETE"</span>, <span class="k">"status"</span>:<span class="s">"SIGNED"</span> }
+<span class="c">// ━━━ GATE 2: Signing Complete ━━━</span>
+{ <span class="k">"instrumentId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"SIGNING_COMPLETE"</span>, <span class="k">"status"</span>:<span class="s">"AWAITING_APPROVAL"</span> }
+<span class="c">  → Flow PARKS in DB. Call POST /approve to start delivery.</span>
 
-<span class="c">// After Group 2 completes:</span>
-{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"SIGNING_COMPLETE"</span>, <span class="k">"status"</span>:<span class="s">"AWAITING_APPROVAL"</span> }
+<span class="c">// ━━━ GATE 3: Transfer Initiated (Enigio webhook-driven) ━━━</span>
+{ <span class="k">"instrumentId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"TRANSFER_INITIATED"</span>, <span class="k">"status"</span>:<span class="s">"AWAITING_RECIPIENT"</span> }
+<span class="c">  → Envelope sent to recipient. Flow PARKS. Enigio TRANSFER webhook completes it.</span>
 
-<span class="c">// Signing expired (48h timeout):</span>
-{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"SIGNING_EXPIRED"</span>, <span class="k">"status"</span>:<span class="s">"1/2 signed before expiry"</span> }
+<span class="c">// ━━━ TRANSFER OUTCOME (Enigio webhook) ━━━</span>
+{ <span class="k">"instrumentId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"FLOW_COMPLETE"</span>, <span class="k">"status"</span>:<span class="s">"COMPLETED"</span> }
+<span class="c">  → Recipient accepted. Instrument delivered successfully.</span>
+{ <span class="k">"instrumentId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"TRANSFER_REJECTED"</span>, <span class="k">"status"</span>:<span class="s">"FAILED"</span> }
+<span class="c">  → Recipient rejected envelope. Compensation runs automatically.</span>
 
-<span class="c">// Approval expired (72h timeout):</span>
-{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"APPROVAL_EXPIRED"</span>, <span class="k">"status"</span>:<span class="s">"..."</span> }
-
-<span class="c">// Flow complete:</span>
-{ <span class="k">"flowId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"FLOW_COMPLETE"</span>, <span class="k">"status"</span>:<span class="s">"COMPLETED"</span>, <span class="k">"transferId"</span>:<span class="s">"..."</span> }</div>
+<span class="c">// ━━━ FAILURE / EXPIRY ━━━</span>
+{ <span class="k">"instrumentId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"SIGNING_EXPIRED"</span>, <span class="k">"status"</span>:<span class="s">"1/2 signed before expiry"</span> }
+{ <span class="k">"instrumentId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"APPROVAL_EXPIRED"</span>, <span class="k">"status"</span>:<span class="s">"..."</span> }
+{ <span class="k">"instrumentId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"TRANSFER_EXPIRED"</span>, <span class="k">"status"</span>:<span class="s">"Recipient did not accept within 72h"</span> }
+{ <span class="k">"instrumentId"</span>:<span class="s">"..."</span>, <span class="k">"phase"</span>:<span class="s">"SIGNATURE_REJECTED"</span>, <span class="k">"status"</span>:<span class="s">"REJECTED"</span> }</div>
     </div>
   </div>
 
@@ -1193,6 +1202,12 @@ curl "http://localhost:8087/vendor/enigio/documents/{TRACE_ID}?include=metadata,
       <tr><td>validationResult</td><td>String</td><td>VALID | NOT_VALID | OUTDATED</td></tr>
       <tr><td>envelopeTraceId</td><td>String</td><td>Sealed envelope trace:original ID</td></tr>
       <tr><td>transferId</td><td>String</td><td>Transfer tracking ID</td></tr>
+      <tr><td>transferInitiatedAt</td><td>Instant</td><td>When transfer was initiated (for expiry)</td></tr>
+      <tr><td>transferAccepted</td><td>boolean</td><td>Set by TRANSFER webhook (recipient accepted)</td></tr>
+      <tr><td>transferRejected</td><td>boolean</td><td>Set by TRANSFER_REJECTED webhook</td></tr>
+      <tr><td>vendorCreateConfirmed</td><td>boolean</td><td>CREATE webhook audit confirmation</td></tr>
+      <tr><td>vendorAmendConfirmed</td><td>boolean</td><td>AMENDMENT webhook audit confirmation</td></tr>
+      <tr><td>additionalDocumentIds</td><td>List&lt;String&gt;</td><td>MongoDB IDs of additional docs for envelope</td></tr>
     </tbody>
   </table>
 </div>
@@ -1204,8 +1219,10 @@ curl "http://localhost:8087/vendor/enigio/documents/{TRACE_ID}?include=metadata,
   <h2>Resilience <span>Guarantees</span></h2>
   <p class="sub">What happens when things go wrong.</p>
   <div class="res-grid">
-    <div class="res-card"><h4><div class="res-icon" style="background:rgba(59,130,246,.12);color:var(--blue)">&#8635;</div>Enigio 500/502/503</h4><p>RetryableStepException routes to Kafka retry topics with jittered exponential backoff (5s &rarr; 180s cap). After 8 attempts, message goes to DLT.</p></div>
-    <div class="res-card"><h4><div class="res-icon" style="background:rgba(245,158,11,.12);color:var(--amber)">&#9201;</div>Enigio Timeout</h4><p>WebClient responseTimeout (10s) triggers retry. The completedWhen guard prevents duplicate API calls if the first call succeeded but response was lost.</p></div>
+    <div class="res-card"><h4><div class="res-icon" style="background:rgba(59,130,246,.12);color:var(--blue)">&#8635;</div>Enigio 500/502/503</h4><p>RetryableStepException routes to Kafka retry topics with jittered exponential backoff (3s &rarr; 10s cap). After 20 attempts, message goes to DLT (24h retention).</p></div>
+    <div class="res-card"><h4><div class="res-icon" style="background:rgba(245,158,11,.12);color:var(--amber)">&#9201;</div>Enigio Timeout</h4><p>Seal/transfer: 30s per-operation timeout. Others: 10s global. completedWhen guard prevents duplicate API calls.</p></div>
+    <div class="res-card"><h4><div class="res-icon" style="background:rgba(139,92,246,.12);color:var(--purple)">&#9673;</div>Gate Steps</h4><p>WaitingStepException — flow <strong>exits Kafka</strong>, parks in MongoDB. Re-activated by: approval API call, Enigio webhook (TRANSFER, FULLY_SIGNED), or expiry scheduler (5 min). No Kafka polling waste.</p></div>
+    <div class="res-card"><h4><div class="res-icon" style="background:rgba(245,158,11,.12);color:var(--amber)">&#9203;</div>Transfer Rejected</h4><p>TRANSFER_REJECTED webhook from Enigio triggers NonRetryableStepException. Compensation runs (invalidate document). Downstream notified.</p></div>
     <div class="res-card"><h4><div class="res-icon" style="background:rgba(239,68,68,.12);color:var(--red)">&#10007;</div>Enigio 400/403</h4><p>NonRetryableStepException. Flow immediately FAILED. Downstream notified via notification topic with error details.</p></div>
     <div class="res-card"><h4><div class="res-icon" style="background:rgba(16,185,129,.12);color:var(--green)">&#8644;</div>Enigio 409 Conflict</h4><p>@RecoverOn(httpStatus=409) triggers skip recovery. Step marked completed using existing resource. No duplicate creation.</p></div>
     <div class="res-card"><h4><div class="res-icon" style="background:rgba(139,92,246,.12);color:var(--purple)">&#9889;</div>Container Crash</h4><p>Transactional Outbox ensures Kafka event persisted atomically. On restart, outbox publisher re-sends. Idempotent completedWhen guards prevent re-execution.</p></div>
