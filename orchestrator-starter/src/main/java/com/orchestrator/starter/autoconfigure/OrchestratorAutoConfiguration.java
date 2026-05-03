@@ -105,7 +105,8 @@ public class OrchestratorAutoConfiguration {
             ObjectMapper objectMapper,
             OrchestratorProperties props,
             KafkaTemplate kafkaTemplate,
-            @Autowired(required = false) TransactionTemplate transactionTemplate) {
+            @Autowired(required = false) TransactionTemplate transactionTemplate,
+            @Autowired(required = false) com.orchestrator.starter.domain.StepCompletionRepository stepCompletionRepository) {
 
         // Scan all @Flow classes
         Map<String, FlowDefinitionScanner.FlowTypeInfo> flowTypes =
@@ -121,7 +122,8 @@ public class OrchestratorAutoConfiguration {
                 FlowTypeDescriptor desc = buildDescriptor(
                         "default", Object.class, Object.class,
                         "", handlers, props, mongoTemplate, outboxRepository,
-                        stepLogRepository, objectMapper, kafkaTemplate, transactionTemplate);
+                        stepLogRepository, objectMapper, kafkaTemplate, transactionTemplate,
+                        stepCompletionRepository);
                 return new FlowTypeRegistry(List.of(desc));
             }
             throw new IllegalStateException(
@@ -136,7 +138,8 @@ public class OrchestratorAutoConfiguration {
                     info.flowType(), info.entityClass(), info.flowDefinitionClass(),
                     info.annotatedTopic(), info.handlers(),
                     props, mongoTemplate, outboxRepository, stepLogRepository,
-                    objectMapper, kafkaTemplate, transactionTemplate);
+                    objectMapper, kafkaTemplate, transactionTemplate,
+                    stepCompletionRepository);
             descriptors.add(desc);
         }
 
@@ -154,7 +157,8 @@ public class OrchestratorAutoConfiguration {
             OutboxEventRepository outboxRepository,
             StepExecutionLogRepository stepLogRepository,
             ObjectMapper objectMapper, KafkaTemplate kafkaTemplate,
-            TransactionTemplate transactionTemplate) {
+            TransactionTemplate transactionTemplate,
+            com.orchestrator.starter.domain.StepCompletionRepository stepCompletionRepository) {
 
         // Resolve topics: @Flow(topic=...) > YAML flows.{name}.topic > global
         OrchestratorProperties.FlowConfig flowConfig = props.getFlows().get(flowType);
@@ -208,6 +212,9 @@ public class OrchestratorAutoConfiguration {
             orchestrator.setEntityClass(entityClass);
         }
         orchestrator.setMongoTemplate(mongoTemplate);
+        if (stepCompletionRepository != null) {
+            orchestrator.setStepCompletionRepository(stepCompletionRepository);
+        }
 
         log.info("Flow '{}': topic={}, reply={}, dlt={}, steps={}, entity={}",
                 flowType, commandTopic,
