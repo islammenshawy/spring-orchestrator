@@ -498,24 +498,59 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         String nextStep = stepRegistry.getNextStep(completedStep);
 
         if (nextStep == null) {
-            // Flow complete — use partial $set to avoid @Version conflicts.
-            // Only updates status/updatedAt, preserves all domain fields.
-            updateFlowPartial(flow.getId(), java.util.Map.of(
-                    "status", FlowStatus.COMPLETED.name(),
-                    "updatedAt", Instant.now(),
-                    "completedParallelSteps", java.util.List.of()));
+            // Flow complete — atomic CAS: only complete if still at the completed step
+            if (mongoTemplate != null && entityClass != null) {
+                long mod = mongoTemplate.updateFirst(
+                        org.springframework.data.mongodb.core.query.Query.query(
+                                org.springframework.data.mongodb.core.query.Criteria
+                                        .where("_id").is(flow.getId())
+                                        .and("currentStep").is(completedStep)),
+                        new org.springframework.data.mongodb.core.query.Update()
+                                .set("status", FlowStatus.COMPLETED.name())
+                                .set("updatedAt", Instant.now())
+                                .set("completedParallelSteps", java.util.List.of()),
+                        entityClass
+                ).getModifiedCount();
+                if (mod == 0) return; // Already completed by another consumer
+            } else {
+                updateFlowPartial(flow.getId(), java.util.Map.of(
+                        "status", FlowStatus.COMPLETED.name(),
+                        "updatedAt", Instant.now(),
+                        "completedParallelSteps", java.util.List.of()));
+            }
             log.info("[Saga] Flow {} completed", flow.getId());
             return;
         }
 
-        // Advance to next step — update MongoDB then direct-send to Kafka.
-        // Direct send (not outbox) eliminates the cascade where outbox publisher
-        // delivers a delayed duplicate → consumer re-advances → another outbox → loop.
-        // Crash safety: if send fails, StaleFlowRecoveryService re-publishes after 15 min.
-        updateFlowPartial(flow.getId(), java.util.Map.of(
-                "currentStep", nextStep,
-                "updatedAt", Instant.now()));
+        // Atomic compare-and-swap: only advance if currentStep is still the completed step.
+        // If another consumer already advanced (reply consumer vs command consumer race),
+        // modifiedCount=0 and we skip — preventing the duplicate cascade.
+        long modified = 0;
+        if (mongoTemplate != null && entityClass != null) {
+            modified = mongoTemplate.updateFirst(
+                    org.springframework.data.mongodb.core.query.Query.query(
+                            org.springframework.data.mongodb.core.query.Criteria
+                                    .where("_id").is(flow.getId())
+                                    .and("currentStep").is(completedStep)),
+                    new org.springframework.data.mongodb.core.query.Update()
+                            .set("currentStep", nextStep)
+                            .set("updatedAt", Instant.now()),
+                    entityClass
+            ).getModifiedCount();
+        } else {
+            // Fallback for tests without MongoDB
+            updateFlowPartial(flow.getId(), java.util.Map.of(
+                    "currentStep", nextStep, "updatedAt", Instant.now()));
+            modified = 1;
+        }
 
+        if (modified == 0) {
+            log.debug("[Saga] Flow {} already advanced past {} — skipping duplicate send",
+                    flow.getId(), completedStep);
+            return;
+        }
+
+        // We won the race — publish next step command
         String partitionKey = flow.getCorrelationId() != null
                 ? flow.getCorrelationId() : flow.getId();
 
@@ -531,7 +566,6 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 publishStepDirect(flow, nextStep, partitionKey);
             }
         } catch (Exception e) {
-            // Kafka send failed — StaleFlowRecoveryService will re-publish
             log.warn("[Saga] Direct advance send failed for flow {} step {}: {}",
                     flow.getId(), nextStep, e.getMessage());
         }
