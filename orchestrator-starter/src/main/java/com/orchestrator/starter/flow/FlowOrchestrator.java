@@ -179,7 +179,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 log.debug("[Saga] Step {} completed, flow at {} — skipping", stepName, currentStep);
                 return;
             }
-            // Flow still at this step (e.g., approval just set the flag) — advance once
+            // Flow still at this step — advance (gate re-activation or duplicate)
+            // Cascade prevention: startFlow() uses outbox-only (no double-publish),
+            // and stale recovery filters pending outbox events.
             log.info("[Saga] Step {} completed for flow {}, advancing", stepName, flowId);
             markParallelStepCompleted(flow, stepName, handler);
             return;
@@ -507,13 +509,13 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
 
         // Advance to next step — partial update + outbox event.
-        // The partial update avoids @Version conflicts with the command consumer.
+        // Dedup is handled upstream: in reply mode, only the reply consumer calls
+        // advanceToNextStep (command consumer skips via isAlreadyCompleted guard).
         updateFlowPartial(flow.getId(), java.util.Map.of(
                 "currentStep", nextStep,
                 "updatedAt", Instant.now()));
 
         // Write outbox event for the next step command.
-        // Re-read the flow to get the latest state for serialization.
         F latest = flowRepository.findById(flow.getId()).orElse(flow);
         latest.setCurrentStep(nextStep);
 

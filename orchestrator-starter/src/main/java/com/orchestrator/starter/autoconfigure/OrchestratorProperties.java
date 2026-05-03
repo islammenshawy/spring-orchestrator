@@ -65,7 +65,10 @@ public class OrchestratorProperties {
     @Data
     public static class RecoveryConfig {
         private long scanIntervalMs = 30000;
-        private int staleThresholdMinutes = 5;
+        /** How long a flow must be IN_PROGRESS without updates before recovery.
+         *  Must exceed the retry budget (max-attempts × max-interval-ms) to avoid
+         *  re-publishing flows that are still in the retry pipeline. */
+        private int staleThresholdMinutes = 15;
 
         /** Where to store consumer offsets for cross-cluster failover.
          *  MONGO: store in MongoDB (replicated cross-DC) — recommended for multi-cluster

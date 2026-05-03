@@ -18,7 +18,10 @@ import java.util.UUID;
 /**
  * Recovers flows stuck in IN_PROGRESS after a container crash.
  * Re-publishes the current step command to Kafka.
- * Consumer-side idempotency + handler idempotency prevent duplicate execution.
+ *
+ * Guards against false positives:
+ * - Skips flows with pending outbox events (pipeline is just busy)
+ * - Uses configurable stale threshold (default 15 min, must exceed retry budget)
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -29,6 +32,7 @@ public class StaleFlowRecoveryService<F extends OrchestratorFlow> {
     private final ObjectMapper objectMapper;
     private final String commandTopic;
     private final int staleThresholdMinutes;
+    private final com.orchestrator.starter.outbox.OutboxEventRepository outboxRepository;
 
     @Scheduled(fixedDelayString = "${orchestrator.recovery.scan-interval-ms:30000}")
     public void recoverStaleFlows() {
@@ -38,8 +42,15 @@ public class StaleFlowRecoveryService<F extends OrchestratorFlow> {
         List<F> staleFlows = flowRepository
                 .findByStatusAndUpdatedAtBefore(FlowStatus.IN_PROGRESS, threshold);
 
+        // Filter out flows with pending outbox events — pipeline is just busy, not stuck
+        if (outboxRepository != null) {
+            staleFlows = staleFlows.stream()
+                    .filter(f -> outboxRepository.countByFlowIdAndPublishedFalse(f.getId()) == 0)
+                    .toList();
+        }
+
         if (!staleFlows.isEmpty()) {
-            log.info("[Recovery] Found {} stale flows", staleFlows.size());
+            log.info("[Recovery] Found {} truly stale flows (no pending outbox)", staleFlows.size());
         }
 
         for (F flow : staleFlows) {

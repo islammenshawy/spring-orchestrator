@@ -493,14 +493,14 @@ public class OrchestratorAutoConfiguration {
             FlowTypeRegistry registry,
             KafkaTemplate kafkaTemplate,
             ObjectMapper objectMapper,
-            OrchestratorProperties props) {
-        // Use first flow type's repo/topic for backward compat
-        // TODO: iterate all flow types in recovery scan
+            OrchestratorProperties props,
+            OutboxEventRepository outboxRepository) {
         FlowTypeDescriptor first = registry.getAll().iterator().next();
         return new StaleFlowRecoveryService(
                 first.getRepository(), kafkaTemplate, objectMapper,
                 first.getCommandTopic(),
-                props.getRecovery().getStaleThresholdMinutes());
+                props.getRecovery().getStaleThresholdMinutes(),
+                outboxRepository);
     }
 
     // ========== Backward-compatible singleton beans ==========
