@@ -422,8 +422,8 @@ class EnigioInstrumentFlowTest {
         }
 
         @Test
-        @DisplayName("step 9: transferDocument initiates transfer")
-        void transferDocument() {
+        @DisplayName("step 9: transferDocument initiates transfer then waits")
+        void transferDocument_initiatesAndWaits() {
             var e = entity();
             e.setEnvelopeTraceId("to_env_sealed");
             e.setEnvelopeVersionKey("env_v1");
@@ -432,13 +432,40 @@ class EnigioInstrumentFlowTest {
                     anyString(), anyString(), anyString()))
                     .thenReturn("xfr_001");
 
-            flow.transferDocument(e);
+            assertThatThrownBy(() -> flow.transferDocument(e))
+                    .isInstanceOf(WaitingStepException.class);
 
             assertThat(e.getTransferId()).isEqualTo("xfr_001");
-            verify(enigioClient).transferByEmail(
-                    eq("to_env_sealed"), eq("env_v1"),
-                    eq("ops@globalbank.com"), eq("Global Bank Ops"),
-                    anyString(), anyString());
+            assertThat(e.getTransferInitiatedAt()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("step 9: transferDocument completes when recipient accepts")
+        void transferDocument_completesOnAcceptance() {
+            var e = entity();
+            e.setEnvelopeTraceId("to_env_sealed");
+            e.setEnvelopeVersionKey("env_v1");
+            e.setTransferId("xfr_001");
+            e.setTransferAccepted(true);
+
+            flow.transferDocument(e);
+            // No exception = step completed
+            verify(notificationPublisher).notifyPhaseComplete(eq(e),
+                    eq("FLOW_COMPLETE"), eq("COMPLETED"));
+        }
+
+        @Test
+        @DisplayName("step 9: transferDocument fails when recipient rejects")
+        void transferDocument_failsOnRejection() {
+            var e = entity();
+            e.setEnvelopeTraceId("to_env_sealed");
+            e.setEnvelopeVersionKey("env_v1");
+            e.setTransferId("xfr_001");
+            e.setTransferRejected(true);
+
+            assertThatThrownBy(() -> flow.transferDocument(e))
+                    .isInstanceOf(NonRetryableStepException.class)
+                    .hasMessageContaining("rejected");
         }
     }
 }

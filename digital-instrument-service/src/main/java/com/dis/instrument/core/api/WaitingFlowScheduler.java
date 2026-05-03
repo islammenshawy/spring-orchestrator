@@ -40,7 +40,8 @@ public class WaitingFlowScheduler {
     private static final List<String> WAIT_STEPS = List.of(
             "AWAIT_PREPARATION_APPROVAL",
             "AWAIT_SIGNATURES",
-            "AWAIT_DELIVERY_APPROVAL"
+            "AWAIT_DELIVERY_APPROVAL",
+            "TRANSFER_DOCUMENT"
     );
 
     private final MongoTemplate mongoTemplate;

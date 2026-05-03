@@ -177,7 +177,9 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         // Register webhook for signature events (best-effort — polling is fallback)
         if (!flow.isWebhookRegistered()) {
             enigioClient.registerWebhook(webhookCallbackUrl,
-                    List.of("FULLY_SIGNED", "PARTIALLY_SIGNED", "SIGNATURE_REJECTED"));
+                    List.of("FULLY_SIGNED", "PARTIALLY_SIGNED", "SIGNATURE_REJECTED",
+                            "TRANSFER", "TRANSFER_REJECTED",
+                            "CREATE", "AMENDMENT", "INVALIDATE"));
             flow.setWebhookRegistered(true);
         }
 
@@ -383,25 +385,58 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         checkpoint(flow);
     }
 
-    @Step(order = 11, completedWhen = "transferId != null")
+    @Step(order = 11, completedWhen = "transferAccepted == true")
     public void transferDocument(EnigioInstrumentEntity flow) {
-        log.info("[{}] Transferring envelope {} to recipient", flow.getId(),
-                flow.getEnvelopeTraceId());
+        // Phase 1: Initiate transfer (if not already done)
+        if (flow.getTransferId() == null) {
+            log.info("[{}] Transferring envelope {} to recipient", flow.getId(),
+                    flow.getEnvelopeTraceId());
 
-        String transferId = enigioClient.transferByEmail(
-                flow.getEnvelopeTraceId(),
-                flow.getEnvelopeVersionKey(),
-                flow.getRecipient().getEmail(),
-                flow.getRecipient().getName(),
-                "Transfer of " + flow.getInstrumentType().toEnigioValue() + " — " + flow.getReference(),
-                "Please accept the enclosed " + flow.getInstrumentType().toEnigioValue()
-        );
+            String transferId = enigioClient.transferByEmail(
+                    flow.getEnvelopeTraceId(),
+                    flow.getEnvelopeVersionKey(),
+                    flow.getRecipient().getEmail(),
+                    flow.getRecipient().getName(),
+                    "Transfer of " + flow.getInstrumentType().toEnigioValue() + " — " + flow.getReference(),
+                    "Please accept the enclosed " + flow.getInstrumentType().toEnigioValue()
+            );
 
-        flow.setTransferId(transferId);
-        log.info("[{}] Transfer initiated: transferId={}", flow.getId(), transferId);
+            flow.setTransferId(transferId);
+            flow.setTransferInitiatedAt(Instant.now());
+            checkpoint(flow);
 
-        // Final notification — flow complete
-        notificationPublisher.notifyPhaseComplete(flow, "FLOW_COMPLETE", "COMPLETED");
+            log.info("[{}] Transfer initiated: transferId={}", flow.getId(), transferId);
+            notificationPublisher.notifyPhaseComplete(flow, "TRANSFER_INITIATED", "AWAITING_RECIPIENT");
+        }
+
+        // Phase 2: Check transfer outcome (set by TRANSFER / TRANSFER_REJECTED webhook)
+        if (flow.isTransferAccepted()) {
+            log.info("[{}] Transfer accepted by recipient", flow.getId());
+            notificationPublisher.notifyPhaseComplete(flow, "FLOW_COMPLETE", "COMPLETED");
+            return;
+        }
+
+        if (flow.isTransferRejected()) {
+            log.error("[{}] Transfer REJECTED by recipient. transferId={}", flow.getId(), flow.getTransferId());
+            notificationPublisher.notifyPhaseComplete(flow, "TRANSFER_REJECTED", "FAILED");
+            throw new NonRetryableStepException("Transfer rejected by recipient");
+        }
+
+        // Phase 3: Check transfer expiry
+        if (flow.getTransferInitiatedAt() != null) {
+            Duration elapsed = Duration.between(flow.getTransferInitiatedAt(), Instant.now());
+            if (elapsed.toHours() >= approvalExpiryHours) {
+                log.error("[{}] Transfer expired after {}h. transferId={}",
+                        flow.getId(), elapsed.toHours(), flow.getTransferId());
+                notificationPublisher.notifyPhaseComplete(flow, "TRANSFER_EXPIRED",
+                        "Recipient did not accept within " + approvalExpiryHours + "h");
+                throw new NonRetryableStepException(
+                        "Transfer expired after " + elapsed.toHours() + "h — recipient did not accept");
+            }
+        }
+
+        // Still waiting — park in DB, TRANSFER/TRANSFER_REJECTED webhook will re-activate
+        throw new WaitingStepException("Awaiting recipient acceptance for transfer " + flow.getTransferId());
     }
 
     // ===== Cancellation Handlers =====

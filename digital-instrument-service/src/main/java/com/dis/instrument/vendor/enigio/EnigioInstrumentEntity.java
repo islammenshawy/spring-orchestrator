@@ -103,4 +103,15 @@ public class EnigioInstrumentEntity extends AbstractFlow {
     private String envelopeTraceId;
     private String envelopeVersionKey;
     private String transferId;
+
+    // ===== Transfer gate — waiting for recipient acceptance =====
+
+    private java.time.Instant transferInitiatedAt;
+    private boolean transferAccepted;           // set by TRANSFER webhook
+    private boolean transferRejected;           // set by TRANSFER_REJECTED webhook
+
+    // ===== Vendor webhook audit confirmations =====
+
+    private boolean vendorCreateConfirmed;      // CREATE webhook received
+    private boolean vendorAmendConfirmed;        // AMENDMENT webhook received
 }

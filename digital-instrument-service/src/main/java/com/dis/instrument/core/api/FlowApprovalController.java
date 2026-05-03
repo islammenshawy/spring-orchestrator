@@ -284,7 +284,8 @@ public class FlowApprovalController {
             case "AWAIT_PREPARATION_APPROVAL" -> "awaiting_signing_approval";
             case "ADD_SIGNERS", "SEND_FOR_SIGNING", "AWAIT_SIGNATURES" -> "signing";
             case "AWAIT_DELIVERY_APPROVAL" -> "awaiting_delivery_approval";
-            case "VALIDATE_DOCUMENT", "CREATE_ENVELOPE", "TRANSFER_DOCUMENT" -> "delivery";
+            case "VALIDATE_DOCUMENT", "CREATE_ENVELOPE" -> "delivery";
+            case "TRANSFER_DOCUMENT" -> "awaiting_recipient";
             default -> step.toLowerCase();
         };
     }

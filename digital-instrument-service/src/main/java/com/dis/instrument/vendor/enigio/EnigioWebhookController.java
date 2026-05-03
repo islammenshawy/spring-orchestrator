@@ -181,7 +181,69 @@ public class EnigioWebhookController {
                 }
             }
 
-            default -> log.info("[webhook] Ignoring event type: {}", eventType);
+            // ===== Transfer events (Tier 1 — flow correctness) =====
+
+            case "TRANSFER" -> {
+                // Recipient accepted the envelope transfer — flow can complete
+                Query envelopeQuery = Query.query(Criteria.where("envelopeTraceId").is(traceOriginalId));
+                EnigioInstrumentEntity flow = mongoTemplate.findAndModify(envelopeQuery,
+                        new Update().set("transferAccepted", true),
+                        FindAndModifyOptions.options().returnNew(true),
+                        EnigioInstrumentEntity.class);
+
+                if (flow != null) {
+                    log.info("[webhook] TRANSFER accepted for instrument {} (envelope={})",
+                            flow.getId(), traceOriginalId);
+                    reactivateFlow(flow.getId(), "TRANSFER_DOCUMENT");
+                } else {
+                    log.info("[webhook] TRANSFER for unknown envelope {}", traceOriginalId);
+                }
+            }
+
+            case "TRANSFER_REJECTED" -> {
+                // Recipient rejected the envelope — flow will fail
+                Query envelopeQuery = Query.query(Criteria.where("envelopeTraceId").is(traceOriginalId));
+                EnigioInstrumentEntity flow = mongoTemplate.findAndModify(envelopeQuery,
+                        new Update().set("transferRejected", true),
+                        FindAndModifyOptions.options().returnNew(true),
+                        EnigioInstrumentEntity.class);
+
+                if (flow != null) {
+                    log.error("[webhook] TRANSFER_REJECTED for instrument {} (envelope={})",
+                            flow.getId(), traceOriginalId);
+                    notificationPublisher.notifyPhaseComplete(flow,
+                            "TRANSFER_REJECTED", "REJECTED");
+                    reactivateFlow(flow.getId(), "TRANSFER_DOCUMENT");
+                } else {
+                    log.warn("[webhook] TRANSFER_REJECTED for unknown envelope {}", traceOriginalId);
+                }
+            }
+
+            // ===== Audit events (Tier 2 — confirmation only) =====
+
+            case "CREATE" -> {
+                mongoTemplate.updateFirst(query,
+                        new Update().set("vendorCreateConfirmed", true),
+                        EnigioInstrumentEntity.class);
+                log.info("[webhook] CREATE confirmed for traceOriginalId={}", traceOriginalId);
+            }
+
+            case "AMENDMENT" -> {
+                mongoTemplate.updateFirst(query,
+                        new Update().set("vendorAmendConfirmed", true),
+                        EnigioInstrumentEntity.class);
+                log.info("[webhook] AMENDMENT confirmed for traceOriginalId={}", traceOriginalId);
+            }
+
+            case "INVALIDATE" -> {
+                log.info("[webhook] INVALIDATE confirmed for traceOriginalId={}", traceOriginalId);
+            }
+
+            case "TRANSFER_CANCELLED" -> {
+                log.info("[webhook] TRANSFER_CANCELLED confirmed for traceOriginalId={}", traceOriginalId);
+            }
+
+            default -> log.info("[webhook] Ignoring event type: {} for {}", eventType, traceOriginalId);
         }
 
         return ResponseEntity.ok(Map.of("status", "received", "eventType", eventType));

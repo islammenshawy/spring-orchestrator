@@ -353,7 +353,37 @@ public class MockDocumentService {
         log.info("Transfer initiated for {} -> {} (transferId={})",
                 traceOriginalId, req.getRecipientEmail(), transferId);
 
+        // Simulate recipient accepting after 3s delay (fires TRANSFER webhook)
+        simulateTransferAcceptanceWebhook(traceOriginalId);
+
         return new TransferEnvelopeByEmailResponse(transferId);
+    }
+
+    private void simulateTransferAcceptanceWebhook(String envelopeTraceId) {
+        Thread.startVirtualThread(() -> {
+            try {
+                Thread.sleep(3000); // Simulate recipient reviewing + accepting after 3s
+                var webClient = org.springframework.web.reactive.function.client.WebClient.create();
+                for (String url : registeredWebhooks.stream()
+                        .map(w -> (String) w.get("url")).filter(u -> u != null).toList()) {
+                    try {
+                        webClient.post().uri(url)
+                                .bodyValue(java.util.Map.of(
+                                        "messageId", UUID.randomUUID().toString(),
+                                        "traceOriginalId", envelopeTraceId,
+                                        "eventType", "TRANSFER",
+                                        "timestamp", java.time.Instant.now().toString()
+                                ))
+                                .retrieve().bodyToMono(String.class).block();
+                        log.info("Sent TRANSFER webhook for envelope {} to {}", envelopeTraceId, url);
+                    } catch (Exception e) {
+                        log.warn("Transfer webhook failed to {}: {}", url, e.getMessage());
+                    }
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
     }
 
     // ===== Supplementary Document Operations =====
