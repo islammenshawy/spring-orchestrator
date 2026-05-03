@@ -120,7 +120,11 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                     .stepName(savedFlow.getCurrentStep())
                     .flowType(flowType)
                     .build();
-            kafkaTemplate.send(commandTopic, savedFlow.getId(),
+            // Use correlationId (UUID) as partition key for uniform distribution.
+            // MongoDB ObjectIds are sequential and hash poorly across partitions.
+            String partitionKey = savedFlow.getCorrelationId() != null
+                    ? savedFlow.getCorrelationId() : savedFlow.getId();
+            kafkaTemplate.send(commandTopic, partitionKey,
                     objectMapper.writeValueAsString(cmd)).get();
         } catch (Exception e) {
             // Kafka publish failed — outbox publisher will pick it up (~500ms)
@@ -333,6 +337,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                     .flowType(flowType)
                     .flowSnapshot(flowSnapshot)
                     .build();
+            // Reply uses flowId as key — reply consumer always runs on same instance
             kafkaTemplate.send(replyTopic, flowId, objectMapper.writeValueAsString(reply)).get();
         } catch (Exception e) {
             log.warn("[Saga] Reply publish failed for flow {} step {}: {}",
@@ -673,11 +678,13 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                     .flowType(flowType)
                     .build();
 
+            String partitionKey = flow.getCorrelationId() != null
+                    ? flow.getCorrelationId() : flow.getId();
             OutboxEvent event = OutboxEvent.builder()
                     .id(UUID.randomUUID().toString())
                     .flowId(flow.getId())
                     .topic(commandTopic)
-                    .key(flow.getId())
+                    .key(partitionKey)
                     .payload(objectMapper.writeValueAsString(cmd))
                     .build();
 

@@ -70,7 +70,7 @@ orchestrator:
     initial-interval-ms: 3000             # 3s first retry
     multiplier: 2.0                       # ladder: 3s → 6s → 10s (capped)
     max-interval-ms: 10000                # cap at 10s — gate steps need fast polling
-    max-attempts: 20                      # more attempts since backoff is shorter (10s cap × 20 = 200s budget)
+    max-attempts: 10                      # 10 × 10s cap = 100s retry budget before DLT
     jitter-factor: 0.5                    # equal jitter to avoid thundering herd
 
 management:

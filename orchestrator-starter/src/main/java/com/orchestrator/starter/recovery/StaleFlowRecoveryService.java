@@ -50,7 +50,9 @@ public class StaleFlowRecoveryService<F extends OrchestratorFlow> {
                         .correlationId(flow.getCorrelationId())
                         .stepName(flow.getCurrentStep())
                         .build();
-                kafkaTemplate.send(commandTopic, flow.getId(),
+                String partitionKey = flow.getCorrelationId() != null
+                        ? flow.getCorrelationId() : flow.getId();
+                kafkaTemplate.send(commandTopic, partitionKey,
                         objectMapper.writeValueAsString(cmd)).get();
                 flow.setUpdatedAt(Instant.now());
                 flowRepository.save(flow);

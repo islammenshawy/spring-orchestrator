@@ -252,15 +252,19 @@ public class EnigioWebhookController {
     /** Re-activate a parked flow by publishing a step command to Kafka. */
     @SuppressWarnings("unchecked")
     private void reactivateFlow(String flowId, String stepName) {
+        // Look up correlationId for uniform partition distribution
+        EnigioInstrumentEntity entity = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class);
+        String partitionKey = (entity != null && entity.getCorrelationId() != null)
+                ? entity.getCorrelationId() : flowId;
         try {
             StepCommandMessage cmd = StepCommandMessage.builder()
                     .eventId(java.util.UUID.randomUUID().toString())
                     .flowId(flowId)
-                    .correlationId(flowId)
+                    .correlationId(partitionKey)
                     .stepName(stepName)
                     .flowType("enigio-instrument")
                     .build();
-            kafkaTemplate.send(commandTopic, flowId, objectMapper.writeValueAsString(cmd));
+            kafkaTemplate.send(commandTopic, partitionKey, objectMapper.writeValueAsString(cmd));
             log.info("[webhook] Re-activated flow {} at step {}", flowId, stepName);
         } catch (Exception e) {
             log.error("[webhook] Failed to re-activate flow {}: {}", flowId, e.getMessage());

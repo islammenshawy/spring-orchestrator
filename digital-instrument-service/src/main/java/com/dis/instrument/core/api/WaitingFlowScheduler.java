@@ -95,7 +95,9 @@ public class WaitingFlowScheduler {
                         .build();
 
                 String json = objectMapper.writeValueAsString(cmd);
-                kafkaTemplate.send(commandTopic, flow.getId(), json).get();
+                String partitionKey = flow.getCorrelationId() != null
+                        ? flow.getCorrelationId() : flow.getId();
+                kafkaTemplate.send(commandTopic, partitionKey, json).get();
 
                 // Update timestamp to prevent re-publishing on next cycle
                 flow.setUpdatedAt(Instant.now());

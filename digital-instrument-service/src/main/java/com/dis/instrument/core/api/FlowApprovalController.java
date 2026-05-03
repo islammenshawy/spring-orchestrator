@@ -135,7 +135,7 @@ public class FlowApprovalController {
 
         // Re-activate: publish step command to Kafka so the gate step re-executes
         // and finds the approval flag set → advances to next group
-        reactivateFlow(id, currentStep);
+        reactivateFlow(id, flow.getCorrelationId(), currentStep);
 
         return ResponseEntity.ok(Map.of(
                 "instrumentId", id,
@@ -261,16 +261,17 @@ public class FlowApprovalController {
 
     /** Re-activate a parked flow by publishing a step command to Kafka. */
     @SuppressWarnings("unchecked")
-    private void reactivateFlow(String flowId, String stepName) {
+    private void reactivateFlow(String flowId, String correlationId, String stepName) {
         try {
+            String partitionKey = correlationId != null ? correlationId : flowId;
             StepCommandMessage cmd = StepCommandMessage.builder()
                     .eventId(UUID.randomUUID().toString())
                     .flowId(flowId)
-                    .correlationId(flowId)
+                    .correlationId(correlationId)
                     .stepName(stepName)
                     .flowType("enigio-instrument")
                     .build();
-            kafkaTemplate.send(commandTopic, flowId, objectMapper.writeValueAsString(cmd));
+            kafkaTemplate.send(commandTopic, partitionKey, objectMapper.writeValueAsString(cmd));
             log.info("[{}] Re-activated flow at step {} via Kafka", flowId, stepName);
         } catch (Exception e) {
             log.error("[{}] Failed to re-activate flow: {}", flowId, e.getMessage());
