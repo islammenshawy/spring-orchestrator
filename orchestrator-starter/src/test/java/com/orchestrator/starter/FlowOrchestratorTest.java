@@ -104,10 +104,10 @@ class FlowOrchestratorTest {
     }
 
     @Test
-    void executeStep_layer2Idempotency_skipsIfAlreadyDone() {
+    void executeStep_layer2Idempotency_skipsIfFlowAdvancedPast() {
         TestFlow flow = new TestFlow();
         flow.setId("flow-1");
-        flow.setCurrentStep("STEP_A");
+        flow.setCurrentStep("STEP_B"); // Flow already advanced past STEP_A
         flow.setStatus(FlowStatus.IN_PROGRESS);
 
         StepHandler<TestFlow> handler = mock(StepHandler.class);
@@ -119,7 +119,7 @@ class FlowOrchestratorTest {
 
         orchestrator.executeStep("flow-1", "STEP_A");
 
-        // Step NOT executed — already completed
+        // Step NOT executed — flow already advanced past this step
         verify(handler, never()).execute(any());
     }
 

@@ -45,7 +45,6 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private final KafkaTemplate kafkaTemplate;
     private Class<F> entityClass;
     private org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
-    private com.orchestrator.starter.domain.StepCompletionRepository stepCompletionRepository;
 
     public FlowOrchestrator(
             OrchestratorFlowRepository<F> flowRepository,
@@ -256,20 +255,6 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
 
         if (replyEnabled) {
-            // Reply dedup gate: insert into separate collection with unique index.
-            // First execution: insert succeeds → publish reply.
-            // Duplicate: DuplicateKeyException → skip reply.
-            // Race-free: separate collection, saveFlow can't overwrite it.
-            if (stepCompletionRepository != null) {
-                try {
-                    stepCompletionRepository.save(
-                            new com.orchestrator.starter.domain.StepCompletion(flowId, stepName));
-                } catch (org.springframework.dao.DuplicateKeyException e) {
-                    log.debug("[Saga] Reply already published for step {} on flow {} — skipping",
-                            stepName, flowId);
-                    return;
-                }
-            }
             publishReply(flowId, stepName, "COMPLETED", null, serialize(flow));
         } else {
             markParallelStepCompleted(flow, stepName, handler);
@@ -801,9 +786,6 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         this.mongoTemplate = mongoTemplate;
     }
 
-    public void setStepCompletionRepository(com.orchestrator.starter.domain.StepCompletionRepository repo) {
-        this.stepCompletionRepository = repo;
-    }
 
     /**
      * Persist the flow. Concurrency is handled by Kafka partition key

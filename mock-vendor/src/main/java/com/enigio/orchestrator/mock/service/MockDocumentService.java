@@ -27,7 +27,9 @@ public class MockDocumentService {
     private final FailureConfig failureConfig;
     private final Map<String, MockDocument> documents = new ConcurrentHashMap<>();
     private final Map<String, MockDocument> envelopeDrafts = new ConcurrentHashMap<>();
+    /** Webhook registrations deduped by URL. */
     private final List<Map<String, Object>> registeredWebhooks = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final java.util.Set<String> registeredWebhookUrls = ConcurrentHashMap.newKeySet();
     private final AtomicLong signatureIdCounter = new AtomicLong(1);
 
     // ===== Documents =====
@@ -167,8 +169,13 @@ public class MockDocumentService {
     }
 
     public void registerWebhook(String url, Map<String, Object> config) {
-        registeredWebhooks.add(Map.of("url", url, "config", config));
-        log.info("Webhook registered: {} (total: {})", url, registeredWebhooks.size());
+        // Atomic dedup: ConcurrentHashMap.newKeySet().add() returns false if already present
+        if (registeredWebhookUrls.add(url)) {
+            registeredWebhooks.add(Map.of("url", url, "config", config));
+            log.info("Webhook registered: {} (total unique: {})", url, registeredWebhooks.size());
+        } else {
+            log.debug("Webhook already registered for URL: {}", url);
+        }
     }
 
     public String getSigningStatus(String traceOriginalId) {
