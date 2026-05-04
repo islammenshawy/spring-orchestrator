@@ -19,18 +19,12 @@
 
     <!--
       ============================================================
-      PRODUCTION MODULES (will be extracted as standalone repos):
-        orchestrator-starter        — reusable orchestration library
-        digital-instrument-service  — Enigio trace:original integration
-        mock-vendor                 — vendor API simulator for testing
+      Each production module (orchestrator-starter, digital-instrument-service,
+      mock-vendor) is fully self-contained — its own parent, dependencies,
+      and build config. They can be extracted to standalone repos.
 
-      EXAMPLES:
-        examples/sample-app         — usage example
-        examples/dashboard          — monitoring UI
-
-      REFERENCE (comparison only, not for production):
-        alternative-frameworks/common, alternative-frameworks/saga-outbox,
-        alternative-frameworks/statemachine, alternative-frameworks/spring-integration
+      This parent pom exists only for convenience: building all modules
+      together in this mono-repo.
       ============================================================
     -->
 
@@ -58,61 +52,4 @@
             </modules>
         </profile>
     </profiles>
-
-    <properties>
-        <java.version>21</java.version>
-        <lombok.version>1.18.38</lombok.version>
-        <spring-statemachine.version>4.0.0</spring-statemachine.version>
-    </properties>
-
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>com.enigio.orchestrator</groupId>
-                <artifactId>orchestrator-common</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.enigio.orchestrator</groupId>
-                <artifactId>orchestrator-starter</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework.statemachine</groupId>
-                <artifactId>spring-statemachine-core</artifactId>
-                <version>${spring-statemachine.version}</version>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
-
-    <dependencies>
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <optional>true</optional>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <configuration>
-                    <annotationProcessorPaths>
-                        <path>
-                            <groupId>org.projectlombok</groupId>
-                            <artifactId>lombok</artifactId>
-                            <version>${lombok.version}</version>
-                        </path>
-                    </annotationProcessorPaths>
-                </configuration>
-            </plugin>
-        </plugins>
-    </build>
 </project>
