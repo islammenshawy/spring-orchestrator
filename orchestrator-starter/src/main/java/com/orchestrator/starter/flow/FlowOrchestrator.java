@@ -144,7 +144,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     private void doExecuteStep(String flowId, String stepName) {
         F flow = flowRepository.findById(flowId)
-                .orElseThrow(() -> new IllegalArgumentException("Flow not found: " + flowId));
+                .orElseThrow(() -> new NonRetryableStepException("Flow not found: " + flowId));
 
         if (flow.getStatus() == FlowStatus.COMPLETED) return;
         if (flow.getStatus() == FlowStatus.CANCELLED || flow.getStatus() == FlowStatus.CANCELLING) {

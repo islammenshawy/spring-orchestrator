@@ -57,7 +57,7 @@ a{color:var(--blue);text-decoration:none}
 .flow-viz{display:flex;gap:3px;align-items:stretch;flex-wrap:wrap;padding:1rem 0}
 .fv{flex:1;min-width:70px;padding:10px 4px;border-radius:7px;text-align:center;font-size:.6rem;font-weight:600;opacity:.3;transition:all .5s;border:1px solid transparent;position:relative}
 .fv.active{opacity:1;transform:scale(1.05)}.fv.done{opacity:.7}
-.fv .num{font-size:1.1rem;font-weight:700;margin-bottom:2px}.fv .nm{color:var(--dim)}
+.fv .num{font-size:1.1rem;font-weight:700;margin-bottom:2px}.fv .nm{color:var(--dim)}.fv .sd{font-size:.5rem;color:var(--dim2);margin-top:2px;font-weight:400;line-height:1.2}
 .fv .chk{position:absolute;top:3px;right:5px;font-size:.65rem;opacity:0}.fv.done .chk{opacity:1;color:var(--green)}
 .fv.p1{background:rgba(59,130,246,.06)}.fv.p1.active{background:rgba(59,130,246,.18);border-color:var(--g1);box-shadow:0 0 15px rgba(59,130,246,.12)}.fv.p1 .num{color:var(--g1)}
 .fv.p2{background:rgba(245,158,11,.06)}.fv.p2.active{background:rgba(245,158,11,.18);border-color:var(--g2);box-shadow:0 0 15px rgba(245,158,11,.12)}.fv.p2 .num{color:var(--g2)}
@@ -149,7 +149,7 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
 <section class="hero">
   <div class="badge badge-blue" style="margin-bottom:1.5rem">Integration Guide v3.3</div>
   <h1>Digital Instrument Service<br><span>Enigio trace:original</span></h1>
-  <p>One API call from your downstream system triggers an 11-step orchestrated flow across 3 business phases, 3 event-driven gates (2 approval + transfer acceptance), webhook-driven signing, and the Enigio trace:original platform.</p>
+  <p>One API call from your downstream system triggers an 11-step orchestrated flow across 3 business phases, 4 event-driven gates (2 downstream approvals + webhook-driven signing + transfer acceptance), and the Enigio trace:original platform.</p>
   <div class="hero-links">
     <a href="#architecture" class="btn-p">Architecture</a>
     <a href="#kafka" class="btn-o">Kafka</a>
@@ -167,7 +167,7 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
 <section class="dark-section" id="architecture">
 <div class="container">
   <h2>Orchestrator <span>Architecture</span></h2>
-  <p class="sub">One API call in. Eleven steps across 3 phases. 3 event-driven gates (approval × 2, transfer acceptance). Gate steps <strong>exit Kafka</strong> — re-activated by downstream approval, Enigio webhook, or expiry scheduler. 8 webhook events handled.</p>
+  <p class="sub">One API call in. Eleven steps across 3 phases. 4 event-driven gates: 2 downstream approvals, 1 webhook-driven signing wait, 1 transfer acceptance. Gate steps <strong>exit Kafka entirely</strong> — re-activated by POST /approve, Enigio webhook, or expiry scheduler. 8 webhook events handled.</p>
 
   <div class="arch">
     <div class="arch-box" style="background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.25)">
@@ -492,28 +492,74 @@ footer{padding:2.5rem 0;border-top:1px solid var(--bd);text-align:center;font-si
 <section id="timeline">
 <div class="container">
   <h2>Document <span>Lifecycle</span></h2>
-  <p class="sub">11 steps across 3 business phases with 3 event-driven gates. Gate steps <strong>exit Kafka</strong> and park in MongoDB — re-activated by approval API, Enigio webhook, or expiry scheduler.</p>
+  <p class="sub">11 steps across 3 business phases with 4 event-driven gates. Gate steps <strong>exit Kafka entirely</strong> and park in MongoDB — re-activated by downstream approval, Enigio webhook, or expiry scheduler.</p>
 
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-      <h3 style="margin:0">Flow Execution Timeline</h3>
-      <button onclick="playFlow()" style="padding:6px 16px;border:1px solid var(--blue);background:rgba(59,130,246,.1);color:var(--blue);border-radius:5px;cursor:pointer;font-size:.75rem;font-weight:600">Play</button>
+  <!-- Interactive flow map -->
+  <div class="card" style="padding:1.5rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.8rem;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0">Interactive Flow Map</h3>
+      <div style="display:flex;gap:6px">
+        <button onclick="playFlow()" id="btn-play" style="padding:6px 16px;border:1px solid var(--blue);background:rgba(59,130,246,.1);color:var(--blue);border-radius:5px;cursor:pointer;font-size:.75rem;font-weight:600">&#9654; Play</button>
+        <button onclick="playVoid()" id="btn-void" style="padding:6px 16px;border:1px solid var(--red);background:rgba(239,68,68,.08);color:var(--red);border-radius:5px;cursor:pointer;font-size:.75rem;font-weight:600">&#10005; Void</button>
+        <button onclick="resetFlow()" style="padding:6px 16px;border:1px solid var(--bd);background:var(--sf2);color:var(--dim);border-radius:5px;cursor:pointer;font-size:.75rem;font-weight:600">Reset</button>
+      </div>
     </div>
-    <div class="flow-viz" id="fviz">
-      <div class="fv p1" data-s="0"><div class="chk">&#10003;</div><div class="num">1</div><div class="nm">Draft</div></div><div class="fc">&rarr;</div>
-      <div class="fv p1" data-s="1"><div class="chk">&#10003;</div><div class="num">2</div><div class="nm">Register</div></div><div class="fc">&rarr;</div>
-      <div class="fv p1" data-s="2"><div class="chk">&#10003;</div><div class="num">3</div><div class="nm">Attach</div></div><div class="fc">&#9553;</div>
-      <div class="fv gt" data-s="3"><div class="chk">&#10003;</div><div class="num">&#8644;</div><div class="nm">Approve</div></div><div class="fc">&rarr;</div>
-      <div class="fv p2" data-s="4"><div class="chk">&#10003;</div><div class="num">5</div><div class="nm">Signers</div></div><div class="fc">&rarr;</div>
-      <div class="fv p2" data-s="5"><div class="chk">&#10003;</div><div class="num">6</div><div class="nm">Emails</div></div><div class="fc">&rarr;</div>
-      <div class="fv p2" data-s="6"><div class="chk">&#10003;</div><div class="num">7</div><div class="nm">Webhook</div></div><div class="fc">&#9553;</div>
-      <div class="fv gt" data-s="7"><div class="chk">&#10003;</div><div class="num">&#8644;</div><div class="nm">Approve</div></div><div class="fc">&rarr;</div>
-      <div class="fv p3" data-s="8"><div class="chk">&#10003;</div><div class="num">9</div><div class="nm">Validate</div></div><div class="fc">&rarr;</div>
-      <div class="fv p3" data-s="9"><div class="chk">&#10003;</div><div class="num">10</div><div class="nm">Envelope</div></div><div class="fc">&rarr;</div>
-      <div class="fv p3" data-s="10"><div class="chk">&#10003;</div><div class="num">11</div><div class="nm">Transfer</div></div>
+
+    <!-- Phase labels -->
+    <div style="display:flex;gap:3px;align-items:stretch;flex-wrap:wrap;margin-bottom:4px">
+      <div style="flex:3.3;text-align:center;font-size:.6rem;font-weight:700;color:var(--blue);padding:3px 0;background:rgba(59,130,246,.06);border-radius:4px 4px 0 0">PHASE 1 &mdash; PREPARATION</div>
+      <div style="flex:1;min-width:70px"></div>
+      <div style="flex:3.3;text-align:center;font-size:.6rem;font-weight:700;color:var(--amber);padding:3px 0;background:rgba(245,158,11,.06);border-radius:4px 4px 0 0">PHASE 2 &mdash; SIGNING</div>
+      <div style="flex:1;min-width:70px"></div>
+      <div style="flex:3.3;text-align:center;font-size:.6rem;font-weight:700;color:var(--green);padding:3px 0;background:rgba(16,185,129,.06);border-radius:4px 4px 0 0">PHASE 3 &mdash; DELIVERY</div>
+    </div>
+
+    <!-- Flow steps -->
+    <div class="flow-viz" id="fviz" style="padding:.5rem 0 .8rem">
+      <div class="fv p1" data-s="0" onclick="showStep(0)" style="cursor:pointer"><div class="chk">&#10003;</div><div class="num">1</div><div class="nm">Draft</div><div class="sd">Generate PDF</div></div><div class="fc">&rarr;</div>
+      <div class="fv p1" data-s="1" onclick="showStep(1)" style="cursor:pointer"><div class="chk">&#10003;</div><div class="num">2</div><div class="nm">Register</div><div class="sd">Enigio ledger</div></div><div class="fc">&rarr;</div>
+      <div class="fv p1" data-s="2" onclick="showStep(2)" style="cursor:pointer"><div class="chk">&#10003;</div><div class="num">3</div><div class="nm">Attach</div><div class="sd">Supporting docs</div></div><div class="fc">&#9553;</div>
+      <div class="fv gt" data-s="3" onclick="showStep(3)" style="cursor:pointer"><div class="chk">&#10003;</div><div class="num">&#8644;</div><div class="nm">Approve</div><div class="sd">POST /approve</div></div><div class="fc">&rarr;</div>
+      <div class="fv p2" data-s="4" onclick="showStep(4)" style="cursor:pointer"><div class="chk">&#10003;</div><div class="num">5</div><div class="nm">Signers</div><div class="sd">Add signatories</div></div><div class="fc">&rarr;</div>
+      <div class="fv p2" data-s="5" onclick="showStep(5)" style="cursor:pointer"><div class="chk">&#10003;</div><div class="num">6</div><div class="nm">Emails</div><div class="sd">Send + webhook</div></div><div class="fc">&rarr;</div>
+      <div class="fv p2" data-s="6" onclick="showStep(6)" style="cursor:pointer"><div class="chk">&#10003;</div><div class="num">7</div><div class="nm">Signatures</div><div class="sd">FULLY_SIGNED</div></div><div class="fc">&#9553;</div>
+      <div class="fv gt" data-s="7" onclick="showStep(7)" style="cursor:pointer"><div class="chk">&#10003;</div><div class="num">&#8644;</div><div class="nm">Approve</div><div class="sd">POST /approve</div></div><div class="fc">&rarr;</div>
+      <div class="fv p3" data-s="8" onclick="showStep(8)" style="cursor:pointer"><div class="chk">&#10003;</div><div class="num">9</div><div class="nm">Validate</div><div class="sd">Ledger check</div></div><div class="fc">&rarr;</div>
+      <div class="fv p3" data-s="9" onclick="showStep(9)" style="cursor:pointer"><div class="chk">&#10003;</div><div class="num">10</div><div class="nm">Envelope</div><div class="sd">Seal for delivery</div></div><div class="fc">&rarr;</div>
+      <div class="fv p3" data-s="10" onclick="showStep(10)" style="cursor:pointer"><div class="chk">&#10003;</div><div class="num">11</div><div class="nm">Transfer</div><div class="sd">TRANSFER webhook</div></div>
     </div>
     <div class="prog"><div class="prog-fill" id="pf"></div></div>
-    <div class="status-txt" id="st">Ready</div>
+    <div class="status-txt" id="st">Click any step for details &bull; Play for happy path &bull; Void to cancel mid-flow</div>
+
+    <!-- Step detail panel (shown on click) -->
+    <div id="step-detail" style="display:none;margin-top:1rem;padding:1rem;border-radius:8px;border:1px solid var(--bd);background:var(--sf2);font-size:.82rem;transition:all .3s">
+      <div style="display:flex;justify-content:space-between;align-items:start">
+        <div>
+          <div id="sd-badge" class="badge badge-blue" style="margin-bottom:6px"></div>
+          <div id="sd-title" style="font-size:1rem;font-weight:700;margin-bottom:4px"></div>
+        </div>
+        <button onclick="document.getElementById('step-detail').style.display='none'" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:1.1rem">&times;</button>
+      </div>
+      <div id="sd-desc" style="color:var(--dim);margin-bottom:.6rem"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.8rem">
+        <div>
+          <div style="font-size:.7rem;color:var(--dim2);text-transform:uppercase;font-weight:600;margin-bottom:3px">Vendor API</div>
+          <div id="sd-api" style="font-family:monospace;font-size:.75rem;color:var(--cyan)"></div>
+        </div>
+        <div>
+          <div style="font-size:.7rem;color:var(--dim2);text-transform:uppercase;font-weight:600;margin-bottom:3px">Completed When</div>
+          <div id="sd-when" style="font-family:monospace;font-size:.75rem;color:var(--green)"></div>
+        </div>
+      </div>
+      <div id="sd-gate" style="display:none;margin-top:.6rem;padding:8px 10px;border-radius:5px;background:rgba(139,92,246,.06);border:1px solid rgba(139,92,246,.15)">
+        <div style="font-size:.7rem;color:var(--dim2);text-transform:uppercase;font-weight:600;margin-bottom:3px">Gate Behaviour</div>
+        <div id="sd-gate-desc" style="font-size:.78rem;color:var(--purple)"></div>
+      </div>
+      <div id="sd-void" style="display:none;margin-top:.6rem;padding:8px 10px;border-radius:5px;background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.15)">
+        <div style="font-size:.7rem;color:var(--dim2);text-transform:uppercase;font-weight:600;margin-bottom:3px">On Void / Cancel</div>
+        <div id="sd-void-desc" style="font-size:.78rem;color:var(--red)"></div>
+      </div>
+    </div>
   </div>
 
   <!-- Backoff Ladder -->
@@ -1657,19 +1703,182 @@ new Chart(document.getElementById('lt-mongocache'),{type:'line',data:{labels:LT.
 </footer>
 
 <script>
-let animR=false;
-function playFlow(){
-  if(animR)return;animR=true;
+// Step metadata
+const STEPS=[
+  {name:'CREATE_DRAFT',title:'Create Draft',phase:'Phase 1',badge:'badge-blue',
+   desc:'Generate PDF representation of the trade instrument from submitted data.',
+   api:'— (internal)',when:'pdfGenerated == true',
+   void:'No vendor cleanup needed — draft is local only.'},
+  {name:'REGISTER_DOCUMENT',title:'Register Document',phase:'Phase 1',badge:'badge-blue',
+   desc:'Register the document on Enigio trace:original ledger. Returns traceOriginalId and versionKey.',
+   api:'POST /api/v1/documents',when:'traceOriginalId != null',
+   void:'POST /documents/{id}/invalidate — voids the document permanently on the ledger.'},
+  {name:'ADD_ATTACHMENT',title:'Add Attachments',phase:'Phase 1',badge:'badge-blue',
+   desc:'Amend the document with supporting files (PDFs, images). Skipped if no attachments provided.',
+   api:'POST /api/v1/documents/{id}/amend',when:'attachmentVersionKey != null',
+   void:'Covered by document invalidation (step 2 cancel handler).'},
+  {name:'AWAIT_PREPARATION_APPROVAL',title:'Await Signing Approval',phase:'Gate',badge:'badge-purple',
+   desc:'Notify downstream that preparation is complete. Flow parks until downstream approves the signing phase.',
+   api:'— (gate, no vendor call)',when:'signingApproved == true',
+   gate:'Throws WaitingStepException → exits Kafka → parks in MongoDB (WAITING_RETRY). Re-activated by POST /{id}/approve. Expiry: 72h → NonRetryableStepException.',
+   void:'No vendor cleanup — approval is a local flag.'},
+  {name:'ADD_SIGNERS',title:'Add Signers',phase:'Phase 2',badge:'badge-amber',
+   desc:'Register required signatories on the Enigio document with name, email, phone, and signing order.',
+   api:'POST /api/v1/required-signatures/original/{id}',when:'signersAdded == true',
+   void:'Signers are invalidated when the document is voided (step 2 cancel handler).'},
+  {name:'SEND_FOR_SIGNING',title:'Send Signing Emails',phase:'Phase 2',badge:'badge-amber',
+   desc:'Send signing invitation emails to all signatories. Registers webhook for FULLY_SIGNED, PARTIALLY_SIGNED, TRANSFER, and 5 other events.',
+   api:'POST /api/v1/required-signatures/send-sign-emails\nPOST /api/v1/notifications/webhooks',when:'signingEmailsSent == true',
+   void:'Pending signatures become invalid when document is voided.'},
+  {name:'AWAIT_SIGNATURES',title:'Await Signatures',phase:'Gate',badge:'badge-purple',
+   desc:'Wait for all signatories to sign. Primary signal: FULLY_SIGNED webhook. Fallback: poll GET /status. Expiry: 48h.',
+   api:'GET /api/v1/required-signatures/original/{id}/status (poll fallback)',when:"signingStatus == 'SIGNED'",
+   gate:'Throws WaitingStepException → exits Kafka → parks. Re-activated by Enigio FULLY_SIGNED webhook → DIS publishes step command. Safety net: WaitingFlowScheduler polls every 30min for stale flows.',
+   void:'Pending signatures become invalid when document is voided.'},
+  {name:'AWAIT_DELIVERY_APPROVAL',title:'Await Delivery Approval',phase:'Gate',badge:'badge-purple',
+   desc:'Notify downstream that all signatures are collected. Flow parks until downstream approves the delivery phase.',
+   api:'— (gate, no vendor call)',when:'deliveryApproved == true',
+   gate:'Same pattern as Gate 1. Throws WaitingStepException → parks. Re-activated by POST /{id}/approve. Expiry: 72h.',
+   void:'No vendor cleanup — approval is a local flag.'},
+  {name:'VALIDATE_DOCUMENT',title:'Validate Document',phase:'Phase 3',badge:'badge-green',
+   desc:'Validate the signed document against the Enigio ledger to ensure cryptographic integrity.',
+   api:'POST /api/v1/documents/validate',when:"validationResult == 'VALID'",
+   void:'No cleanup — validation is read-only.'},
+  {name:'CREATE_ENVELOPE',title:'Create & Seal Envelope',phase:'Phase 3',badge:'badge-green',
+   desc:'Create an envelope draft, attach additional documents (if any from MongoDB), and seal it for delivery.',
+   api:'POST /api/v1/envelopes/drafts\nPOST /api/v1/envelopes/drafts/{id}/additional-documents\nPOST /api/v1/envelopes/drafts/{id}/seal',when:'envelopeTraceId != null',
+   void:'POST /documents/{envelopeId}/invalidate — voids the sealed envelope.'},
+  {name:'TRANSFER_DOCUMENT',title:'Transfer to Recipient',phase:'Gate',badge:'badge-purple',
+   desc:'Initiate email-based transfer of the sealed envelope. Flow parks until recipient accepts (TRANSFER webhook) or rejects (TRANSFER_REJECTED).',
+   api:'POST /api/v1/envelopes/{id}/transfer-by-email',when:'transferAccepted == true',
+   gate:'Phase 1: initiates transfer (sets transferId). Phase 2: throws WaitingStepException → parks. Re-activated by Enigio TRANSFER webhook. TRANSFER_REJECTED → NonRetryableStepException. Expiry: 72h.',
+   void:'Revoke the pending transfer if recipient has not yet opened the envelope. If already opened — cannot cancel (legal possession transferred).'}
+];
+
+let animR=false,voidAt=-1;
+
+function resetFlow(){
+  animR=false;voidAt=-1;
   const s=document.querySelectorAll('.fv'),pf=document.getElementById('pf'),st=document.getElementById('st');
-  const nm=['Creating draft...','Registering on Enigio...','Attaching documents...','Awaiting approval...','Adding signers...','Sending emails + webhook...','Awaiting signatures (webhook)...','Awaiting approval...','Validating document...','Creating envelope...','Transferring possession...'];
-  s.forEach(x=>{x.classList.remove('active','done')});pf.style.width='0%';
+  s.forEach(x=>{x.classList.remove('active','done');x.style.borderColor='';x.style.background=''});
+  pf.style.width='0%';pf.style.background='';
+  st.textContent='Click any step for details \u2022 Play for happy path \u2022 Void to cancel mid-flow';
+  st.style.color='';
+  document.getElementById('step-detail').style.display='none';
+}
+
+function showStep(idx){
+  const d=STEPS[idx],panel=document.getElementById('step-detail');
+  document.getElementById('sd-badge').className='badge '+d.badge;
+  document.getElementById('sd-badge').textContent=d.phase;
+  document.getElementById('sd-title').textContent='Step '+(d.badge==='badge-purple'?(idx===3?'4':idx===7?'8':idx===6?'7':'11')+' — ':''+(idx<3?idx+1:idx<7?idx+1:idx+1)+' — ')+d.title;
+  document.getElementById('sd-title').textContent=d.title;
+  document.getElementById('sd-desc').textContent=d.desc;
+  document.getElementById('sd-api').innerHTML=d.api.replace(/\n/g,'<br>');
+  document.getElementById('sd-when').textContent=d.when;
+  const gateEl=document.getElementById('sd-gate');
+  if(d.gate){gateEl.style.display='block';document.getElementById('sd-gate-desc').textContent=d.gate}else{gateEl.style.display='none'}
+  const voidEl=document.getElementById('sd-void');
+  if(d.void){voidEl.style.display='block';document.getElementById('sd-void-desc').textContent=d.void}else{voidEl.style.display='none'}
+  panel.style.display='block';
+  // Highlight clicked step
+  document.querySelectorAll('.fv').forEach((x,i)=>{x.classList.remove('active');if(i===idx)x.classList.add('active')});
+}
+
+function playFlow(){
+  if(animR)return;animR=true;voidAt=-1;resetFlow();animR=true;
+  const s=document.querySelectorAll('.fv'),pf=document.getElementById('pf'),st=document.getElementById('st');
+  const nm=['Creating draft...','Registering on Enigio...','Attaching documents...',
+    'Awaiting signing approval... (parked)',
+    'Adding signers...','Sending emails + registering webhook...',
+    'Awaiting signatures... (parked, webhook)',
+    'Awaiting delivery approval... (parked)',
+    'Validating document...','Creating & sealing envelope...',
+    'Transferring to recipient... (parked, webhook)'];
+  let i=0;
+  const iv=setInterval(()=>{
+    if(voidAt>=0){clearInterval(iv);return}
+    if(i>0){s[i-1].classList.remove('active');s[i-1].classList.add('done')}
+    if(i<s.length){
+      s[i].classList.add('active');st.textContent=nm[i];
+      pf.style.width=((i+1)/s.length*100)+'%';
+      // Pause longer on gate steps
+      i++;
+    } else {
+      clearInterval(iv);
+      st.innerHTML='<span style="color:var(--green);font-weight:700">&#10003; COMPLETED</span> &mdash; document transferred, legal possession changed';
+      pf.style.background='var(--green)';
+      setTimeout(()=>{animR=false},4000);
+    }
+  },800);
+}
+
+function playVoid(){
+  if(animR&&voidAt<0){
+    // Cancel mid-animation
+    const s=document.querySelectorAll('.fv');
+    let current=-1;
+    s.forEach((x,i)=>{if(x.classList.contains('active'))current=i});
+    if(current<0)return;
+    voidAt=current;
+    doVoid(current);
+    return;
+  }
+  // Play partial then void at a random gate
+  resetFlow();animR=true;
+  const gates=[3,6];
+  const stopAt=gates[Math.floor(Math.random()*gates.length)];
+  const s=document.querySelectorAll('.fv'),pf=document.getElementById('pf'),st=document.getElementById('st');
+  const nm=['Creating draft...','Registering on Enigio...','Attaching documents...',
+    'Awaiting signing approval... (parked)','Adding signers...','Sending emails...',
+    'Awaiting signatures... (parked)','Awaiting delivery approval...','Validating...','Sealing envelope...','Transferring...'];
   let i=0;
   const iv=setInterval(()=>{
     if(i>0){s[i-1].classList.remove('active');s[i-1].classList.add('done')}
-    if(i<s.length){s[i].classList.add('active');st.textContent=nm[i];pf.style.width=((i+1)/s.length*100)+'%';i++}
-    else{clearInterval(iv);st.textContent='COMPLETED';st.style.color='var(--green)';setTimeout(()=>{st.style.color='';animR=false},3000)}
+    if(i<=stopAt){
+      s[i].classList.add('active');st.textContent=nm[i];
+      pf.style.width=((i+1)/s.length*100)+'%';
+      if(i===stopAt){
+        clearInterval(iv);
+        st.textContent=nm[i]+' (downstream cancels here)';
+        setTimeout(()=>doVoid(i),1200);
+      }
+      i++;
+    }
+  },600);
+}
+
+function doVoid(atStep){
+  const s=document.querySelectorAll('.fv'),pf=document.getElementById('pf'),st=document.getElementById('st');
+  st.innerHTML='<span style="color:var(--red);font-weight:700">VOID</span> &mdash; POST /{id}/cancel received at step '+(atStep+1);
+  pf.style.background='var(--red)';
+  // Animate reverse compensation
+  let j=atStep;
+  const voidSteps=['Revoking transfer...','Invalidating envelope...','(no cleanup)','(no cleanup)',
+    '(no cleanup)','Invalidating signatures...','(no cleanup)','(no cleanup)',
+    'Invalidating document on Enigio...','(no cleanup)','(cleanup complete)'];
+  const compensate=[10,9,null,null,null,5,null,null,1,null,null];
+  // Walk backwards through completed steps
+  const completed=[];
+  for(let k=j;k>=0;k--)completed.push(k);
+  let ci=0;
+  const civ=setInterval(()=>{
+    if(ci<completed.length){
+      const idx=completed[ci];
+      s[idx].style.borderColor='var(--red)';
+      s[idx].style.background='rgba(239,68,68,.12)';
+      s[idx].classList.remove('active','done');
+      const desc=STEPS[idx].void||'No cleanup needed';
+      st.innerHTML='<span style="color:var(--red)">&#8634; Compensating step '+(idx+1)+':</span> '+desc.split('.')[0];
+      ci++;
+    } else {
+      clearInterval(civ);
+      st.innerHTML='<span style="color:var(--red);font-weight:700">CANCELLED</span> &mdash; @OnCancel handlers ran in reverse order. Document invalidated on Enigio.';
+      setTimeout(()=>{animR=false},4000);
+    }
   },700);
 }
+
 // Auto-play on scroll
 let played=false;
 const obs=new IntersectionObserver(e=>{e.forEach(x=>{if(x.isIntersecting&&!played){played=true;setTimeout(playFlow,400)}})},{threshold:.5});

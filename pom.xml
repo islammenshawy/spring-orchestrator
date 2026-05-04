@@ -19,38 +19,42 @@
 
     <!--
       ============================================================
-      PUBLISHABLE LIBRARY (what teams depend on):
-        orchestrator-starter  — the reusable library
-        sample-app            — usage example
+      PRODUCTION MODULES (will be extracted as standalone repos):
+        orchestrator-starter        — reusable orchestration library
+        digital-instrument-service  — Enigio trace:original integration
+        mock-vendor                 — vendor API simulator for testing
 
-      REFERENCE / DEMO (comparison only, not for production use):
-        common, saga-outbox, statemachine, spring-integration,
-        mock-vendor, dashboard
+      EXAMPLES:
+        examples/sample-app         — usage example
+        examples/dashboard          — monitoring UI
+
+      REFERENCE (comparison only, not for production):
+        alternative-frameworks/common, alternative-frameworks/saga-outbox,
+        alternative-frameworks/statemachine, alternative-frameworks/spring-integration
       ============================================================
     -->
 
-    <!-- Default build: library, sample app, and digital instrument service -->
+    <!-- Default build: production modules -->
     <modules>
         <module>orchestrator-starter</module>
-        <module>sample-app</module>
         <module>digital-instrument-service</module>
+        <module>mock-vendor</module>
     </modules>
 
     <profiles>
-        <!-- Build everything including reference implementations:
-             mvn package -P demo -->
+        <!-- Build everything: mvn package -P all -->
         <profile>
-            <id>demo</id>
+            <id>all</id>
             <modules>
                 <module>orchestrator-starter</module>
-                <module>sample-app</module>
-                <module>common</module>
-                <module>mock-vendor</module>
-                <module>saga-outbox</module>
-                <module>statemachine</module>
-                <module>spring-integration</module>
-                <module>dashboard</module>
                 <module>digital-instrument-service</module>
+                <module>mock-vendor</module>
+                <module>examples/sample-app</module>
+                <module>examples/dashboard</module>
+                <module>alternative-frameworks/common</module>
+                <module>alternative-frameworks/saga-outbox</module>
+                <module>alternative-frameworks/statemachine</module>
+                <module>alternative-frameworks/spring-integration</module>
             </modules>
         </profile>
     </profiles>

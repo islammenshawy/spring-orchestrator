@@ -1,0 +1,214 @@
+# Multi-DC simulation for testing cross-cluster failover
+#
+# Usage:
+#   docker compose -f docker-compose-multi-dc.yml up -d
+#   # Start flow on DC-1, kill DC-1 Kafka, verify DC-2 picks up
+#
+# Architecture:
+#   DC-1 (primary):  kafka-a + zookeeper-a + dis-1 + mock-vendor + mongodb
+#   DC-2 (standby):  kafka-b + zookeeper-b + dis-2
+#   Cross-DC:        MirrorMaker 2 (topic replication a→b)
+#                    MongoDB (shared — simulates replica set)
+
+services:
+  # ========== MongoDB (shared — simulates cross-DC replica set) ==========
+  mongodb:
+    image: mongo:7.0
+    ports:
+      - "27117:27017"
+    volumes:
+      - multi-dc-mongo:/data/db
+    healthcheck:
+      test: mongosh --eval "db.adminCommand('ping')" --quiet
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ========== DC-1: Primary ==========
+  zookeeper-a:
+    image: confluentinc/cp-zookeeper:7.5.0
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: bash -c "echo srvr | nc localhost 2181 | grep Mode"
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+
+  kafka-a:
+    image: confluentinc/cp-kafka:7.5.0
+    ports:
+      - "9092:9092"
+    depends_on:
+      zookeeper-a:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper-a:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-a:29092,EXTERNAL://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_MESSAGE_TIMESTAMP_TYPE: CreateTime
+    healthcheck:
+      test: kafka-broker-api-versions --bootstrap-server localhost:9092
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  mock-vendor:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      args:
+        JAR_FILE: mock-vendor/target/mock-vendor-0.0.1-SNAPSHOT.jar
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: wget -qO- http://localhost:8081/actuator/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # DIS Instance 1 (Primary — connects to kafka-a)
+  dis-1:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      args:
+        JAR_FILE: digital-instrument-service/target/digital-instrument-service-0.0.1-SNAPSHOT.jar
+    ports:
+      - "8087:8087"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka-a:
+        condition: service_healthy
+      mock-vendor:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: multidc
+      SPRING_MONGODB_URI: mongodb://mongodb:27017/dis_multi_dc
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-a:29092
+      VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
+      DIS_WEBHOOK_CALLBACK_URL: http://dis-1:8087/webhooks/enigio
+    healthcheck:
+      test: wget -qO- http://localhost:8087/actuator/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  # ========== DC-2: Standby ==========
+  zookeeper-b:
+    image: confluentinc/cp-zookeeper:7.5.0
+    ports:
+      - "2281:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: bash -c "echo srvr | nc localhost 2181 | grep Mode"
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+
+  kafka-b:
+    image: confluentinc/cp-kafka:7.5.0
+    ports:
+      - "9192:9192"
+    depends_on:
+      zookeeper-b:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper-b:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-b:29192,EXTERNAL://localhost:9192
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_MESSAGE_TIMESTAMP_TYPE: CreateTime
+    healthcheck:
+      test: kafka-broker-api-versions --bootstrap-server localhost:9192
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # DIS Instance 2 (Standby — connects to kafka-b, same MongoDB)
+  # Does NOT auto-start. Manually start on failover:
+  #   docker compose -f docker-compose-multi-dc.yml start dis-2
+  dis-2:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      args:
+        JAR_FILE: digital-instrument-service/target/digital-instrument-service-0.0.1-SNAPSHOT.jar
+    ports:
+      - "8088:8087"
+    profiles:
+      - failover
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka-b:
+        condition: service_healthy
+      mock-vendor:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: multidc
+      SPRING_MONGODB_URI: mongodb://mongodb:27017/dis_multi_dc
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-b:29192
+      VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
+      DIS_WEBHOOK_CALLBACK_URL: http://dis-2:8087/webhooks/enigio
+    healthcheck:
+      test: wget -qO- http://localhost:8087/actuator/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  # ========== MirrorMaker 2 (replicates topics from kafka-a → kafka-b) ==========
+  mirrormaker:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      kafka-a:
+        condition: service_healthy
+      kafka-b:
+        condition: service_healthy
+    environment:
+      KAFKA_LOG4J_OPTS: "-Dlog4j.configuration=file:/etc/kafka/connect-log4j.properties"
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo 'Waiting for source cluster...'
+        sleep 30
+        printf '%s\n' \
+          'clusters = dc1, dc2' \
+          'dc1.bootstrap.servers = kafka-a:29092' \
+          'dc2.bootstrap.servers = kafka-b:29192' \
+          'dc1->dc2.enabled = true' \
+          'dc2->dc1.enabled = false' \
+          'dc1->dc2.topics = dis\.instrument\..*' \
+          'emit.checkpoints.enabled = false' \
+          'replication.policy.class = org.apache.kafka.connect.mirror.IdentityReplicationPolicy' \
+          'refresh.topics.interval.seconds = 10' \
+          'sync.topic.configs.enabled = true' \
+          'sync.topic.acls.enabled = false' \
+          'dc1.consumer.auto.offset.reset = earliest' \
+          'offset.storage.replication.factor = 1' \
+          'status.storage.replication.factor = 1' \
+          'config.storage.replication.factor = 1' \
+          'checkpoints.topic.replication.factor = 1' \
+          'heartbeats.topic.replication.factor = 1' \
+          'offset-syncs.topic.replication.factor = 1' \
+          > /tmp/mm2.properties
+        echo 'Starting MirrorMaker 2...'
+        connect-mirror-maker /tmp/mm2.properties
+
+volumes:
+  multi-dc-mongo:

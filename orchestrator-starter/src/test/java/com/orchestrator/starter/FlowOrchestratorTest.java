@@ -176,13 +176,13 @@ class FlowOrchestratorTest {
     // ========== Infrastructure errors ==========
 
     @Test
-    void executeStep_flowNotFound_wrapsAsRetryable() {
+    void executeStep_flowNotFound_goesToDlt() {
         when(flowRepo.findById("missing")).thenReturn(Optional.empty());
 
-        RetryableStepException ex = assertThrows(RetryableStepException.class, () ->
+        NonRetryableStepException ex = assertThrows(NonRetryableStepException.class, () ->
                 orchestrator.executeStep("missing", "STEP_A"));
 
-        assertTrue(ex.getMessage().contains("Infrastructure error"));
+        assertTrue(ex.getMessage().contains("Flow not found"));
     }
 
     @Test

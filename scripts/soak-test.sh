@@ -14,7 +14,7 @@ curl -sf "$DIS_URL/actuator/health" >/dev/null || { log "DIS not reachable at $D
 log "DIS healthy at $DIS_URL"
 
 # Clean MongoDB
-docker exec spring_orchestrator-mongodb-1 mongosh --quiet digital_instrument_service --eval '
+docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval '
   db.dis_instrument_flows.deleteMany({});
   db.orchestrator_outbox.deleteMany({});
   db.orchestrator_step_log.deleteMany({});
@@ -23,6 +23,17 @@ docker exec spring_orchestrator-mongodb-1 mongosh --quiet digital_instrument_ser
   db.dis_additional_documents.deleteMany({});
 ' 2>/dev/null
 log "MongoDB cleaned"
+
+# Reset Kafka consumer offsets to latest (skip stale messages from seed data / previous runs)
+for GROUP in digital-instrument-service-executor digital-instrument-service-dlt \
+             digital-instrument-service-executor-dlt \
+             digital-instrument-service-executor-retry-0 \
+             digital-instrument-service-executor-retry-1 \
+             digital-instrument-service-executor-retry-2; do
+  docker exec infra-kafka-1-1 kafka-consumer-groups --bootstrap-server kafka-1:29092 \
+    --group "$GROUP" --reset-offsets --to-latest --all-topics --execute 2>/dev/null >/dev/null
+done
+log "Kafka consumer offsets reset to latest"
 
 # Instrument types and doc codes
 TYPES=("PROMISSORY_NOTE" "BILL_OF_EXCHANGE" "BILL_OF_LADING")
@@ -53,19 +64,19 @@ submit_flow() {
 }
 
 count_done() {
-  docker exec spring_orchestrator-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+  docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
     "print(db.dis_instrument_flows.countDocuments({status:{\$in:['COMPLETED','FAILED','CANCELLED']}}))" 2>/dev/null
 }
 
 count_total() {
-  docker exec spring_orchestrator-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+  docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
     "print(db.dis_instrument_flows.countDocuments({}))" 2>/dev/null
 }
 
 # Auto-approve all flows waiting at gate steps
 auto_approve() {
   local ids
-  ids=$(docker exec spring_orchestrator-mongodb-1 mongosh --quiet digital_instrument_service --eval 'db.dis_instrument_flows.find({status:"WAITING_RETRY",currentStep:{$in:["AWAIT_PREPARATION_APPROVAL","AWAIT_DELIVERY_APPROVAL"]}},{_id:1}).forEach(function(f){print(String(f._id))})' 2>/dev/null)
+  ids=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval 'db.dis_instrument_flows.find({status:"WAITING_RETRY",currentStep:{$in:["AWAIT_PREPARATION_APPROVAL","AWAIT_DELIVERY_APPROVAL"]}},{_id:1}).forEach(function(f){print(String(f._id))})' 2>/dev/null)
 
   for id in $ids; do
     curl -sf -X POST "$DIS_URL/flows/enigio-instrument/$id/approve" \
@@ -116,7 +127,7 @@ done
 DONE=$(count_done)
 log "Final: $DONE/$TOTAL done"
 
-docker exec spring_orchestrator-mongodb-1 mongosh --quiet digital_instrument_service --eval '
+docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval '
   print("=== Flow Status ===");
   db.dis_instrument_flows.aggregate([{$group:{_id:"$status",count:{$sum:1}}}]).forEach(r => print("  " + r._id + ": " + r.count));
   print("=== Step Log ===");
@@ -128,7 +139,7 @@ docker exec spring_orchestrator-mongodb-1 mongosh --quiet digital_instrument_ser
 ' 2>/dev/null
 
 log "=== Kafka Offsets ==="
-docker exec spring_orchestrator-kafka-1-1 bash -c '
+docker exec infra-kafka-1-1 bash -c '
 T="dis.instrument.commands"; kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka-1:29092 --topic $T 2>/dev/null | tr "\n" "," ; echo
 T="dis.instrument.commands.replies"; kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka-1:29092 --topic $T 2>/dev/null | tr "\n" "," ; echo
 T="dis.instrument.commands-dlt"; kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka-1:29092 --topic $T 2>/dev/null | tr "\n" "," ; echo
@@ -136,8 +147,8 @@ T="dis.instrument.notifications"; kafka-run-class kafka.tools.GetOffsetShell --b
 '
 
 log "=== Webhook Registrations ==="
-docker logs spring_orchestrator-mock-vendor-1 2>&1 | grep "Webhook registered" | tail -3
-WEBHOOK_FIRED=$(docker logs spring_orchestrator-mock-vendor-1 2>&1 | grep -c "Webhook fired")
+docker logs infra-mock-vendor-1 2>&1 | grep "Webhook registered" | tail -3
+WEBHOOK_FIRED=$(docker logs infra-mock-vendor-1 2>&1 | grep -c "Webhook fired")
 log "Total webhooks fired: $WEBHOOK_FIRED"
 
 log "DONE"
