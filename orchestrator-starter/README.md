@@ -622,6 +622,94 @@ Not cancellable: `COMPLETED`, `FAILED`, `CANCELLED`
 
 ---
 
+## Gate Steps (Event-Driven Waiting)
+
+Gate steps wait for external events (user approval, vendor webhook, scheduled expiry). They **exit Kafka entirely** and park the flow in MongoDB — no retry budget consumed while waiting.
+
+```java
+@Step(order = 4, completedWhen = "signingApproved == true")
+public void awaitApproval(MyFlow flow) {
+    if (!flow.isApprovalNotified()) {
+        notificationService.notify(flow, "AWAITING_APPROVAL");
+        flow.setApprovalNotified(true);
+        checkpoint(flow);
+    }
+
+    // Check expiry
+    if (flow.isExpired()) {
+        throw new NonRetryableStepException("Approval expired");
+    }
+
+    if (!flow.isSigningApproved()) {
+        // Parks flow in MongoDB (WAITING_RETRY), exits Kafka
+        throw new WaitingStepException("Awaiting downstream approval");
+    }
+}
+```
+
+### How it works
+
+1. Step throws `WaitingStepException` → orchestrator catches it, sets status to `WAITING_RETRY`, returns (no throw to Kafka)
+2. Flow sits in MongoDB. No Kafka messages. No retry budget consumed
+3. External event arrives (API call, webhook, scheduler) → publishes a step command to Kafka
+4. Consumer picks up the command → step re-executes → condition is now true → step completes normally
+
+### Re-activation patterns
+
+| Pattern | Trigger | Example |
+|---------|---------|---------|
+| **API approval** | `POST /flows/{id}/approve` | Downstream system approves next phase |
+| **Vendor webhook** | Enigio POSTs to callback URL | `FULLY_SIGNED`, `TRANSFER` events |
+| **Safety-net scheduler** | `@Scheduled` polls MongoDB | Re-publishes stale `WAITING_RETRY` flows |
+
+### WaitingStepException vs RetryableStepException
+
+| | `WaitingStepException` | `RetryableStepException` |
+|---|---|---|
+| **Use when** | Waiting for external event | Transient failure (vendor down, timeout) |
+| **Kafka behaviour** | Exits Kafka entirely | Goes to retry topic (backoff + jitter) |
+| **Retry budget** | Not consumed | Consumed (max-attempts countdown) |
+| **Re-activation** | External trigger publishes command | Kafka retry topic delivers after delay |
+| **Flow status** | `WAITING_RETRY` | `WAITING_RETRY` |
+
+---
+
+## Reply Mode (Decoupled Command/Reply)
+
+By default, reply mode is enabled. The command consumer executes steps, the reply consumer advances the flow. This decouples execution from orchestration.
+
+```
+Command topic          Reply topic
+    │                      │
+    ▼                      ▼
+┌──────────┐         ┌──────────┐
+│ Execute  │──reply──▶│ Advance  │──next cmd──▶ Command topic
+│ step     │         │ to next  │
+└──────────┘         └──────────┘
+```
+
+### Why reply mode?
+
+- **Non-blocking orchestration** — the reply consumer thread is never blocked by slow vendor API calls
+- **CAS advancement** — atomic compare-and-swap on `currentStep` prevents duplicate advancement when multiple replies arrive
+- **Flow snapshot** — reply carries the flow state, avoiding stale MongoDB reads in the reply consumer
+
+### Configuration
+
+```yaml
+orchestrator:
+  kafka:
+    command-topic: my.commands        # step execution
+    # reply-topic: my.commands.replies  (auto-derived, or set explicitly)
+    # Set reply-topic: "" to disable reply mode (inline advancement)
+```
+
+### Disabling reply mode
+
+Set `reply-topic: ""` in YAML. Steps execute and advance in the same consumer thread (simpler, but blocks the consumer during vendor calls).
+
+---
+
 ## Cross-Cluster Offset Recovery
 
 For multi-DC failover where `__consumer_offsets` is per-cluster and NOT replicated.

@@ -7,19 +7,30 @@ Resilient multi-step workflow orchestration for Spring Boot, backed by MongoDB a
 ```
 spring-orchestrator/
 │
-├── orchestrator-starter/        ← THE LIBRARY (publish this)
-│   └── README.md                  Full documentation
+├── orchestrator-starter/            ← THE LIBRARY (publish this)
+│   └── README.md                      Full documentation
 │
-├── sample-app/                  ← USAGE EXAMPLE
-│   └── EnigioDocumentFlow.java    5-step vendor integration in one class
+├── digital-instrument-service/      ← PRODUCTION: Enigio trace:original integration
+│   └── 11-step flow, Feign clients, 4 event-driven gates
 │
-├── common/                      ┐
-├── saga-outbox/                 │  REFERENCE IMPLEMENTATIONS
-├── statemachine/                │  (comparison only, not for production)
-├── spring-integration/          │  Build with: mvn package -P demo
-├── mock-vendor/                 │
-└── dashboard/                   ┘  Web UI for comparing patterns
+├── mock-vendor/                     ← Enigio API simulator for testing
+│
+├── examples/
+│   ├── sample-app/                  ← Minimal usage example
+│   └── dashboard/                   ← Monitoring web UI
+│
+├── alternative-frameworks/          ← Reference implementations (comparison only)
+│   ├── saga-outbox/
+│   ├── statemachine/
+│   ├── spring-integration/
+│   └── common/
+│
+├── infra/                           ← Docker Compose, Dockerfile, nginx, alerts
+├── scripts/                         ← Soak test scripts
+└── docs/                            ← API specs, integration guide
 ```
+
+Each production module (`orchestrator-starter`, `digital-instrument-service`, `mock-vendor`) is **fully self-contained** — its own pom with `spring-boot-starter-parent`, all dependencies declared. Can be extracted to standalone repos.
 
 ## For Teams: Using the Library
 
@@ -34,14 +45,12 @@ Add the dependency and define your flow:
 ```
 
 ```java
-// Flow entity — just your domain fields (everything else inherited)
 @Document(collection = "order_flows")
 public class MyFlow extends AbstractFlow {
     private String orderId;
     private String paymentId;
 }
 
-// Flow logic — one class, all steps (no repository needed, auto-generated)
 @Component
 @Flow
 public class MyVendorFlow extends FlowDefinition<MyFlow> {
@@ -49,11 +58,13 @@ public class MyVendorFlow extends FlowDefinition<MyFlow> {
     @Step(order = 1, completedWhen = "orderId != null")
     public void createOrder(MyFlow flow) {
         flow.setOrderId(vendorClient.createOrder(...).getId());
+        checkpoint(flow); // persist after vendor API call
     }
 
     @Step(order = 2, completedWhen = "paymentId != null")
     public void processPayment(MyFlow flow) {
         flow.setPaymentId(vendorClient.charge(...).getId());
+        checkpoint(flow);
     }
 }
 ```
@@ -63,44 +74,34 @@ See [orchestrator-starter/README.md](orchestrator-starter/README.md) for full do
 ## Building
 
 ```bash
-# Library + sample app only (what you'd publish):
+# Production modules (library + DIS + mock-vendor):
 mvn package
 
-# Everything including reference implementations:
-mvn package -P demo
+# Everything including examples + alternative frameworks:
+mvn package -P all
+
+# Single module standalone:
+cd orchestrator-starter && mvn package
 ```
 
 ## What the Library Provides
 
-- Transactional outbox (atomic MongoDB write + Kafka publish)
-- Kafka retry topics with jittered exponential backoff (configurable ladder depth)
-- Two-layer idempotency (consumer + handler level)
-- Annotation-driven error handling (@RetryOn, @RecoverOn, @FailOn — sensible defaults)
-- Saga compensation (@Compensate — reverse execution on failure)
-- Single-class flow definition (@Flow + @Step on methods)
-- Parallel execution + join (@Parallel + @JoinOn)
-- Async API with polling (POST returns 202 + ID, GET for status)
-- Stale flow recovery (container crash safety net)
-- TTL-based collection cleanup (configurable retention per collection)
-- Combined or split deployment (same JAR, different YAML profile)
-- CooperativeStickyAssignor rebalancing (config-only, zero custom code)
-
-## Reference Implementations (demo profile)
-
-Three patterns were compared to arrive at the library design:
-
-| Pattern | Module | Verdict |
-|---------|--------|---------|
-| Saga + Transactional Outbox | `saga-outbox/` | Most resilient (atomic outbox), most code (~900 lines) |
-| Spring Statemachine | `statemachine/` | State validation from framework, but custom MongoDB persistence |
-| Spring Integration | `spring-integration/` | Least code (~470 lines), declarative flow DSL |
-| **orchestrator-starter** | `orchestrator-starter/` | **Best of all three, packaged as a library** |
-
-The `dashboard/` module provides a web UI at http://localhost:8080 for comparing all patterns side-by-side with flow visualization, Kafka ladder view, and performance metrics.
+- **Transactional outbox** — atomic MongoDB write + Kafka publish
+- **Kafka retry topics** — jittered exponential backoff (configurable ladder)
+- **Two-layer idempotency** — consumer + handler level dedup
+- **Reply mode** — decoupled command/reply topics for non-blocking orchestration
+- **Gate steps** — `WaitingStepException` parks flows in MongoDB, exits Kafka entirely; re-activated by API, webhook, or scheduler
+- **Annotation-driven error handling** — `@RetryOn`, `@RecoverOn`, `@FailOn`
+- **Saga compensation** — `@Compensate` for reverse execution on failure
+- **Flow cancellation** — `@OnCancel` with reverse handler execution
+- **Parallel + join** — `@Parallel` + `@JoinOn` for concurrent step execution
+- **checkpoint()** — mid-step persistence for crash safety after vendor API calls
+- **Stale flow recovery** — container crash safety net
+- **Auto-generated repositories** — no boilerplate Spring Data interfaces needed
 
 ## Requirements
 
 - Java 21+
-- Spring Boot 3.2+
-- MongoDB
-- Kafka
+- Spring Boot 4.0+
+- MongoDB 7.0+
+- Kafka 3.x+
