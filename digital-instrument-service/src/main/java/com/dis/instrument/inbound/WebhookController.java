@@ -1,5 +1,7 @@
 package com.dis.instrument.inbound;
 
+import com.dis.instrument.model.FlowStep;
+
 import com.dis.instrument.flow.EnigioInstrumentEntity;
 import com.dis.instrument.service.NotificationService;
 import com.orchestrator.starter.kafka.StepCommandMessage;
@@ -146,7 +148,7 @@ public class WebhookController {
                                 "ALL_SIGNATURES_COMPLETE", "SIGNED");
 
                         // Re-activate: signing gate is parked in DB, push to Kafka
-                        reactivateFlow(flow.getId(), "AWAIT_SIGNATURES");
+                        reactivateFlow(flow.getId(), FlowStep.AWAIT_SIGNATURES.name());
                     }
                 }
             }
@@ -163,7 +165,7 @@ public class WebhookController {
                     log.info("[webhook] FULLY_SIGNED for instrument {}", flow.getId());
                     notificationPublisher.notifyPhaseComplete(flow,
                             "ALL_SIGNATURES_COMPLETE", "SIGNED");
-                    reactivateFlow(flow.getId(), "AWAIT_SIGNATURES");
+                    reactivateFlow(flow.getId(), FlowStep.AWAIT_SIGNATURES.name());
                 } else {
                     log.info("[webhook] FULLY_SIGNED received but already SIGNED (duplicate)");
                 }
@@ -195,7 +197,7 @@ public class WebhookController {
                 if (flow != null) {
                     log.info("[webhook] TRANSFER accepted for instrument {} (envelope={})",
                             flow.getId(), traceOriginalId);
-                    reactivateFlow(flow.getId(), "TRANSFER_DOCUMENT");
+                    reactivateFlow(flow.getId(), FlowStep.TRANSFER_DOCUMENT.name());
                 } else {
                     log.info("[webhook] TRANSFER for unknown envelope {}", traceOriginalId);
                 }
@@ -214,7 +216,7 @@ public class WebhookController {
                             flow.getId(), traceOriginalId);
                     notificationPublisher.notifyPhaseComplete(flow,
                             "TRANSFER_REJECTED", "REJECTED");
-                    reactivateFlow(flow.getId(), "TRANSFER_DOCUMENT");
+                    reactivateFlow(flow.getId(), FlowStep.TRANSFER_DOCUMENT.name());
                 } else {
                     log.warn("[webhook] TRANSFER_REJECTED for unknown envelope {}", traceOriginalId);
                 }

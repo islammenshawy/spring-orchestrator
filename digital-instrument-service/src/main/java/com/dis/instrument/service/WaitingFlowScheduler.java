@@ -1,5 +1,7 @@
 package com.dis.instrument.service;
 
+import com.dis.instrument.model.FlowStep;
+
 import com.dis.instrument.flow.EnigioInstrumentEntity;
 import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.kafka.StepCommandMessage;
@@ -37,12 +39,10 @@ import java.util.UUID;
 @Component
 public class WaitingFlowScheduler {
 
-    private static final List<String> WAIT_STEPS = List.of(
-            "AWAIT_PREPARATION_APPROVAL",
-            "AWAIT_SIGNATURES",
-            "AWAIT_DELIVERY_APPROVAL",
-            "TRANSFER_DOCUMENT"
-    );
+    private static final List<String> WAIT_STEPS = java.util.Arrays.stream(FlowStep.values())
+            .filter(FlowStep::isGate)
+            .map(FlowStep::name)
+            .toList();
 
     private final MongoTemplate mongoTemplate;
     private final KafkaTemplate kafkaTemplate;

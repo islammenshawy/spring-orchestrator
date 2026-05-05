@@ -1,5 +1,7 @@
 package com.dis.instrument.inbound;
 
+import com.dis.instrument.model.FlowStep;
+
 import com.dis.instrument.flow.EnigioInstrumentEntity;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.flow.FlowOrchestrator;
@@ -109,7 +111,7 @@ public class FlowController {
         String currentStep = flow.getCurrentStep();
         String approvedPhase;
 
-        if ("AWAIT_PREPARATION_APPROVAL".equals(currentStep)) {
+        if (FlowStep.AWAIT_PREPARATION_APPROVAL.matches(currentStep)) {
             mongoTemplate.updateFirst(
                     Query.query(Criteria.where("_id").is(id)),
                     new Update().set("signingApproved", true),
@@ -117,7 +119,7 @@ public class FlowController {
             approvedPhase = "signing";
             log.info("[{}] Signing phase approved by downstream", id);
 
-        } else if ("AWAIT_DELIVERY_APPROVAL".equals(currentStep)) {
+        } else if (FlowStep.AWAIT_DELIVERY_APPROVAL.matches(currentStep)) {
             mongoTemplate.updateFirst(
                     Query.query(Criteria.where("_id").is(id)),
                     new Update().set("deliveryApproved", true),
@@ -280,14 +282,10 @@ public class FlowController {
 
     /** Maps internal step names to downstream-friendly phase names. */
     private static String stepToPhase(String step) {
-        return switch (step) {
-            case "CREATE_DRAFT", "REGISTER_DOCUMENT", "ADD_ATTACHMENT" -> "preparation";
-            case "AWAIT_PREPARATION_APPROVAL" -> "awaiting_signing_approval";
-            case "ADD_SIGNERS", "SEND_FOR_SIGNING", "AWAIT_SIGNATURES" -> "signing";
-            case "AWAIT_DELIVERY_APPROVAL" -> "awaiting_delivery_approval";
-            case "VALIDATE_DOCUMENT", "CREATE_ENVELOPE" -> "delivery";
-            case "TRANSFER_DOCUMENT" -> "awaiting_recipient";
-            default -> step.toLowerCase();
-        };
+        try {
+            return FlowStep.valueOf(step).phase();
+        } catch (IllegalArgumentException e) {
+            return step.toLowerCase();
+        }
     }
 }

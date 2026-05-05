@@ -1,5 +1,7 @@
 package com.dis.instrument.config;
 
+import com.dis.instrument.model.FlowStep;
+
 import com.dis.instrument.model.*;
 import com.dis.instrument.flow.EnigioInstrumentEntity;
 import com.orchestrator.starter.domain.FlowStatus;
@@ -75,7 +77,7 @@ public class SeedDataInitializer implements CommandLineRunner {
                 FlowStatus.IN_PROGRESS,
                 Map.of("guaranteeAmount", "250,000 USD", "purchaseOrder", "PO-2026-3344")
         );
-        guarantee.setCurrentStep("AWAIT_SIGNATURES");
+        guarantee.setCurrentStep(FlowStep.AWAIT_SIGNATURES.name());
         guarantee.setTraceOriginalId("a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6abcd");
         guarantee.setVersionKey("v1_seed_guarantee");
         guarantee.setAttachmentVersionKey("NONE");
@@ -102,7 +104,7 @@ public class SeedDataInitializer implements CommandLineRunner {
                 FlowStatus.FAILED,
                 null
         );
-        invoice.setCurrentStep("AWAIT_SIGNATURES");
+        invoice.setCurrentStep(FlowStep.AWAIT_SIGNATURES.name());
         invoice.setTraceOriginalId("f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6wxyz");
         invoice.setVersionKey("v1_seed_invoice");
         invoice.setPdfGenerated(true);
@@ -139,7 +141,7 @@ public class SeedDataInitializer implements CommandLineRunner {
         flow.setUpdatedAt(Instant.now().minusSeconds((long)(Math.random() * 3600)));
 
         if (status == FlowStatus.COMPLETED) {
-            flow.setCurrentStep("TRANSFER_DOCUMENT");
+            flow.setCurrentStep(FlowStep.TRANSFER_DOCUMENT.name());
             flow.setPdfGenerated(true);
             flow.setTraceOriginalId(java.util.UUID.randomUUID().toString().replace("-", "") +
                     java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 32));
