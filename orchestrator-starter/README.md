@@ -1241,14 +1241,54 @@ Neither Kafka nor MongoDB alone is sufficient. Kafka drives the retry timing. Mo
 
 ---
 
-## MongoDB Collections
+## What the Library Creates
 
-| Collection | Managed by | Purpose |
-|-----------|-----------|---------|
-| Your collection (e.g., `order_flows`) | You | Flow state + domain fields |
-| `orchestrator_outbox` | Library | Transactional outbox |
-| `orchestrator_processed_events` | Library | Consumer idempotency |
-| `orchestrator_step_log` | Library | Step audit trail |
+When you add the library to your app, it creates **4 MongoDB collections** and **up to 10 Kafka topics** automatically. You provide only your flow collection.
+
+### MongoDB Collections (4 library + 1 yours)
+
+| Collection | Managed by | Purpose | TTL |
+|-----------|-----------|---------|-----|
+| Your collection (e.g., `order_flows`) | You | Flow state + domain fields | None |
+| `orchestrator_outbox` | Library | Transactional outbox | 24h after published |
+| `orchestrator_processed_events` | Library | Consumer idempotency (eventId dedup) | 7 days |
+| `orchestrator_step_log` | Library | Step execution audit trail | 30 days |
+| `orchestrator_consumer_offsets` | Library | Kafka offset recovery (multi-DC failover) | None (small) |
+
+### Kafka Topics (auto-created by Spring Kafka)
+
+| Topic | Purpose | Partitions |
+|-------|---------|------------|
+| `{command-topic}` | Step commands ("execute step X") | Configurable (default 6) |
+| `{command-topic}-retry-0` through `-retry-N` | Failed steps retried with backoff | 1 each |
+| `{command-topic}-dlt` | Dead letter — permanently failed steps | 1 |
+| `{command-topic}.replies` | Step replies ("step X completed") | Same as command |
+| `{command-topic}.replies-dlt` | Dead letter — failed reply processing | 1 |
+
+**Example with `orchestrator.kafka.command-topic: dis.instrument.commands`:**
+
+```
+dis.instrument.commands              ← 6 partitions (step execution)
+dis.instrument.commands-retry-0      ← 3s backoff
+dis.instrument.commands-retry-1      ← 6s backoff
+dis.instrument.commands-retry-2      ← 10s backoff (capped)
+...
+dis.instrument.commands-dlt          ← dead letter (manual review)
+dis.instrument.commands.replies      ← 6 partitions (flow advancement)
+dis.instrument.commands.replies-dlt  ← dead letter for replies
+```
+
+**Notification topic (optional, your responsibility):**
+
+The library does NOT create a notification topic. If your flow publishes notifications to downstream (e.g., approval requests), you create the topic yourself:
+
+```java
+@Bean
+public NewTopic notificationTopic() {
+    return TopicBuilder.name("dis.instrument.notifications")
+            .partitions(6).replicas(3).build();
+}
+```
 
 ### Your flow collection (e.g., `order_flows`)
 
@@ -1352,6 +1392,22 @@ Compensation is also logged:
   "durationMs": 120
 }
 ```
+
+### `orchestrator_consumer_offsets` — cross-cluster offset recovery
+
+Only used when `orchestrator.recovery.offset-strategy: MONGO` (for multi-DC failover where `__consumer_offsets` is per-cluster).
+
+```json
+{
+  "_id": "dis.instrument.commands:3",
+  "topic": "dis.instrument.commands",
+  "partition": 3,
+  "offset": 897,
+  "updatedAt": "2026-05-04T10:30:00Z"
+}
+```
+
+Small table (one doc per partition). On failover to a new Kafka cluster, the consumer reads offsets from MongoDB instead of the (now-empty) `__consumer_offsets`.
 
 ---
 
