@@ -1,6 +1,9 @@
 package com.dis.instrument.inbound;
 
 import com.dis.instrument.model.FlowStep;
+import com.dis.instrument.model.SigningStatus;
+import com.dis.instrument.model.FlowPhase;
+import com.dis.instrument.model.WebhookEvent;
 
 import com.dis.instrument.flow.EnigioInstrumentEntity;
 import com.dis.instrument.service.NotificationService;
@@ -125,7 +128,7 @@ public class WebhookController {
                 EnigioInstrumentEntity flow = mongoTemplate.findAndModify(query,
                         new Update()
                                 .inc("signaturesReceived", 1)
-                                .set("signingStatus", "PARTIALLY_SIGNED"),
+                                .set("signingStatus", SigningStatus.PARTIALLY_SIGNED.name()),
                         FindAndModifyOptions.options().returnNew(true),
                         EnigioInstrumentEntity.class);
 
@@ -134,18 +137,18 @@ public class WebhookController {
                             flow.getSignaturesReceived(), flow.getSignaturesRequired(), flow.getId());
 
                     notificationPublisher.notifyPhaseComplete(flow,
-                            "SIGNATURE_RECEIVED",
+                            FlowPhase.SIGNATURE_RECEIVED.name(),
                             flow.getSignaturesReceived() + "/" + flow.getSignaturesRequired() + " signed");
 
                     if (flow.getSignaturesRequired() > 0
                             && flow.getSignaturesReceived() >= flow.getSignaturesRequired()) {
                         mongoTemplate.updateFirst(query,
-                                new Update().set("signingStatus", "SIGNED"),
+                                new Update().set("signingStatus", SigningStatus.SIGNED.name()),
                                 EnigioInstrumentEntity.class);
                         log.info("[webhook] All {} signatures received — marking SIGNED", flow.getSignaturesRequired());
 
                         notificationPublisher.notifyPhaseComplete(flow,
-                                "ALL_SIGNATURES_COMPLETE", "SIGNED");
+                                FlowPhase.ALL_SIGNATURES_COMPLETE.name(), "SIGNED");
 
                         // Re-activate: signing gate is parked in DB, push to Kafka
                         reactivateFlow(flow.getId(), FlowStep.AWAIT_SIGNATURES.name());
@@ -156,15 +159,15 @@ public class WebhookController {
             case "FULLY_SIGNED" -> {
                 EnigioInstrumentEntity flow = mongoTemplate.findAndModify(
                         Query.query(Criteria.where("traceOriginalId").is(traceOriginalId)
-                                .and("signingStatus").ne("SIGNED")),
-                        new Update().set("signingStatus", "SIGNED"),
+                                .and("signingStatus").ne(SigningStatus.SIGNED.name())),
+                        new Update().set("signingStatus", SigningStatus.SIGNED.name()),
                         FindAndModifyOptions.options().returnNew(true),
                         EnigioInstrumentEntity.class);
 
                 if (flow != null) {
                     log.info("[webhook] FULLY_SIGNED for instrument {}", flow.getId());
                     notificationPublisher.notifyPhaseComplete(flow,
-                            "ALL_SIGNATURES_COMPLETE", "SIGNED");
+                            FlowPhase.ALL_SIGNATURES_COMPLETE.name(), "SIGNED");
                     reactivateFlow(flow.getId(), FlowStep.AWAIT_SIGNATURES.name());
                 } else {
                     log.info("[webhook] FULLY_SIGNED received but already SIGNED (duplicate)");
@@ -173,7 +176,7 @@ public class WebhookController {
 
             case "SIGNATURE_REJECTED" -> {
                 mongoTemplate.updateFirst(query,
-                        new Update().set("signingStatus", "REJECTED"),
+                        new Update().set("signingStatus", SigningStatus.REJECTED.name()),
                         EnigioInstrumentEntity.class);
 
                 EnigioInstrumentEntity flow = mongoTemplate.findOne(query, EnigioInstrumentEntity.class);

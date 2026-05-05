@@ -3,6 +3,9 @@ package com.dis.instrument.flow;
 import com.dis.instrument.vendor.enigio.EnigioClient;
 import com.dis.instrument.service.NotificationService;
 import com.dis.instrument.model.AdditionalDocument;
+import com.dis.instrument.model.SigningStatus;
+import com.dis.instrument.model.FlowPhase;
+import com.dis.instrument.model.WebhookEvent;
 import com.dis.instrument.model.AdditionalDocumentRepository;
 import com.dis.instrument.model.Attachment;
 import com.dis.instrument.model.Signer;
@@ -131,7 +134,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         if (!flow.isPreparationNotified()) {
             log.info("[{}] Document preparation complete. Publishing notification.", flow.getId());
             notificationPublisher.notifyPhaseComplete(flow,
-                    "PREPARATION_COMPLETE", "AWAITING_APPROVAL");
+                    FlowPhase.PREPARATION_COMPLETE.name(), "AWAITING_APPROVAL");
             flow.setPreparationNotified(true);
             flow.setPreparationNotifiedAt(Instant.now());
             checkpoint(flow);
@@ -141,7 +144,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         if (flow.getPreparationNotifiedAt() != null) {
             Duration elapsed = Duration.between(flow.getPreparationNotifiedAt(), Instant.now());
             if (elapsed.toHours() >= approvalExpiryHours) {
-                notificationPublisher.notifyPhaseComplete(flow, "APPROVAL_EXPIRED",
+                notificationPublisher.notifyPhaseComplete(flow, FlowPhase.APPROVAL_EXPIRED.name(),
                         "Signing approval not received within " + approvalExpiryHours + "h");
                 throw new NonRetryableStepException(
                         "Signing approval expired after " + elapsed.toHours() + "h");
@@ -178,9 +181,10 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         // Register webhook for signature events (best-effort — polling is fallback)
         if (!flow.isWebhookRegistered()) {
             enigioClient.registerWebhook(webhookCallbackUrl,
-                    List.of("FULLY_SIGNED", "PARTIALLY_SIGNED", "SIGNATURE_REJECTED",
-                            "TRANSFER", "TRANSFER_REJECTED",
-                            "CREATE", "AMENDMENT", "INVALIDATE"));
+                    List.of(WebhookEvent.FULLY_SIGNED.name(), WebhookEvent.PARTIALLY_SIGNED.name(),
+                            WebhookEvent.SIGNATURE_REJECTED.name(), WebhookEvent.TRANSFER.name(),
+                            WebhookEvent.TRANSFER_REJECTED.name(), WebhookEvent.CREATE.name(),
+                            WebhookEvent.AMENDMENT.name(), WebhookEvent.INVALIDATE.name()));
             flow.setWebhookRegistered(true);
         }
 
@@ -210,22 +214,22 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
      *   3. Expiry — if signing exceeds dis.signing.expiry-hours, fail the flow
      *
      * Each PARTIALLY_SIGNED webhook increments signaturesReceived and notifies downstream.
-     * Flow advances only when signingStatus == "SIGNED".
+     * Flow advances only when signingStatus == SigningStatus.SIGNED.name().
      */
     @Step(order = 7, completedWhen = "signingStatus == 'SIGNED'")
     public void awaitSignatures(EnigioInstrumentEntity flow) {
         // 1. Check if webhook already set the status (fast path)
-        if ("SIGNED".equals(flow.getSigningStatus())) {
+        if (SigningStatus.SIGNED.name().equals(flow.getSigningStatus())) {
             log.info("[{}] All {}/{} signatures completed (via webhook)",
                     flow.getId(), flow.getSignaturesReceived(), flow.getSignaturesRequired());
             return;
         }
 
-        if ("REJECTED".equals(flow.getSigningStatus())) {
+        if (SigningStatus.REJECTED.name().equals(flow.getSigningStatus())) {
             throw new NonRetryableStepException("Signature rejected by signer");
         }
 
-        if ("EXPIRED".equals(flow.getSigningStatus())) {
+        if (SigningStatus.EXPIRED.name().equals(flow.getSigningStatus())) {
             throw new NonRetryableStepException("Signing expired after " + signingExpiryHours + " hours");
         }
 
@@ -239,15 +243,15 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
 
                 // One final poll before expiring
                 String finalStatus = enigioClient.getSigningStatus(flow.getTraceOriginalId());
-                if ("SIGNED".equals(finalStatus)) {
-                    flow.setSigningStatus("SIGNED");
+                if (SigningStatus.SIGNED.name().equals(finalStatus)) {
+                    flow.setSigningStatus(SigningStatus.SIGNED.name());
                     flow.setSignaturesReceived(flow.getSignaturesRequired());
                     log.info("[{}] Last-minute signing detected — marking SIGNED", flow.getId());
                     return;
                 }
 
-                flow.setSigningStatus("EXPIRED");
-                notificationPublisher.notifyPhaseComplete(flow, "SIGNING_EXPIRED",
+                flow.setSigningStatus(SigningStatus.EXPIRED.name());
+                notificationPublisher.notifyPhaseComplete(flow, FlowPhase.SIGNING_EXPIRED.name(),
                         flow.getSignaturesReceived() + "/" + flow.getSignaturesRequired() + " signed before expiry");
                 throw new NonRetryableStepException(
                         "Signing expired after " + elapsed.toHours() + "h. " +
@@ -264,15 +268,15 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
 
         String status = enigioClient.getSigningStatus(flow.getTraceOriginalId());
 
-        if ("SIGNED".equals(status)) {
-            flow.setSigningStatus("SIGNED");
+        if (SigningStatus.SIGNED.name().equals(status)) {
+            flow.setSigningStatus(SigningStatus.SIGNED.name());
             flow.setSignaturesReceived(flow.getSignaturesRequired());
             log.info("[{}] All signatures completed (via poll fallback)", flow.getId());
             return;
         }
 
-        if ("REJECTED".equals(status)) {
-            flow.setSigningStatus("REJECTED");
+        if (SigningStatus.REJECTED.name().equals(status)) {
+            flow.setSigningStatus(SigningStatus.REJECTED.name());
             throw new NonRetryableStepException("Signature rejected by signer");
         }
 
@@ -290,7 +294,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         if (!flow.isSigningNotified()) {
             log.info("[{}] Signing ceremony complete. Publishing notification.", flow.getId());
             notificationPublisher.notifyPhaseComplete(flow,
-                    "SIGNING_COMPLETE", "AWAITING_APPROVAL");
+                    FlowPhase.SIGNING_COMPLETE.name(), "AWAITING_APPROVAL");
             flow.setSigningNotified(true);
             flow.setSigningNotifiedAt(Instant.now());
             checkpoint(flow);
@@ -300,7 +304,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         if (flow.getSigningNotifiedAt() != null) {
             Duration elapsed = Duration.between(flow.getSigningNotifiedAt(), Instant.now());
             if (elapsed.toHours() >= approvalExpiryHours) {
-                notificationPublisher.notifyPhaseComplete(flow, "APPROVAL_EXPIRED",
+                notificationPublisher.notifyPhaseComplete(flow, FlowPhase.APPROVAL_EXPIRED.name(),
                         "Delivery approval not received within " + approvalExpiryHours + "h");
                 throw new NonRetryableStepException(
                         "Delivery approval expired after " + elapsed.toHours() + "h");
@@ -407,19 +411,19 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             checkpoint(flow);
 
             log.info("[{}] Transfer initiated: transferId={}", flow.getId(), transferId);
-            notificationPublisher.notifyPhaseComplete(flow, "TRANSFER_INITIATED", "AWAITING_RECIPIENT");
+            notificationPublisher.notifyPhaseComplete(flow, FlowPhase.TRANSFER_INITIATED.name(), "AWAITING_RECIPIENT");
         }
 
         // Phase 2: Check transfer outcome (set by TRANSFER / TRANSFER_REJECTED webhook)
         if (flow.isTransferAccepted()) {
             log.info("[{}] Transfer accepted by recipient", flow.getId());
-            notificationPublisher.notifyPhaseComplete(flow, "FLOW_COMPLETE", "COMPLETED");
+            notificationPublisher.notifyPhaseComplete(flow, FlowPhase.FLOW_COMPLETE.name(), "COMPLETED");
             return;
         }
 
         if (flow.isTransferRejected()) {
             log.error("[{}] Transfer REJECTED by recipient. transferId={}", flow.getId(), flow.getTransferId());
-            notificationPublisher.notifyPhaseComplete(flow, "TRANSFER_REJECTED", "FAILED");
+            notificationPublisher.notifyPhaseComplete(flow, FlowPhase.TRANSFER_REJECTED.name(), "FAILED");
             throw new NonRetryableStepException("Transfer rejected by recipient");
         }
 
@@ -429,7 +433,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             if (elapsed.toHours() >= approvalExpiryHours) {
                 log.error("[{}] Transfer expired after {}h. transferId={}",
                         flow.getId(), elapsed.toHours(), flow.getTransferId());
-                notificationPublisher.notifyPhaseComplete(flow, "TRANSFER_EXPIRED",
+                notificationPublisher.notifyPhaseComplete(flow, FlowPhase.TRANSFER_EXPIRED.name(),
                         "Recipient did not accept within " + approvalExpiryHours + "h");
                 throw new NonRetryableStepException(
                         "Transfer expired after " + elapsed.toHours() + "h — recipient did not accept");
@@ -537,6 +541,6 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             }
         }
 
-        notificationPublisher.notifyPhaseComplete(flow, "FLOW_CANCELLED", "CANCELLED");
+        notificationPublisher.notifyPhaseComplete(flow, FlowPhase.FLOW_CANCELLED.name(), "CANCELLED");
     }
 }

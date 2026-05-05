@@ -1,6 +1,6 @@
 package com.dis.instrument.config;
 
-import com.dis.instrument.model.FlowStep;
+import com.dis.instrument.model.*;
 
 import com.dis.instrument.model.*;
 import com.dis.instrument.flow.EnigioInstrumentEntity;
@@ -89,7 +89,7 @@ public class SeedDataInitializer implements CommandLineRunner {
         guarantee.setWebhookRegistered(true);
         guarantee.setSignaturesRequired(2);
         guarantee.setSignaturesReceived(1);
-        guarantee.setSigningStatus("PARTIALLY_SIGNED");
+        guarantee.setSigningStatus(SigningStatus.PARTIALLY_SIGNED.name());
         guarantee.setSigningStartedAt(Instant.now().minusSeconds(3600));
         seed(guarantee);
 
@@ -112,7 +112,7 @@ public class SeedDataInitializer implements CommandLineRunner {
         invoice.setSigningApproved(true);
         invoice.setSignersAdded(true);
         invoice.setSigningEmailsSent(true);
-        invoice.setSigningStatus("REJECTED");
+        invoice.setSigningStatus(SigningStatus.REJECTED.name());
         invoice.setErrorMessage("Signature rejected by signer: Hans Mueller — document terms disputed");
         seed(invoice);
 
@@ -155,7 +155,7 @@ public class SeedDataInitializer implements CommandLineRunner {
             flow.setWebhookRegistered(true);
             flow.setSignaturesRequired(signers.size());
             flow.setSignaturesReceived(signers.size());
-            flow.setSigningStatus("SIGNED");
+            flow.setSigningStatus(SigningStatus.SIGNED.name());
             flow.setSigningStartedAt(flow.getCreatedAt().plusSeconds(60));
             flow.setSigningNotified(true);
             flow.setSigningNotifiedAt(flow.getCreatedAt().plusSeconds(300));
