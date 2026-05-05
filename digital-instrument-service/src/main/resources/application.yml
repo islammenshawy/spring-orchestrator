@@ -44,8 +44,17 @@ mongock:
 vendor:
   enigio:
     base-url: http://mock-vendor:8081/api/v1
-    seal-timeout-seconds: 30                  # envelope sealing is slowest vendor call (~450ms mock, potentially seconds on real API)
-    transfer-timeout-seconds: 30              # transfer involves email ceremony initiation
+    connect-timeout-ms: 5000                  # TCP connect timeout
+    read-timeout-ms: 30000                    # read timeout (covers seal + transfer, slowest vendor calls)
+
+# Feign client configuration
+spring.cloud.openfeign:
+  client:
+    config:
+      default:
+        connect-timeout: ${vendor.enigio.connect-timeout-ms:5000}
+        read-timeout: ${vendor.enigio.read-timeout-ms:30000}
+        logger-level: BASIC
 
 # Digital Instrument Service settings
 dis:

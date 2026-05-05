@@ -12,7 +12,6 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.MediaType;
 import org.springframework.web.client.RestClient;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -42,7 +41,7 @@ class InstrumentFlowIntegrationTest {
     private MongoTemplate mongoTemplate;
 
     private RestClient rest;
-    private WebClient vendorAdmin;
+    private RestClient vendorAdmin;
 
     @BeforeAll
     static void clearTestData(@Autowired MongoTemplate mongo) throws InterruptedException {
@@ -55,19 +54,19 @@ class InstrumentFlowIntegrationTest {
     @BeforeEach
     void setUp() {
         rest = RestClient.create("http://localhost:" + port);
-        vendorAdmin = WebClient.create("http://localhost:8081");
+        vendorAdmin = RestClient.create("http://localhost:8081");
         // DO NOT reset mock-vendor here — async flows (AWAIT_SIGNATURES) poll
         // the mock-vendor after setUp returns, resetting would wipe in-flight state.
         // Only reset failure config, not document state.
         try {
             vendorAdmin.post().uri("/admin/failure-config")
-                    .bodyValue(Map.of()).retrieve().bodyToMono(String.class).block();
+                    .body(Map.of()).retrieve().body(String.class);
         } catch (Exception ignored) {}
     }
 
     private void resetMockVendor() {
         try {
-            vendorAdmin.post().uri("/admin/reset").retrieve().bodyToMono(String.class).block();
+            vendorAdmin.post().uri("/admin/reset").retrieve().body(String.class);
         } catch (Exception ignored) {}
     }
 
@@ -263,8 +262,8 @@ class InstrumentFlowIntegrationTest {
     @DisplayName("Flaky vendor: flow recovers after Kafka retry")
     void flakyVendor_recoversAfterRetry() {
         vendorAdmin.post().uri("/admin/failure-config")
-                .bodyValue(Map.of("createDocument", "FLAKY"))
-                .retrieve().bodyToMono(String.class).block();
+                .body(Map.of("createDocument", "FLAKY"))
+                .retrieve().body(String.class);
 
         var result = startInstrumentFlow("PN-FLAKY-001", InstrumentType.PROMISSORY_NOTE);
         String flowId = (String) result.get("id");
@@ -556,9 +555,9 @@ class InstrumentFlowIntegrationTest {
 
         // Verify document invalidated on mock vendor
         try {
-            var metadata = WebClient.create("http://localhost:8081")
+            var metadata = RestClient.create("http://localhost:8081")
                     .get().uri("/api/v1/documents/{id}/metadata", signed.getTraceOriginalId())
-                    .retrieve().bodyToMono(Map.class).block();
+                    .retrieve().body(Map.class);
             assertEquals(true, metadata.get("invalidated"),
                     "Document should be invalidated on Enigio after cancel");
         } catch (Exception e) {
