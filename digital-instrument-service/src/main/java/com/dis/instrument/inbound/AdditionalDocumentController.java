@@ -1,5 +1,7 @@
 package com.dis.instrument.inbound;
 
+import com.dis.instrument.inbound.response.*;
+
 import com.dis.instrument.model.AdditionalDocument;
 import com.dis.instrument.model.AdditionalDocumentRepository;
 import io.swagger.v3.oas.annotations.Operation;
@@ -93,7 +95,7 @@ public class AdditionalDocumentController {
                     @ApiResponse(responseCode = "400", description = "Invalid request — missing filename or data, or invalid base64")
             })
     @PostMapping
-    public ResponseEntity<Map<String, Object>> upload(
+    public ResponseEntity<?> upload(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(
                     description = "Document upload payload",
                     content = @Content(mediaType = "application/json",
@@ -106,22 +108,20 @@ public class AdditionalDocumentController {
                                     }""")))
             @RequestBody UploadRequest request) {
         if (request.filename() == null || request.filename().isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "filename is required"));
+            return ResponseEntity.badRequest().body(new ErrorResponse("filename is required"));
         }
         if (request.data() == null || request.data().isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "data (base64) is required"));
+            return ResponseEntity.badRequest().body(new ErrorResponse("data (base64) is required"));
         }
         if (request.data().length() > MAX_BASE64_LENGTH) {
-            return ResponseEntity.badRequest().body(Map.of(
-                    "error", "Document too large — max 10 MB",
-                    "maxBytes", 10_000_000));
+            return ResponseEntity.badRequest().body(new ErrorResponse("Document too large — max 10 MB"));
         }
 
         byte[] decoded;
         try {
             decoded = Base64.getDecoder().decode(request.data());
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", "data must be valid base64"));
+            return ResponseEntity.badRequest().body(new ErrorResponse("data must be valid base64"));
         }
 
         String sha256 = sha256Hex(decoded);
@@ -140,13 +140,7 @@ public class AdditionalDocumentController {
         log.info("Additional document uploaded: id={}, filename={}, size={}bytes, sha256={}, instrumentId={}",
                 saved.getId(), saved.getFilename(), saved.getSizeBytes(), sha256, saved.getInstrumentId());
 
-        return ResponseEntity.ok(Map.of(
-                "id", saved.getId(),
-                "filename", saved.getFilename(),
-                "sha256Hash", saved.getSha256Hash(),
-                "sizeBytes", saved.getSizeBytes(),
-                "uploadedAt", saved.getUploadedAt().toString()
-        ));
+        return ResponseEntity.ok(DocumentUploadResponse.from(saved));
     }
 
     @Operation(
@@ -169,10 +163,10 @@ public class AdditionalDocumentController {
                     @ApiResponse(responseCode = "404", description = "Document not found")
             })
     @GetMapping("/{id}")
-    public ResponseEntity<Map<String, Object>> getMetadata(
+    public ResponseEntity<?> getMetadata(
             @Parameter(description = "Additional document ID (returned from upload)") @PathVariable String id) {
         return repository.findById(id)
-                .map(doc -> ResponseEntity.ok(toMetadataMap(doc)))
+                .map(doc -> ResponseEntity.ok(toMetadata(doc)))
                 .orElse(ResponseEntity.notFound().build());
     }
 
@@ -187,11 +181,11 @@ public class AdditionalDocumentController {
                     @ApiResponse(responseCode = "200", description = "List of document metadata (may be empty)")
             })
     @GetMapping("/instrument/{instrumentId}")
-    public ResponseEntity<List<Map<String, Object>>> listByInstrument(
+    public ResponseEntity<?> listByInstrument(
             @Parameter(description = "Instrument ID (from notification payload)", example = "682b3f1a0000000000000001")
             @PathVariable String instrumentId) {
         var docs = repository.findByInstrumentId(instrumentId);
-        return ResponseEntity.ok(docs.stream().map(this::toMetadataMap).toList());
+        return ResponseEntity.ok(docs.stream().map(this::toMetadata).toList());
     }
 
     @Operation(
@@ -210,14 +204,14 @@ public class AdditionalDocumentController {
                     @ApiResponse(responseCode = "404", description = "Document not found")
             })
     @DeleteMapping("/{id}")
-    public ResponseEntity<Map<String, String>> delete(
+    public ResponseEntity<?> delete(
             @Parameter(description = "Additional document ID") @PathVariable String id) {
         if (!repository.existsById(id)) {
             return ResponseEntity.notFound().build();
         }
         repository.deleteById(id);
         log.info("Additional document deleted: id={}", id);
-        return ResponseEntity.ok(Map.of("id", id, "status", "deleted"));
+        return ResponseEntity.ok(new CancelResponse(id, "deleted", null));
     }
 
     // --- DTOs ---
@@ -241,16 +235,8 @@ public class AdditionalDocumentController {
 
     // --- Helpers ---
 
-    private Map<String, Object> toMetadataMap(AdditionalDocument doc) {
-        return Map.of(
-                "id", doc.getId(),
-                "filename", doc.getFilename(),
-                "contentType", doc.getContentType(),
-                "sha256Hash", doc.getSha256Hash(),
-                "sizeBytes", doc.getSizeBytes(),
-                "instrumentId", doc.getInstrumentId() != null ? doc.getInstrumentId() : "",
-                "uploadedAt", doc.getUploadedAt().toString()
-        );
+    private DocumentMetadataResponse toMetadata(AdditionalDocument doc) {
+        return DocumentMetadataResponse.from(doc);
     }
 
     private static String sha256Hex(byte[] data) {

@@ -1,5 +1,7 @@
 package com.dis.instrument.inbound;
 
+import com.dis.instrument.inbound.response.*;
+
 import com.dis.instrument.model.FlowStep;
 import com.dis.instrument.model.SigningStatus;
 import com.dis.instrument.model.FlowPhase;
@@ -83,7 +85,7 @@ public class WebhookController {
                     @ApiResponse(responseCode = "400", description = "Missing traceOriginalId or eventType")
             })
     @PostMapping
-    public ResponseEntity<Map<String, String>> handleWebhook(
+    public ResponseEntity<?> handleWebhook(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(
                     description = "Enigio webhook event payload",
                     content = @Content(mediaType = "application/json",
@@ -118,7 +120,7 @@ public class WebhookController {
         log.info("[webhook] Received {} for traceOriginalId={} messageId={}", eventType, traceOriginalId, messageId);
 
         if (traceOriginalId == null || eventType == null) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Missing traceOriginalId or eventType"));
+            return ResponseEntity.badRequest().body(new ErrorResponse("Missing traceOriginalId or eventType"));
         }
 
         Query query = Query.query(Criteria.where("traceOriginalId").is(traceOriginalId));
@@ -252,7 +254,7 @@ public class WebhookController {
             default -> log.info("[webhook] Ignoring event type: {} for {}", eventType, traceOriginalId);
         }
 
-        return ResponseEntity.ok(Map.of("status", "received", "eventType", eventType));
+        return ResponseEntity.ok(new WebhookResponse("received", eventType));
     }
 
     /** Re-activate a parked flow by publishing a step command to Kafka. */

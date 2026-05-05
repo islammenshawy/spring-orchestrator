@@ -1,6 +1,7 @@
 package com.dis.instrument.inbound;
 
 import com.dis.instrument.vendor.enigio.EnigioClient;
+import com.dis.instrument.inbound.response.*;
 import com.dis.instrument.vendor.enigio.dto.*;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -126,11 +127,10 @@ public class VendorSyncController {
             CompletableFuture.allOf(allFutures.toArray(CompletableFuture[]::new)).join();
         } catch (CompletionException e) {
             log.warn("Sync: partial failure fetching vendor state for {}: {}", traceOriginalId, e.getMessage());
-            return ResponseEntity.status(502).body(Map.of(
-                    "error", "Vendor call failed",
-                    "traceOriginalId", traceOriginalId,
-                    "message", e.getCause() != null ? e.getCause().getMessage() : e.getMessage()
-            ));
+            return ResponseEntity.status(502).body(new ErrorResponse(
+                    "Vendor call failed",
+                    traceOriginalId,
+                    null, e.getCause() != null ? e.getCause().getMessage() : e.getMessage()));
         }
 
         var response = new VendorSyncResponse(

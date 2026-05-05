@@ -1,6 +1,7 @@
 package com.dis.instrument.inbound;
 
 import com.dis.instrument.model.FlowStep;
+import com.dis.instrument.inbound.response.*;
 
 import com.dis.instrument.flow.EnigioInstrumentEntity;
 import com.orchestrator.starter.domain.OrchestratorFlow;
@@ -98,7 +99,7 @@ public class FlowController {
                     @ApiResponse(responseCode = "404", description = "Flow not found")
             })
     @PostMapping("/{id}/approve")
-    public ResponseEntity<Map<String, Object>> approveFlow(
+    public ResponseEntity<?> approveFlow(
             @Parameter(description = "Instrument ID (from notification payload's `instrumentId` field)", example = "682b3f1a0000000000000001")
             @PathVariable String id,
             @RequestBody(required = false) Map<String, Object> body) {
@@ -128,23 +129,18 @@ public class FlowController {
             log.info("[{}] Delivery phase approved by downstream", id);
 
         } else {
-            return ResponseEntity.badRequest().body(Map.of(
-                    "error", "Flow is not awaiting approval",
-                    "phase", currentStep != null ? stepToPhase(currentStep) : "unknown",
-                    "instrumentId", id
-            ));
+            return ResponseEntity.badRequest().body(new ErrorResponse(
+                    "Flow is not awaiting approval", id,
+                    currentStep != null ? stepToPhase(currentStep) : "unknown", null));
         }
 
         // Re-activate: publish step command to Kafka so the gate step re-executes
         // and finds the approval flag set → advances to next group
         reactivateFlow(id, flow.getCorrelationId(), currentStep);
 
-        return ResponseEntity.ok(Map.of(
-                "instrumentId", id,
-                "approvedPhase", approvedPhase,
-                "phase", stepToPhase(currentStep),
-                "message", "Flow re-activated — next group starting"
-        ));
+        return ResponseEntity.ok(new ApprovalResponse(
+                id, approvedPhase, stepToPhase(currentStep),
+                "Flow re-activated — next group starting"));
     }
 
     @Operation(
@@ -171,7 +167,7 @@ public class FlowController {
                     @ApiResponse(responseCode = "404", description = "Flow not found")
             })
     @GetMapping("/{id}/approval-status")
-    public ResponseEntity<Map<String, Object>> getApprovalStatus(
+    public ResponseEntity<?> getApprovalStatus(
             @Parameter(description = "Instrument ID (from notification payload's `instrumentId` field)", example = "682b3f1a0000000000000001")
             @PathVariable String id) {
         EnigioInstrumentEntity flow = mongoTemplate.findById(id, EnigioInstrumentEntity.class);
@@ -179,15 +175,14 @@ public class FlowController {
             return ResponseEntity.notFound().build();
         }
 
-        return ResponseEntity.ok(Map.of(
-                "instrumentId", id,
-                "phase", flow.getCurrentStep() != null ? stepToPhase(flow.getCurrentStep()) : "",
-                "status", flow.getStatus().name(),
-                "preparationNotified", flow.isPreparationNotified(),
-                "signingApproved", flow.isSigningApproved(),
-                "signingNotified", flow.isSigningNotified(),
-                "deliveryApproved", flow.isDeliveryApproved()
-        ));
+        return ResponseEntity.ok(new ApprovalStatusResponse(
+                id,
+                flow.getCurrentStep() != null ? stepToPhase(flow.getCurrentStep()) : "",
+                flow.getStatus().name(),
+                flow.isPreparationNotified(),
+                flow.isSigningApproved(),
+                flow.isSigningNotified(),
+                flow.isDeliveryApproved()));
     }
 
     @Operation(
@@ -227,7 +222,7 @@ public class FlowController {
             })
     @PostMapping("/{id}/cancel")
     @SuppressWarnings({"unchecked", "rawtypes"})
-    public ResponseEntity<Map<String, Object>> cancelFlow(
+    public ResponseEntity<?> cancelFlow(
             @Parameter(description = "Instrument ID (from notification payload's `instrumentId` field)", example = "682b3f1a0000000000000001")
             @PathVariable String id,
             @io.swagger.v3.oas.annotations.parameters.RequestBody(
@@ -244,20 +239,15 @@ public class FlowController {
             OrchestratorFlow cancelled = orch.cancelFlow(id, reason);
 
             if (cancelled == null) {
-                return ResponseEntity.badRequest().body(Map.of(
-                        "error", "Cannot cancel — flow not in cancellable state (must be IN_PROGRESS, WAITING_RETRY, or PENDING)",
-                        "instrumentId", id
-                ));
+                return ResponseEntity.badRequest().body(new ErrorResponse(
+                        "Cannot cancel — flow not in cancellable state (must be IN_PROGRESS, WAITING_RETRY, or PENDING)", id));
             }
 
-            return ResponseEntity.ok(Map.of(
-                    "instrumentId", cancelled.getId(),
-                    "status", cancelled.getStatus().name(),
-                    "message", "Flow cancelled. " + cancelled.getErrorMessage()
-            ));
+            return ResponseEntity.ok(new CancelResponse(
+                    cancelled.getId(), cancelled.getStatus().name(),
+                    "Flow cancelled. " + cancelled.getErrorMessage()));
         } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(Map.of(
-                    "error", e.getMessage(), "instrumentId", id));
+            return ResponseEntity.internalServerError().body(new ErrorResponse(e.getMessage(), id));
         }
     }
 
