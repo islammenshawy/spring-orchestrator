@@ -1,6 +1,7 @@
 package com.dis.instrument.vendor.enigio;
 
-import com.dis.instrument.core.model.*;
+import com.dis.instrument.model.*;
+import com.dis.instrument.flow.EnigioInstrumentEntity;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;

@@ -1,7 +1,7 @@
 package com.dis.instrument.vendor.enigio;
 
-import com.dis.instrument.core.model.Attachment;
-import com.dis.instrument.core.model.Signer;
+import com.dis.instrument.model.Attachment;
+import com.dis.instrument.model.Signer;
 import com.dis.instrument.vendor.enigio.dto.VendorDocumentMetadata;
 import com.dis.instrument.vendor.enigio.dto.VendorDocumentResponse;
 import com.dis.instrument.vendor.enigio.dto.VendorRequiredSignature;
@@ -9,7 +9,7 @@ import com.dis.instrument.vendor.enigio.dto.VendorTechnicalDetails;
 import com.dis.instrument.vendor.enigio.feign.EnigioDocumentClient;
 import com.dis.instrument.vendor.enigio.feign.EnigioEnvelopeClient;
 import com.dis.instrument.vendor.enigio.feign.EnigioSignatureClient;
-import com.dis.instrument.vendor.enigio.feign.dto.*;
+import com.dis.instrument.vendor.enigio.dto.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;

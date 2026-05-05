@@ -1,7 +1,10 @@
 package com.dis.instrument.vendor.enigio;
 
-import com.dis.instrument.core.api.FlowNotificationPublisher;
-import com.dis.instrument.core.model.*;
+import com.dis.instrument.service.NotificationService;
+import com.dis.instrument.flow.EnigioInstrumentEntity;
+import com.dis.instrument.flow.EnigioInstrumentFlow;
+import com.dis.instrument.vendor.enigio.EnigioClient;
+import com.dis.instrument.model.*;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.exception.NonRetryableStepException;
 import com.orchestrator.starter.exception.RetryableStepException;
@@ -34,7 +37,7 @@ class EnigioInstrumentFlowTest {
     private AdditionalDocumentRepository additionalDocumentRepository;
 
     @Mock
-    private FlowNotificationPublisher notificationPublisher;
+    private NotificationService notificationPublisher;
 
     @Mock
     private OrchestratorFlowRepository repository;

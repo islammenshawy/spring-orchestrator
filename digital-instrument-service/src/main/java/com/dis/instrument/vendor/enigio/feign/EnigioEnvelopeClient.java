@@ -1,6 +1,6 @@
 package com.dis.instrument.vendor.enigio.feign;
 
-import com.dis.instrument.vendor.enigio.feign.dto.*;
+import com.dis.instrument.vendor.enigio.dto.*;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.*;
 

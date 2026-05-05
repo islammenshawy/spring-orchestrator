@@ -1,7 +1,7 @@
 package com.dis.instrument.config;
 
-import com.dis.instrument.core.model.*;
-import com.dis.instrument.vendor.enigio.EnigioInstrumentEntity;
+import com.dis.instrument.model.*;
+import com.dis.instrument.flow.EnigioInstrumentEntity;
 import com.orchestrator.starter.domain.FlowStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
