@@ -246,7 +246,7 @@ services:
     profiles:
       - multi-instance
     healthcheck:
-      test: wget -qO- http://localhost:8090/actuator/health || exit 1
+      test: curl -sf http://localhost:8090/actuator/health || exit 1
       interval: 5s
       timeout: 5s
       retries: 10
