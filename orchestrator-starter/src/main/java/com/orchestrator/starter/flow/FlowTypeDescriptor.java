@@ -1,6 +1,5 @@
 package com.orchestrator.starter.flow;
 
-import com.orchestrator.starter.autoconfigure.OrchestratorProperties;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import lombok.Builder;
 import lombok.Data;
@@ -44,7 +43,4 @@ public class FlowTypeDescriptor {
 
     /** Per-flow orchestrator. */
     private FlowOrchestrator<?> orchestrator;
-
-    /** Resolved retry config (per-flow override or global default). */
-    private final OrchestratorProperties.RetryConfig retryConfig;
 }

@@ -21,6 +21,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Saga orchestrator with transactional outbox.
@@ -43,6 +48,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private final TransactionTemplate txTemplate;
     private final boolean includeFlowStateInLogs;
     private final KafkaTemplate kafkaTemplate;
+    private final int stepTimeoutSeconds;
+    private final ExecutorService stepExecutor;
     private Class<F> entityClass;
     private org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
 
@@ -60,7 +67,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             KafkaTemplate kafkaTemplate) {
         this(flowRepository, stepRegistry, outboxRepository, stepLogRepository,
                 objectMapper, null, commandTopic, replyTopic, replyEnabled,
-                txTemplate, includeFlowStateInLogs, kafkaTemplate);
+                txTemplate, includeFlowStateInLogs, kafkaTemplate, 60);
     }
 
     public FlowOrchestrator(
@@ -75,7 +82,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             boolean replyEnabled,
             TransactionTemplate txTemplate,
             boolean includeFlowStateInLogs,
-            KafkaTemplate kafkaTemplate) {
+            KafkaTemplate kafkaTemplate,
+            int stepTimeoutSeconds) {
         this.flowRepository = flowRepository;
         this.stepRegistry = stepRegistry;
         this.outboxRepository = outboxRepository;
@@ -88,6 +96,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         this.includeFlowStateInLogs = includeFlowStateInLogs;
         this.txTemplate = txTemplate;
         this.kafkaTemplate = kafkaTemplate;
+        this.stepTimeoutSeconds = stepTimeoutSeconds;
+        this.stepExecutor = stepTimeoutSeconds > 0
+                ? Executors.newVirtualThreadPerTaskExecutor() : null;
     }
 
     /**
@@ -189,7 +200,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         log.info("[Saga] Executing step {} for flow {}", stepName, flowId);
 
         try {
-            handler.execute(flow);
+            executeWithTimeout(handler, flow, stepName);
         } catch (WaitingStepException e) {
             // Gate/polling step — park flow in MongoDB, exit Kafka entirely.
             // Re-activation via: approval API, webhook, or expiry scheduler.
@@ -786,6 +797,37 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         this.mongoTemplate = mongoTemplate;
     }
 
+
+    /**
+     * Execute a step handler with an optional timeout.
+     * When timeout is enabled (> 0), runs the handler on a virtual thread
+     * and throws RetryableStepException if it exceeds the configured duration.
+     */
+    private void executeWithTimeout(StepHandler<F> handler, F flow, String stepName) throws Exception {
+        if (stepTimeoutSeconds <= 0 || stepExecutor == null) {
+            handler.execute(flow);
+            return;
+        }
+        try {
+            CompletableFuture.runAsync(() -> {
+                try {
+                    handler.execute(flow);
+                } catch (RuntimeException e) {
+                    throw e;
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }, stepExecutor).get(stepTimeoutSeconds, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw new RetryableStepException(
+                    "Step " + stepName + " timed out after " + stepTimeoutSeconds + "s");
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException re) throw re;
+            if (cause instanceof Exception ex) throw ex;
+            throw new RuntimeException(cause);
+        }
+    }
 
     /**
      * Persist the flow. Concurrency is handled by Kafka partition key

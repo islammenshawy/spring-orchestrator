@@ -89,8 +89,10 @@ public class OrchestratorAutoConfiguration {
     @ConditionalOnMissingBean
     public OutboxPublisher orchestratorOutboxPublisher(
             OutboxEventRepository outboxRepository,
-            KafkaTemplate kafkaTemplate) {
-        return new OutboxPublisher(outboxRepository, kafkaTemplate);
+            KafkaTemplate kafkaTemplate,
+            OrchestratorProperties props) {
+        return new OutboxPublisher(outboxRepository, kafkaTemplate,
+                props.getOutbox().getMaxPublishRetries());
     }
 
     // ========== FlowTypeRegistry (the core multi-flow bean) ==========
@@ -185,10 +187,6 @@ public class OrchestratorAutoConfiguration {
         boolean replyEnabled = props.getKafka().isReplyEnabled() &&
                 (replyTopic != null && !replyTopic.isEmpty());
 
-        OrchestratorProperties.RetryConfig retryConfig =
-                (flowConfig != null && flowConfig.getRetry() != null)
-                        ? flowConfig.getRetry() : props.getRetry();
-
         // Per-flow StepRegistry
         StepRegistry stepRegistry = new StepRegistry<>(handlers);
 
@@ -203,7 +201,8 @@ public class OrchestratorAutoConfiguration {
         FlowOrchestrator orchestrator = new FlowOrchestrator(
                 repository, stepRegistry, outboxRepository, stepLogRepository,
                 objectMapper, flowType, commandTopic, replyTopic, replyEnabled,
-                transactionTemplate, props.getAudit().isIncludeFlowState(), kafkaTemplate);
+                transactionTemplate, props.getAudit().isIncludeFlowState(), kafkaTemplate,
+                props.getStep().getTimeoutSeconds());
         if (entityClass != null && entityClass != Object.class) {
             orchestrator.setEntityClass(entityClass);
         }
@@ -224,7 +223,6 @@ public class OrchestratorAutoConfiguration {
                 .replyTopic(replyTopic)
                 .dltTopic(dltTopic)
                 .replyEnabled(replyEnabled)
-                .retryConfig(retryConfig)
                 .stepRegistry(stepRegistry)
                 .repository(repository)
                 .orchestrator(orchestrator)
@@ -488,17 +486,14 @@ public class OrchestratorAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    @SuppressWarnings("unchecked")
-    public StaleFlowRecoveryService<?> orchestratorRecoveryService(
+    public StaleFlowRecoveryService orchestratorRecoveryService(
             FlowTypeRegistry registry,
             KafkaTemplate kafkaTemplate,
             ObjectMapper objectMapper,
             OrchestratorProperties props,
             OutboxEventRepository outboxRepository) {
-        FlowTypeDescriptor first = registry.getAll().iterator().next();
         return new StaleFlowRecoveryService(
-                first.getRepository(), kafkaTemplate, objectMapper,
-                first.getCommandTopic(),
+                registry, kafkaTemplate, objectMapper,
                 props.getRecovery().getStaleThresholdMinutes(),
                 outboxRepository);
     }

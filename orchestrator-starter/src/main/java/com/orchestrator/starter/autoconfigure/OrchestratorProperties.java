@@ -22,6 +22,7 @@ public class OrchestratorProperties {
     private OutboxConfig outbox = new OutboxConfig();
     private EndpointsConfig endpoints = new EndpointsConfig();
     private RetentionConfig retention = new RetentionConfig();
+    private StepConfig step = new StepConfig();
 
     /** Per-flow configuration overrides. Key = flowType name from @Flow(name="...").
      *  Only set fields override — null fields fall back to global config. */
@@ -100,6 +101,9 @@ public class OrchestratorProperties {
          *  100ms: ~100ms latency, moderate CPU
          *  50ms: ~50ms latency, higher CPU — use for low-latency requirements */
         private long pollIntervalMs = 500;
+        /** Max publish retries before dead-lettering an outbox event.
+         *  Prevents a single poison event from freezing the entire outbox pipeline. */
+        private int maxPublishRetries = 5;
     }
 
     @Data
@@ -119,6 +123,14 @@ public class OrchestratorProperties {
         /** Kafka DLT topic retention in hours. Dead-lettered flows are already marked in MongoDB —
          *  the DLT message is for alerting only. Default 24h to prevent accumulation. */
         private int dltRetentionHours = 24;
+    }
+
+    @Data
+    public static class StepConfig {
+        /** Timeout in seconds for step execution. 0 = disabled (no timeout).
+         *  When a step exceeds this timeout, a RetryableStepException is thrown
+         *  and the message routes to Kafka retry topics. */
+        private int timeoutSeconds = 60;
     }
 
     @Data
@@ -157,7 +169,5 @@ public class OrchestratorProperties {
         private String dltTopic;
         /** Reply topic override. Null = use standard {topic}.replies suffix. */
         private String replyTopic;
-        /** Per-flow retry config override. Null = use global orchestrator.retry. */
-        private RetryConfig retry;
     }
 }

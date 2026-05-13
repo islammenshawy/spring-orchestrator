@@ -29,6 +29,14 @@ public class OutboxEvent {
     @Builder.Default
     private boolean published = false;
 
+    /** True if the event was moved to dead-letter after exceeding max publish retries. */
+    @Builder.Default
+    private boolean deadLettered = false;
+
+    /** Number of consecutive publish failures. Reset on successful publish. */
+    @Builder.Default
+    private int failureCount = 0;
+
     private Instant publishedAt;  // TTL index created programmatically by IndexInitializer
 
     @Builder.Default

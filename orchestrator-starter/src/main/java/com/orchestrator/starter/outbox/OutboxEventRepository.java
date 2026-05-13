@@ -6,6 +6,8 @@ import java.util.List;
 
 public interface OutboxEventRepository extends MongoRepository<OutboxEvent, String> {
 
+    List<OutboxEvent> findTop100ByPublishedFalseAndDeadLetteredFalseOrderByCreatedAtAsc();
+
     List<OutboxEvent> findTop100ByPublishedFalseOrderByCreatedAtAsc();
 
     long countByFlowIdAndPublishedFalse(String flowId);
