@@ -8,7 +8,5 @@ public interface OutboxEventRepository extends MongoRepository<OutboxEvent, Stri
 
     List<OutboxEvent> findTop100ByPublishedFalseAndDeadLetteredFalseOrderByCreatedAtAsc();
 
-    List<OutboxEvent> findTop100ByPublishedFalseOrderByCreatedAtAsc();
-
     long countByFlowIdAndPublishedFalse(String flowId);
 }

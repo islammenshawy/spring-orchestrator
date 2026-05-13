@@ -55,6 +55,7 @@ public class OutboxPublisher {
                 event.setFailureCount(failures);
                 if (failures >= maxPublishRetries) {
                     event.setDeadLettered(true);
+                    event.setPublishedAt(Instant.now()); // Enable TTL cleanup (same index as published events)
                     log.error("[Outbox] Dead-lettering event {} after {} failures (flow: {}, topic: {}): {}",
                             event.getId(), failures, event.getFlowId(), event.getTopic(), e.getMessage());
                 } else {

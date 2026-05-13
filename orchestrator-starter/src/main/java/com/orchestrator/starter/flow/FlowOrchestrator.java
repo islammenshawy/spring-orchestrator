@@ -808,17 +808,19 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             handler.execute(flow);
             return;
         }
+        CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+            try {
+                handler.execute(flow);
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }, stepExecutor);
         try {
-            CompletableFuture.runAsync(() -> {
-                try {
-                    handler.execute(flow);
-                } catch (RuntimeException e) {
-                    throw e;
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            }, stepExecutor).get(stepTimeoutSeconds, TimeUnit.SECONDS);
+            future.get(stepTimeoutSeconds, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
+            future.cancel(true); // Interrupt the virtual thread to release resources
             throw new RetryableStepException(
                     "Step " + stepName + " timed out after " + stepTimeoutSeconds + "s");
         } catch (java.util.concurrent.ExecutionException e) {
