@@ -51,7 +51,9 @@ public class OrchestratorHealthIndicator implements HealthIndicator {
             } catch (Exception ignored) {}
         }
 
-        boolean down = pending > outboxThreshold || deadLettered > 0 || staleFlows > 0;
+        // Only outbox issues cause DOWN — stale flows are an operational signal, not a pod health issue.
+        // Stale flows are reported as detail for dashboards/alerts but don't affect readiness.
+        boolean down = pending > outboxThreshold || deadLettered > 0;
 
         Health.Builder builder = down ? Health.down() : Health.up();
 
