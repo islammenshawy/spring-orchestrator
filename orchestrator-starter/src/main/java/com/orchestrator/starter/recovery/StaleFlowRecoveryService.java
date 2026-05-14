@@ -57,7 +57,7 @@ public class StaleFlowRecoveryService {
         this.staleThresholdMinutes = staleThresholdMinutes;
         this.maxRecoveryAttempts = maxRecoveryAttempts;
         this.outboxRepository = outboxRepository;
-        this.metrics = metrics;
+        this.metrics = metrics != null ? metrics : OrchestratorMetrics.noop();
     }
 
     @Scheduled(fixedDelayString = "${orchestrator.recovery.scan-interval-ms:30000}")
@@ -122,7 +122,7 @@ public class StaleFlowRecoveryService {
                 flow.setRecoveryCount(flow.getRecoveryCount() + 1);
                 flow.setUpdatedAt(Instant.now());
                 flowRepository.save(flow);
-                if (metrics != null) metrics.recoveryRecovered(flowType);
+                metrics.recoveryRecovered(flowType);
                 log.info("[Recovery] Re-published step {} for flow {} (type: {}, attempt: {})",
                         flow.getCurrentStep(), flow.getId(), flowType, flow.getRecoveryCount());
             } catch (Exception e) {

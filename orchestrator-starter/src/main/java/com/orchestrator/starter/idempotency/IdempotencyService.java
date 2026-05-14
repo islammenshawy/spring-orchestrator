@@ -16,7 +16,7 @@ public class IdempotencyService {
 
     public IdempotencyService(ProcessedEventRepository repository, OrchestratorMetrics metrics) {
         this.repository = repository;
-        this.metrics = metrics;
+        this.metrics = metrics != null ? metrics : OrchestratorMetrics.noop();
     }
 
     /**
@@ -31,7 +31,7 @@ public class IdempotencyService {
             repository.save(new ProcessedEvent(eventId));
             return true; // first time — proceed
         } catch (DuplicateKeyException e) {
-            if (metrics != null) metrics.idempotencyDuplicate();
+            metrics.idempotencyDuplicate();
             log.debug("Event {} already processed, skipping", eventId);
             return false; // duplicate — skip
         }

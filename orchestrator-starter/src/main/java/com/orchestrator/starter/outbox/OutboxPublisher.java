@@ -42,7 +42,7 @@ public class OutboxPublisher {
         this.repository = repository;
         this.kafkaTemplate = kafkaTemplate;
         this.maxPublishRetries = maxPublishRetries;
-        this.metrics = metrics;
+        this.metrics = metrics != null ? metrics : OrchestratorMetrics.noop();
     }
 
     @Scheduled(fixedDelayString = "${orchestrator.outbox.poll-interval-ms:500}")
@@ -56,7 +56,7 @@ public class OutboxPublisher {
                 event.setPublishedAt(Instant.now());
                 event.setFailureCount(0);
                 repository.save(event);
-                if (metrics != null) metrics.outboxPublished();
+                metrics.outboxPublished();
                 log.debug("[Outbox] Published event {} to {}", event.getId(), event.getTopic());
             } catch (Exception e) {
                 int failures = event.getFailureCount() + 1;
@@ -64,7 +64,7 @@ public class OutboxPublisher {
                 if (failures >= maxPublishRetries) {
                     event.setDeadLettered(true);
                     event.setPublishedAt(Instant.now()); // Enable TTL cleanup (same index as published events)
-                    if (metrics != null) metrics.outboxDeadLettered();
+                    metrics.outboxDeadLettered();
                     log.error("[Outbox] Dead-lettering event {} after {} failures (flow: {}, topic: {}): {}",
                             event.getId(), failures, event.getFlowId(), event.getTopic(), e.getMessage());
                 } else {

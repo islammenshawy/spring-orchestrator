@@ -105,7 +105,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         this.stepTimeoutSeconds = stepTimeoutSeconds;
         this.stepExecutor = stepTimeoutSeconds > 0
                 ? Executors.newVirtualThreadPerTaskExecutor() : null;
-        this.metrics = metrics;
+        this.metrics = metrics != null ? metrics : OrchestratorMetrics.noop();
     }
 
     /**
@@ -129,7 +129,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             return f;
         }, flow);
 
-        if (metrics != null) metrics.flowStarted(flowType != null ? flowType : "default");
+        metrics.flowStarted(flowType);
         return savedFlow;
     }
 
@@ -217,21 +217,21 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         try {
             executeWithTimeout(handler, flow, stepName);
         } catch (WaitingStepException e) {
-            if (metrics != null) metrics.stepExecution(flowType, stepName, "WAITING",
+            metrics.stepExecution(flowType, stepName, "WAITING",
                     Duration.between(startedAt, Instant.now()));
             logStep(flowId, stepName, "WAITING", flow.getRetryCount(),
                     flowBefore, null, e.getMessage(), startedAt);
             handleWaitingStep(flow, e);
             return;
         } catch (RetryableStepException e) {
-            if (metrics != null) metrics.stepExecution(flowType, stepName, "RETRYING",
+            metrics.stepExecution(flowType, stepName, "RETRYING",
                     Duration.between(startedAt, Instant.now()));
             logStep(flowId, stepName, "RETRYING", flow.getRetryCount() + 1,
                     flowBefore, null, e.getMessage(), startedAt);
             handleRetryableFailure(flow, e);
             throw e;
         } catch (NonRetryableStepException e) {
-            if (metrics != null) metrics.stepExecution(flowType, stepName, "FAILED",
+            metrics.stepExecution(flowType, stepName, "FAILED",
                     Duration.between(startedAt, Instant.now()));
             logStep(flowId, stepName, "FAILED", flow.getRetryCount() + 1,
                     flowBefore, null, e.getMessage(), startedAt);
@@ -284,7 +284,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
-        if (metrics != null) metrics.stepExecution(flowType, stepName, "COMPLETED",
+        metrics.stepExecution(flowType, stepName, "COMPLETED",
                 Duration.between(startedAt, Instant.now()));
 
         if (replyEnabled) {
@@ -389,7 +389,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setStatus(FlowStatus.FAILED);
         flow.setErrorMessage(errorDetail);
         flow.setUpdatedAt(Instant.now());
-        if (metrics != null) metrics.flowFailed(flowType != null ? flowType : "default");
+        metrics.flowFailed(flowType);
         saveFlow(flow);
 
         logStep(flowId, stepName != null ? stepName : flow.getCurrentStep(),
@@ -519,7 +519,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         if (anyCompensationFailed) {
             flow.setStatus(FlowStatus.COMPENSATION_FAILED);
             flow.setCompensationError(lastCompensationError);
-            if (metrics != null) metrics.compensationFailed(flowType != null ? flowType : "default");
+            metrics.compensationFailed(flowType);
         } else {
             flow.setStatus(FlowStatus.FAILED);
         }
@@ -568,7 +568,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                         "updatedAt", Instant.now(),
                         "completedParallelSteps", java.util.List.of()));
             }
-            if (metrics != null) metrics.flowCompleted(flowType != null ? flowType : "default");
+            metrics.flowCompleted(flowType);
             log.info("[Saga] Flow {} completed", flow.getId());
             return;
         }
@@ -712,7 +712,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     }
 
     private void handlePermanentFailure(F flow, NonRetryableStepException e) {
-        if (metrics != null) metrics.flowFailed(flowType != null ? flowType : "default");
+        metrics.flowFailed(flowType);
         String errorMsg = e.getMessage() != null ? e.getMessage() : "permanent failure";
         if (mongoTemplate != null && entityClass != null) {
             updateFlowPartial(flow.getId(), java.util.Map.of(

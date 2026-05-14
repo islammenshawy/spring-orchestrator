@@ -8,11 +8,12 @@ import java.time.Duration;
 
 /**
  * Centralized metrics for the orchestrator library.
- * All metric names and tags are defined here — no string literals scattered across classes.
- *
- * When MeterRegistry is null (actuator not on classpath), all methods are no-ops.
+ * Null-safe: all methods are no-ops when MeterRegistry is absent.
+ * Callers never need null checks — just call directly.
  */
 public class OrchestratorMetrics {
+
+    private static final OrchestratorMetrics NOOP = new OrchestratorMetrics(null);
 
     private final MeterRegistry registry;
 
@@ -20,65 +21,81 @@ public class OrchestratorMetrics {
         this.registry = registry;
     }
 
+    /** Returns a no-op instance. All method calls are silently ignored. */
+    public static OrchestratorMetrics noop() {
+        return NOOP;
+    }
+
+    public boolean isEnabled() {
+        return registry != null;
+    }
+
+    // ========== Flow lifecycle ==========
+
     public void flowStarted(String flowType) {
         if (registry == null) return;
-        Counter.builder("orchestrator.flows.started")
-                .tag("flowType", flowType)
-                .register(registry).increment();
+        counter("orchestrator.flows.started", flowType);
     }
 
     public void flowCompleted(String flowType) {
         if (registry == null) return;
-        Counter.builder("orchestrator.flows.completed")
-                .tag("flowType", flowType)
-                .register(registry).increment();
+        counter("orchestrator.flows.completed", flowType);
     }
 
     public void flowFailed(String flowType) {
         if (registry == null) return;
-        Counter.builder("orchestrator.flows.failed")
-                .tag("flowType", flowType)
-                .register(registry).increment();
+        counter("orchestrator.flows.failed", flowType);
     }
+
+    public void compensationFailed(String flowType) {
+        if (registry == null) return;
+        counter("orchestrator.compensation.failed", flowType);
+    }
+
+    // ========== Step execution ==========
 
     public void stepExecution(String flowType, String stepName, String outcome, Duration duration) {
         if (registry == null) return;
         Timer.builder("orchestrator.step.executions")
-                .tag("flowType", flowType)
+                .tag("flowType", safe(flowType))
                 .tag("stepName", stepName)
                 .tag("outcome", outcome)
                 .register(registry).record(duration);
     }
 
+    // ========== Outbox ==========
+
     public void outboxPublished() {
         if (registry == null) return;
-        Counter.builder("orchestrator.outbox.published")
-                .register(registry).increment();
+        Counter.builder("orchestrator.outbox.published").register(registry).increment();
     }
 
     public void outboxDeadLettered() {
         if (registry == null) return;
-        Counter.builder("orchestrator.outbox.dead_lettered")
-                .register(registry).increment();
+        Counter.builder("orchestrator.outbox.dead_lettered").register(registry).increment();
     }
+
+    // ========== Recovery ==========
 
     public void recoveryRecovered(String flowType) {
         if (registry == null) return;
-        Counter.builder("orchestrator.recovery.recovered")
-                .tag("flowType", flowType)
-                .register(registry).increment();
+        counter("orchestrator.recovery.recovered", flowType);
     }
 
-    public void compensationFailed(String flowType) {
-        if (registry == null) return;
-        Counter.builder("orchestrator.compensation.failed")
-                .tag("flowType", flowType)
-                .register(registry).increment();
-    }
+    // ========== Idempotency ==========
 
     public void idempotencyDuplicate() {
         if (registry == null) return;
-        Counter.builder("orchestrator.idempotency.duplicates")
-                .register(registry).increment();
+        Counter.builder("orchestrator.idempotency.duplicates").register(registry).increment();
+    }
+
+    // ========== Internal ==========
+
+    private void counter(String name, String flowType) {
+        Counter.builder(name).tag("flowType", safe(flowType)).register(registry).increment();
+    }
+
+    private static String safe(String flowType) {
+        return flowType != null ? flowType : "default";
     }
 }
