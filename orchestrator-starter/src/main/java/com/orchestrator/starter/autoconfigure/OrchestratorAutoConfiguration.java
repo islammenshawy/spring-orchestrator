@@ -218,6 +218,7 @@ public class OrchestratorAutoConfiguration {
             orchestrator.setEntityClass(entityClass);
         }
         orchestrator.setMongoTemplate(mongoTemplate);
+        orchestrator.setMaxLogSnapshotBytes(props.getAudit().getMaxLogSnapshotBytes());
 
         log.info("Flow '{}': topic={}, reply={}, dlt={}, steps={}, entity={}",
                 flowType, commandTopic,

@@ -54,6 +54,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private final int stepTimeoutSeconds;
     private final ExecutorService stepExecutor;
     private final OrchestratorMetrics metrics;
+    private int MAX_LOG_SNAPSHOT_BYTES = 32_768; // 32 KB default
     private Class<F> entityClass;
     private org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
 
@@ -208,7 +209,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
 
         flow.setStatus(FlowStatus.IN_PROGRESS);
-        String flowBefore = includeFlowStateInLogs ? serialize(flow) : null;
+        String flowBefore = includeFlowStateInLogs ? serializeForLog(flow) : null;
         Instant startedAt = Instant.now();
 
         log.info("[Saga] Executing step {} for flow {}", stepName, flowId);
@@ -241,7 +242,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 StepErrorHandler.handleError(handler, e);
                 // Recovered (e.g., HTTP 409)
                 logStep(flowId, stepName, "RECOVERED", flow.getRetryCount() + 1,
-                        flowBefore, includeFlowStateInLogs ? serialize(flow) : null, e.getMessage(), startedAt);
+                        flowBefore, includeFlowStateInLogs ? serializeForLog(flow) : null, e.getMessage(), startedAt);
                 log.info("[Saga] Step {} recovered for flow {}", stepName, flowId);
             } catch (RetryableStepException re) {
                 logStep(flowId, stepName, "RETRYING", flow.getRetryCount() + 1,
@@ -293,7 +294,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
 
         logStep(flowId, stepName, "COMPLETED", 1,
-                flowBefore, includeFlowStateInLogs ? serialize(flow) : null, null, startedAt);
+                flowBefore, includeFlowStateInLogs ? serializeForLog(flow) : null, null, startedAt);
     }
 
     /**
@@ -842,6 +843,10 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         this.mongoTemplate = mongoTemplate;
     }
 
+    public void setMaxLogSnapshotBytes(int maxLogSnapshotBytes) {
+        this.MAX_LOG_SNAPSHOT_BYTES = maxLogSnapshotBytes;
+    }
+
 
     /**
      * Execute a step handler with an optional timeout.
@@ -888,9 +893,25 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     private String serialize(F flow) {
         try {
-            return objectMapper.writeValueAsString(flow);
+            String json = objectMapper.writeValueAsString(flow);
+            return json;
         } catch (Exception e) {
             return "{}";
+        }
+    }
+
+    /** Serialize for step logs — skips if result exceeds max size to avoid storing binary blobs. */
+    private String serializeForLog(F flow) {
+        try {
+            String json = objectMapper.writeValueAsString(flow);
+            if (json.length() > MAX_LOG_SNAPSHOT_BYTES) {
+                log.debug("[Saga] Flow state too large for step log ({} bytes > {} max), skipping",
+                        json.length(), MAX_LOG_SNAPSHOT_BYTES);
+                return null;
+            }
+            return json;
+        } catch (Exception e) {
+            return null;
         }
     }
 }

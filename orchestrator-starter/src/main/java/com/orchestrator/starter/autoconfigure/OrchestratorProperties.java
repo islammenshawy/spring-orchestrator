@@ -150,6 +150,10 @@ public class OrchestratorProperties {
          *    ON:  ~4KB/step = 20KB/flow = 20GB per million flows
          *  Use retention.step-log-days to auto-expire old logs. */
         private boolean includeFlowState = false;
+        /** Max size in bytes for flow state snapshots in step logs. Entities larger than
+         *  this (e.g., with base64-encoded binary attachments) are skipped to avoid
+         *  bloating the step_log collection. Default 32 KB. */
+        private int maxLogSnapshotBytes = 32768;
     }
 
     /**
