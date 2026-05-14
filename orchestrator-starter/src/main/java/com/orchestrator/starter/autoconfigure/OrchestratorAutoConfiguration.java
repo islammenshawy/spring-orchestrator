@@ -489,7 +489,7 @@ public class OrchestratorAutoConfiguration {
                 .retryTopicSuffix("-retry")
                 .dltSuffix("-dlt")
                 .setTopicSuffixingStrategy(TopicSuffixingStrategy.SUFFIX_WITH_INDEX_VALUE)
-                .dltProcessingFailureStrategy(DltStrategy.ALWAYS_RETRY_ON_ERROR)
+                .dltProcessingFailureStrategy(DltStrategy.FAIL_ON_ERROR)
                 .retryOn(RetryableStepException.class)
                 .create(template);
     }
