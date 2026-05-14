@@ -8,10 +8,6 @@ spring:
   mongodb:
     uri: mongodb://mongodb:27017/digital_instrument_service
 
-mongock:
-  migration-scan-package: com.dis.instrument.config.migration
-  enabled: true
-
   kafka:
     bootstrap-servers: kafka-1:29092,kafka-2:29093,kafka-3:29094
 
@@ -26,10 +22,9 @@ mongock:
 
     # ========== Consumer — stretched cluster resilience ==========
     consumer:
-      auto-offset-reset: latest              # safety net only — TimestampOffsetRecoveryListener
+      auto-offset-reset: latest             # safety net only — TimestampOffsetRecoveryListener
                                             # handles offset loss via offsetsForTimes() BEFORE
-                                            # auto.offset.reset applies. 'latest' prevents full
-                                            # topic replay if the listener fails for any reason.
+                                            # auto.offset.reset applies.
       enable-auto-commit: false             # manual commit after processing (RECORD ack mode)
       properties:
         partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
@@ -37,8 +32,10 @@ mongock:
         heartbeat.interval.ms: 10000        # must be < session.timeout / 3
         max.poll.records: 50                # limit batch size
         max.poll.interval.ms: 300000        # 5 min — allows slow steps
-        # Rack-aware consumer — prefer replicas in same AZ to reduce cross-AZ traffic
-        # client.rack: ${KAFKA_RACK:rack-1}
+
+mongock:
+  migration-scan-package: com.dis.instrument.config.migration
+  enabled: true
 
 # Enigio trace:original vendor
 vendor:

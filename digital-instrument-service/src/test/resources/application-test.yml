@@ -3,6 +3,8 @@ spring:
     name: dis-test
   mongodb:
     uri: mongodb://localhost:27117/dis-test
+  kafka:
+    bootstrap-servers: localhost:9092
 
 vendor:
   enigio:

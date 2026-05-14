@@ -144,7 +144,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         if (flow.getPreparationNotifiedAt() != null) {
             Duration elapsed = Duration.between(flow.getPreparationNotifiedAt(), Instant.now());
             if (elapsed.toHours() >= approvalExpiryHours) {
-                notificationPublisher.notifyPhaseComplete(flow, FlowPhase.APPROVAL_EXPIRED.name(),
+                notifyBestEffort(flow, FlowPhase.APPROVAL_EXPIRED.name(),
                         "Signing approval not received within " + approvalExpiryHours + "h");
                 throw new NonRetryableStepException(
                         "Signing approval expired after " + elapsed.toHours() + "h");
@@ -251,7 +251,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
                 }
 
                 flow.setSigningStatus(SigningStatus.EXPIRED.name());
-                notificationPublisher.notifyPhaseComplete(flow, FlowPhase.SIGNING_EXPIRED.name(),
+                notifyBestEffort(flow, FlowPhase.SIGNING_EXPIRED.name(),
                         flow.getSignaturesReceived() + "/" + flow.getSignaturesRequired() + " signed before expiry");
                 throw new NonRetryableStepException(
                         "Signing expired after " + elapsed.toHours() + "h. " +
@@ -304,7 +304,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         if (flow.getSigningNotifiedAt() != null) {
             Duration elapsed = Duration.between(flow.getSigningNotifiedAt(), Instant.now());
             if (elapsed.toHours() >= approvalExpiryHours) {
-                notificationPublisher.notifyPhaseComplete(flow, FlowPhase.APPROVAL_EXPIRED.name(),
+                notifyBestEffort(flow, FlowPhase.APPROVAL_EXPIRED.name(),
                         "Delivery approval not received within " + approvalExpiryHours + "h");
                 throw new NonRetryableStepException(
                         "Delivery approval expired after " + elapsed.toHours() + "h");
@@ -411,19 +411,19 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             checkpoint(flow);
 
             log.info("[{}] Transfer initiated: transferId={}", flow.getId(), transferId);
-            notificationPublisher.notifyPhaseComplete(flow, FlowPhase.TRANSFER_INITIATED.name(), "AWAITING_RECIPIENT");
+            notifyBestEffort(flow, FlowPhase.TRANSFER_INITIATED.name(), "AWAITING_RECIPIENT");
         }
 
         // Phase 2: Check transfer outcome (set by TRANSFER / TRANSFER_REJECTED webhook)
         if (flow.isTransferAccepted()) {
             log.info("[{}] Transfer accepted by recipient", flow.getId());
-            notificationPublisher.notifyPhaseComplete(flow, FlowPhase.FLOW_COMPLETE.name(), "COMPLETED");
+            notifyBestEffort(flow, FlowPhase.FLOW_COMPLETE.name(), "COMPLETED");
             return;
         }
 
         if (flow.isTransferRejected()) {
             log.error("[{}] Transfer REJECTED by recipient. transferId={}", flow.getId(), flow.getTransferId());
-            notificationPublisher.notifyPhaseComplete(flow, FlowPhase.TRANSFER_REJECTED.name(), "FAILED");
+            notifyBestEffort(flow, FlowPhase.TRANSFER_REJECTED.name(), "FAILED");
             throw new NonRetryableStepException("Transfer rejected by recipient");
         }
 
@@ -433,7 +433,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             if (elapsed.toHours() >= approvalExpiryHours) {
                 log.error("[{}] Transfer expired after {}h. transferId={}",
                         flow.getId(), elapsed.toHours(), flow.getTransferId());
-                notificationPublisher.notifyPhaseComplete(flow, FlowPhase.TRANSFER_EXPIRED.name(),
+                notifyBestEffort(flow, FlowPhase.TRANSFER_EXPIRED.name(),
                         "Recipient did not accept within " + approvalExpiryHours + "h");
                 throw new NonRetryableStepException(
                         "Transfer expired after " + elapsed.toHours() + "h — recipient did not accept");
@@ -541,6 +541,18 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             }
         }
 
-        notificationPublisher.notifyPhaseComplete(flow, FlowPhase.FLOW_CANCELLED.name(), "CANCELLED");
+        notifyBestEffort(flow, FlowPhase.FLOW_CANCELLED.name(), "CANCELLED");
+    }
+
+    /** Best-effort notification — logs failure but doesn't throw. Used for non-critical
+     *  notifications (expiry, completion, cancellation) where the primary action should
+     *  proceed regardless of notification delivery. */
+    private void notifyBestEffort(EnigioInstrumentEntity flow, String phase, String status) {
+        try {
+            notificationPublisher.notifyPhaseComplete(flow, phase, status);
+        } catch (Exception e) {
+            log.warn("[{}] Best-effort notification failed (phase={}, status={}): {}",
+                    flow.getId(), phase, status, e.getMessage());
+        }
     }
 }

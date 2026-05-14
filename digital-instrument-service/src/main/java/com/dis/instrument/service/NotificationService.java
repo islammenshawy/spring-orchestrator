@@ -84,6 +84,7 @@ public class NotificationService {
                     flow.getId(), phase, status);
         } catch (Exception e) {
             log.error("[{}] Failed to publish notification: {}", flow.getId(), e.getMessage());
+            throw new RuntimeException("Failed to publish notification for flow " + flow.getId(), e);
         }
     }
 }

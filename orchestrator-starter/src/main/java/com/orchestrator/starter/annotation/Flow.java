@@ -41,6 +41,10 @@ public @interface Flow {
      *  E.g., EnigioDocumentFlow → "enigio-document" */
     String name() default "";
 
-    /** Kafka command topic override. Empty = use orchestrator.kafka.command-topic. */
+    /** @deprecated Per-flow topic overrides are not yet fully implemented.
+     *  The command listener only subscribes to the global command topic.
+     *  All flows share orchestrator.kafka.command-topic. This field is
+     *  ignored and will be removed in a future version. */
+    @Deprecated
     String topic() default "";
 }

@@ -122,7 +122,9 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
             log.info("[Step:{}] Executing compensation", stepName);
             compensateMethod.invoke(flowDefinition, flow);
         } catch (Exception e) {
-            log.error("[Step:{}] Compensation failed: {}", stepName, e.getMessage());
+            Throwable cause = e instanceof java.lang.reflect.InvocationTargetException ? e.getCause() : e;
+            log.error("[Step:{}] Compensation failed: {}", stepName, cause.getMessage());
+            throw new RuntimeException("Compensation failed for step " + stepName, cause);
         }
     }
 
@@ -144,7 +146,9 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
             log.info("[Step:{}] Executing cancellation via {}", stepName, type);
             handler.invoke(flowDefinition, flow);
         } catch (Exception e) {
-            log.error("[Step:{}] Cancellation failed: {}", stepName, e.getMessage());
+            Throwable cause = e instanceof java.lang.reflect.InvocationTargetException ? e.getCause() : e;
+            log.error("[Step:{}] Cancellation failed: {}", stepName, cause.getMessage());
+            throw new RuntimeException("Cancellation failed for step " + stepName, cause);
         }
     }
 

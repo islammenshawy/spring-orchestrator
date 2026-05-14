@@ -1,0 +1,484 @@
+================================================================================
+SPRING ORCHESTRATOR - GPT ASSESSMENT
+Generated: 2026-05-14
+Scope: orchestrator-starter + digital-instrument-service
+Excluded: alternat_frameworks, mock-vendor, examples, infra, scripts
+================================================================================
+
+This assessment is based on the current source code in the two focused modules.
+It documents what the project does, the current implementation structure, and
+validated gaps, bugs, and enhancement areas.
+
+================================================================================
+1. PROJECT UNDERSTANDING
+================================================================================
+
+1.1 orchestrator-starter
+------------------------
+
+orchestrator-starter is a reusable Spring Boot starter for MongoDB + Kafka backed
+workflow orchestration. It provides:
+
+- Annotation-driven flow definitions: @Flow, @Step, @RetryOn, @FailOn,
+  @RecoverOn, @Compensate, @OnCancel, @Parallel, @JoinOn.
+- Flow scanning and validation at startup via FlowDefinitionScanner.
+- Per-flow StepRegistry and FlowOrchestrator instances via FlowTypeRegistry.
+- MongoDB-backed flow state via GenericFlowRepository.
+- Kafka command/reply processing via OrchestratorKafkaConsumer.
+- Kafka retry topics through RetryTopicConfiguration.
+- Transactional outbox for initial step publishing and an OutboxPublisher.
+- Idempotency via ProcessedEvent records and completedWhen SpEL checks.
+- Stale flow recovery via StaleFlowRecoveryService.
+- Micrometer metrics and a Spring Boot HealthIndicator.
+- Optional auto-generated REST endpoints under /flows.
+
+1.2 digital-instrument-service
+------------------------------
+
+digital-instrument-service is the first consumer of the starter. It implements
+an Enigio trace:original digital instrument lifecycle with one flow type:
+enigio-instrument.
+
+The main flow is EnigioInstrumentFlow, an 11-step saga:
+
+1. createDraft
+2. registerDocument
+3. addAttachment
+4. awaitPreparationApproval
+5. addSigners
+6. sendForSigning
+7. awaitSignatures
+8. awaitDeliveryApproval
+9. validateDocument
+10. createEnvelope
+11. transferDocument
+
+It uses gate steps for downstream approval and vendor/webhook-driven waiting.
+Controllers expose approval, cancellation, additional document upload, vendor
+sync, and Enigio webhook endpoints. Feign clients call Enigio APIs. Mongock
+creates indexes for flows, outbox, idempotency, and audit logs.
+
+================================================================================
+2. CURRENT STRENGTHS
+================================================================================
+
+- The starter has a coherent saga/outbox/Kafka retry architecture.
+- Flow startup validates many misconfigurations: duplicate steps, bad signatures,
+  invalid @Compensate references, bad SpEL syntax, bad @Parallel/@JoinOn wiring.
+- The starter now has Micrometer metrics, a health indicator, MDC fields, and
+  compensationFailed metrics.
+- DIS has API-key authentication for non-webhook endpoints.
+- DIS has Resilience4j circuit breaker support enabled for Feign clients.
+- Important MongoDB indexes now exist for traceOriginalId and envelopeTraceId.
+- Notification and reactivation Kafka sends now use .get(), so broker ack is
+  awaited instead of fire-and-forget.
+- Seed data is guarded with @Profile("!prod").
+
+================================================================================
+3. CRITICAL / HIGH BUGS
+================================================================================
+
+3.1 Compensation and Cancellation Failures Are Swallowed
+--------------------------------------------------------
+Files:
+- orchestrator-starter/.../flow/MethodStepAdapter.java:116-127, 136-149
+- orchestrator-starter/.../flow/FlowOrchestrator.java:483-527, 437-478
+
+MethodStepAdapter.compensate() catches exceptions and only logs them. It does
+not rethrow. FlowOrchestrator.runCompensation() expects adapter.compensate() to
+throw so it can set COMPENSATION_FAILED and emit metrics. Because the adapter
+swallows the exception, the orchestrator can log a step as COMPENSATED and mark
+the flow FAILED instead of COMPENSATION_FAILED even when compensation failed.
+
+The same pattern exists for cancellation: MethodStepAdapter.cancel() catches and
+logs exceptions, then FlowOrchestrator.runCancellation() logs CANCELLED and marks
+the whole flow CANCELLED. DIS cancellation handlers also catch vendor failures
+internally, so legal invalidation or transfer revocation can fail while the API
+still reports the flow as cancelled.
+
+Impact: High. Failed compensation/cancellation can be reported as successful,
+leaving vendor state inconsistent with local state.
+
+Recommendation: Let adapter.compensate() and adapter.cancel() rethrow after
+logging, or return a structured outcome. FlowOrchestrator should persist
+COMPENSATION_FAILED/CANCEL_FAILED and expose retry/manual intervention.
+
+3.2 Duplicate PARTIALLY_SIGNED Webhooks Can Falsely Complete Signing
+--------------------------------------------------------------------
+File: digital-instrument-service/.../inbound/WebhookController.java:128-157
+
+PARTIALLY_SIGNED increments signaturesReceived atomically for every webhook.
+messageId is read but never stored or deduplicated. If Enigio retries the same
+PARTIALLY_SIGNED webhook, signaturesReceived can be incremented multiple times.
+Once signaturesReceived >= signaturesRequired, the flow is marked SIGNED and
+reactivated.
+
+Impact: High. Duplicate vendor callbacks can falsely mark an instrument fully
+signed and advance the flow before all real signatures are present.
+
+Recommendation: Store processed webhook messageIds or signer-level signature
+identifiers. Deduplicate PARTIALLY_SIGNED before incrementing. Prefer deriving
+completion from vendor required-signature state instead of counting events.
+
+3.3 Notification Failure Is Swallowed but Gate Flags Are Still Set
+------------------------------------------------------------------
+Files:
+- digital-instrument-service/.../service/NotificationService.java:78-87
+- digital-instrument-service/.../flow/EnigioInstrumentFlow.java:132-141, 292-301
+
+NotificationService.notifyPhaseComplete() waits for Kafka ack via .get(), but
+it catches any exception and returns normally. The gate steps then set
+preparationNotified/signingNotified to true and checkpoint the flow.
+
+If notification publishing fails, the flow records that notification happened
+even though downstream never received it. Future retries skip notification
+publication because the notified flag is already true.
+
+Impact: High. Approval requests can be permanently lost, causing flows to wait
+until manual intervention or expiry.
+
+Recommendation: NotificationService should throw on send failure, or return a
+boolean that gate steps check before setting notified flags. For stronger
+delivery, use a DIS notification outbox.
+
+3.4 Additional Document Post-Start Workflow Is Documented but Not Implemented
+----------------------------------------------------------------------------
+Files:
+- digital-instrument-service/.../inbound/AdditionalDocumentController.java:76-80
+- digital-instrument-service/.../flow/EnigioInstrumentFlow.java:356-384
+
+The AdditionalDocumentController docs say downstream can upload documents after
+flow start and link them with POST /documents/additional/{id}/link/{instrumentId}.
+No such link endpoint exists. UploadRequest has an optional instrumentId, but
+uploading with instrumentId only stores it on the AdditionalDocument document;
+
+createEnvelope only uploads documents listed in flow.additionalDocumentIds. So
+documents uploaded after flow start using instrumentId are not included in the
+envelope.
+
+Impact: High. The advertised workflow for adding documents between approval
+gates does not work.
+
+Recommendation: Add the documented link endpoint and atomically add the document
+ID to the flow's additionalDocumentIds before delivery approval. Alternatively,
+change createEnvelope to query AdditionalDocumentRepository by instrumentId.
+
+3.5 application.yml Appears to Misbind Kafka and MongoDB Properties
+-------------------------------------------------------------------
+File: digital-instrument-service/src/main/resources/application.yml:4-16
+
+The file currently uses:
+
+spring:
+  mongodb:
+    uri: mongodb://mongodb:27017/digital_instrument_service
+
+mongock:
+  migration-scan-package: ...
+  enabled: true
+  kafka:
+    bootstrap-servers: kafka-1:29092,kafka-2:29093,kafka-3:29094
+
+Spring Boot MongoDB configuration is normally spring.data.mongodb.uri, not
+spring.mongodb.uri. Kafka bootstrap servers should be under spring.kafka, but
+the file nests kafka under mongock. Unless these are overridden elsewhere via
+Kafka connection settings.
+
+Impact: High in deployed environments that rely on application.yml.
+
+Recommendation: Change to spring.data.mongodb.uri and spring.kafka.*. Add a
+configuration binding/startup test that asserts Mongo and Kafka properties are
+bound as intended.
+
+3.6 Per-Flow Topic Overrides Are Advertised but Command Listener Uses Only One Topic
+-----------------------------------------------------------------------------------
+Files:
+- orchestrator-starter/.../autoconfigure/OrchestratorAutoConfiguration.java:172-241, 426-494
+- orchestrator-starter/.../autoconfigure/OrchestratorProperties.java:159-185
+
+buildDescriptor() supports per-flow topic/reply/dlt overrides. However the
+command listener is a single @KafkaListener on ${orchestrator.kafka.command-topic},
+
+If an application configures flows.<flowType>.topic or @Flow(topic=...), the
+descriptor publishes commands to that topic, but the starter does not register a
+command listener/retry topology for that topic.
+
+Impact: High for multi-flow users using per-flow topics. Commands can be
+published to topics nobody consumes.
+
+Recommendation: Register command listener containers and retry configuration per
+unique command topic, or remove/document per-flow topic override support until
+fully implemented.
+
+================================================================================
+4. MEDIUM GAPS
+================================================================================
+
+4.1 Webhook Endpoint Is Public and Has No Vendor Signature Verification
+-----------------------------------------------------------------------
+Files:
+- digital-instrument-service/.../config/SecurityConfig.java:39-42
+- digital-instrument-service/.../inbound/WebhookController.java
+
+SecurityConfig explicitly permits /webhooks/**. WebhookController validates only
+that traceOriginalId and eventType are present. There is no HMAC/signature
+verification, shared secret, mTLS check, or source allowlist in application code.
+
+Impact: Medium to high depending on network exposure. A forged webhook can mark
+signatures received, reject signing, accept/reject transfer, or alter audit flags.
+
+Recommendation: Require a vendor webhook signature or shared secret header and
+validate it before mutating state. Keep network policy as a second layer, not the
+only layer.
+
+4.2 Webhook Payload Uses Raw Map Instead of Typed Validation
+-----------------------------------------------------------
+File: digital-instrument-service/.../inbound/WebhookController.java:88-124
+
+WebhookController accepts Map<String,Object>. Only eventType and traceOriginalId
+null checks are performed. There is no typed DTO, @Valid, allowed event enum,
+timestamp validation, messageId validation, or payload size constraint.
+
+Impact: Medium. Malformed or unexpected payloads can be processed or ignored
+silently; validation behavior is inconsistent with flow start validation.
+
+Recommendation: Add a typed WebhookRequest DTO with @NotBlank fields and an enum
+for eventType. Reject unknown or malformed events with 400.
+
+4.3 Missing Additional Documents Only Logs Error and Continues
+-------------------------------------------------------------
+File: digital-instrument-service/.../flow/EnigioInstrumentFlow.java:361-384
+
+When flow.additionalDocumentIds contains IDs that no longer exist in MongoDB,
+createEnvelope logs an error but continues uploading the documents it found and
+then seals the envelope.
+
+Impact: Medium. A legally or operationally required attachment can be omitted
+while the flow still completes.
+
+Recommendation: Treat missing referenced documents as NonRetryableStepException
+or a validation failure before sealing. If optional documents are allowed, model
+that explicitly.
+
+4.4 WaitingFlowScheduler Event IDs Are Always Random
+----------------------------------------------------
+File: digital-instrument-service/.../service/WaitingFlowScheduler.java:87-104
+
+The scheduler republishes waiting steps with a new random eventId each time.
+Layer-1 idempotency cannot identify duplicate scheduler publications. Layer-2
+completedWhen checks usually protect correctness, but duplicate DB reads, logs,
+and vendor calls can still happen if handlers are not perfectly idempotent.
+
+Impact: Medium for noisy duplicate work; usually not data loss.
+
+Recommendation: Use deterministic event IDs for scheduler/reactivation messages
+or store a reactivation marker per flow/step/time bucket.
+
+4.5 Reply Publish Failure Can Leave Reply-Mode Flows Delayed
+------------------------------------------------------------
+File: orchestrator-starter/.../flow/FlowOrchestrator.java:348-365
+
+publishReply() catches and logs send failures. In reply mode, if a step saves
+domain state but the reply publish fails, advanceAfterReply() is not triggered.
+Stale recovery can eventually re-run the current step, but the flow waits for
+the stale threshold and may repeat step work.
+
+Impact: Medium latency/duplicate-work issue in reply mode.
+
+Recommendation: Either persist replies through an outbox or make reply publish
+failure visible as retryable infrastructure failure.
+
+4.6 Security API Key Can Be Empty Without Failing Startup
+--------------------------------------------------------
+Files:
+- digital-instrument-service/.../config/SecurityConfig.java:31-32, 72-82
+- digital-instrument-service/src/main/resources/application.yml:101-103
+
+application.yml defaults DIS_AUTH_API_KEY to an empty string. SecurityConfig then
+rejects all protected endpoints unless the env var is set. This is safer than a
+weak default, but it is an operational footgun: the app starts healthy while all
+protected APIs return 401.
+
+Impact: Medium operational issue.
+
+Recommendation: Fail startup if dis.auth.api-key is blank outside dev/test, or
+log a clear startup error and expose an unhealthy readiness detail.
+
+4.7 Scheduler Config Property Name Does Not Match application.yml
+-----------------------------------------------------------------
+Files:
+- digital-instrument-service/.../service/WaitingFlowScheduler.java:71
+- digital-instrument-service/src/main/resources/application.yml:79-82
+
+WaitingFlowScheduler uses @Scheduled("${dis.expiry.poll-interval-ms:300000}"),
+configured 30-minute interval is not used; the scheduler runs every 5 minutes by
+
+Impact: Medium/low. Behavior differs from configuration comments and operator
+expectations.
+
+Recommendation: Align property names, e.g. use dis.signing.poll-interval-ms or
+define dis.expiry.poll-interval-ms explicitly.
+
+================================================================================
+5. LOW GAPS / ENHANCEMENTS
+================================================================================
+
+5.1 Direct advance publish without outbox is a latency optimization, not correctness
+----------------------------------------------------------------------------------
+File: orchestrator-starter/.../flow/FlowOrchestrator.java:547-622
+
+After a successful step, advanceToNextStep() CAS-updates currentStep and then
+publishes the next step directly. If Kafka is unreachable after CAS, stale flow
+recovery republishes later. This is safe but can add up to the stale threshold
+(default 15 minutes) of delay.
+
+Impact: Low. No data loss/corruption; latency only.
+
+Recommendation: If lower recovery latency is required, use outbox for every
+step transition, not only flow start.
+
+5.2 PII Masking Does Not Apply to JSON Logs
+-------------------------------------------
+Files:
+- digital-instrument-service/.../config/PiiMaskingConverter.java
+- digital-instrument-service/src/main/resources/logback-spring.xml:13-23
+
+PiiMaskingConverter is used only by the pattern-based CONSOLE appender. The
+prod/staging JSON appender uses JsonEncoder, which writes the raw formatted
+message and bypasses %maskedMsg.
+
+Impact: Low/medium depending on log policy. Emails/phones/org numbers can leak
+in production JSON logs.
+
+Recommendation: Add a JSON masking provider/filter or avoid logging PII fields.
+
+5.3 Additional Documents Are Stored as Base64 in MongoDB Documents
+------------------------------------------------------------------
+File: digital-instrument-service/.../inbound/AdditionalDocumentController.java:129-137
+
+The upload endpoint stores base64 in a MongoDB document. The limit is 14M chars,
+close to MongoDB's 16MB document limit after metadata and BSON overhead.
+
+Impact: Low/medium at larger file sizes.
+
+Recommendation: Use GridFS or object storage for larger files, keeping only
+metadata and object IDs in MongoDB.
+
+5.4 AdditionalDocumentController Lacks Jakarta Validation
+--------------------------------------------------------
+File: digital-instrument-service/.../inbound/AdditionalDocumentController.java:97-124, 219-234
+
+Manual validation covers filename, data, max size, and base64 validity, but the
+UploadRequest record has no @NotBlank/@NotNull annotations and the controller
+does not use @Valid.
+
+Impact: Low. Manual validation works, but pattern is inconsistent.
+
+Recommendation: Add @Valid and Jakarta constraints to the record.
+
+5.5 executeStepOnly Is Misleading
+---------------------------------
+File: orchestrator-starter/.../flow/FlowOrchestrator.java:300-306
+
+executeStepOnly() just delegates to executeStep(). Its name/comment says it is
+used for reply mode and does no advancement, but the real branching happens in
+executeStep() through replyEnabled. This is confusing API surface.
+
+Impact: Low.
+
+Recommendation: Rename, remove, or document that it is only a semantic alias for
+reply-mode dispatch.
+
+5.6 SpEL Validation Catches Syntax but Not Property Typos
+---------------------------------------------------------
+Files:
+- orchestrator-starter/.../flow/FlowDefinitionScanner.java:208-218
+- orchestrator-starter/.../flow/MethodStepAdapter.java:65-76
+
+completedWhen expressions are parsed at startup, which catches syntax errors.
+However property typos can still parse successfully and fail only at runtime,
+where MethodStepAdapter logs and returns false. That can cause repeat execution.
+
+Impact: Low/medium for flow authoring mistakes.
+
+Recommendation: Evaluate expressions against a prototype entity or use a
+stronger typed predicate mechanism.
+
+5.7 FlowConfig Javadoc Shows Unsupported retry Field
+----------------------------------------------------
+File: orchestrator-starter/.../autoconfigure/OrchestratorProperties.java:159-185
+
+The FlowConfig example includes a nested retry section, but FlowConfig has only
+topic, dltTopic, and replyTopic fields. This suggests per-flow retry overrides
+that are not implemented.
+
+Impact: Low developer experience issue.
+
+Recommendation: Remove the retry example or implement per-flow retry config.
+
+5.8 VendorSyncController Silently Ignores Invalid include Values
+---------------------------------------------------------------
+File: digital-instrument-service/.../inbound/VendorSyncController.java:91-117
+
+Invalid include values are skipped and the endpoint still returns 200. A request
+with include=badValue can return a response with all sections null.
+
+Impact: Low API usability issue.
+
+Recommendation: Return 400 for invalid include entries and list allowed values.
+
+================================================================================
+6. SUMMARY
+================================================================================
+
+Findings by severity:
+
+- High: 6
+  - Compensation/cancellation exceptions swallowed
+  - Duplicate PARTIALLY_SIGNED webhooks can falsely complete signing
+  - Notification failure swallowed while gate flags are set
+  - Additional document post-start/link workflow not implemented
+  - application.yml likely misbinds MongoDB/Kafka properties
+  - Per-flow topic overrides are not actually consumed by command listeners
+
+- Medium: 7
+  - Public webhook endpoint lacks vendor signature verification
+  - Webhook payload uses raw Map without typed validation
+  - Missing additional documents only log and flow continues
+  - WaitingFlowScheduler uses random event IDs
+  - Reply publish failures delay reply-mode flows
+  - Empty API key starts app but locks protected APIs
+  - Scheduler interval property mismatch
+
+- Low: 8
+  - Direct step advance outbox would reduce latency only
+  - PII masking bypassed in JSON logs
+  - Base64 document storage in MongoDB
+  - Missing @Valid on AdditionalDocumentController
+  - executeStepOnly confusing API
+  - SpEL only syntax-validated
+  - FlowConfig retry docs unsupported
+  - VendorSync invalid include values ignored
+
+Top recommendations:
+
+1. Fix MethodStepAdapter compensation/cancellation exception propagation.
+   This is the highest risk because local flow status can claim recovery/cancel
+   succeeded while vendor state did not change.
+
+2. Add messageId/signature deduplication for PARTIALLY_SIGNED webhooks.
+   This prevents falsely completing signing on duplicate vendor callbacks.
+
+3. Make NotificationService failures visible to gate steps.
+   Do not set preparationNotified/signingNotified if Kafka notification failed.
+
+4. Fix application.yml binding and add a config binding test.
+   Mongo/Kafka config should be under spring.data.mongodb and spring.kafka.
+
+5. Either implement or remove documented post-start additional document linking.
+   The current API documentation advertises a workflow that does not update the
+   flow entity used by createEnvelope().
+
+================================================================================
+END OF ASSESSMENT
+================================================================================

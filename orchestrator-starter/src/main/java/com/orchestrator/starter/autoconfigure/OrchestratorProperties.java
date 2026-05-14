@@ -167,16 +167,14 @@ public class OrchestratorProperties {
      *     command-topic: orchestrator.commands  # shared default
      *   flows:
      *     payment:
-     *       topic: payment.commands             # own topic
      *       dlt-topic: payment.critical-dlt     # custom DLT
-     *     enigio:
-     *       retry:
-     *         max-attempts: 6                   # per-flow retry
      * </pre>
      */
     @Data
     public static class FlowConfig {
-        /** Command topic override. Null = use global orchestrator.kafka.command-topic. */
+        /** @deprecated Per-flow topic overrides are not fully implemented.
+         *  The command listener only subscribes to the global topic. Ignored. */
+        @Deprecated
         private String topic;
         /** DLT topic override. Null = use standard {topic}-dlt suffix. */
         private String dltTopic;
