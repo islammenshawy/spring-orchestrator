@@ -51,7 +51,8 @@ class GapFixIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        rest = RestClient.create("http://localhost:" + port);
+        rest = RestClient.builder().baseUrl("http://localhost:" + port)
+                .defaultHeader("X-API-Key", "test-api-key").build();
     }
 
     // ========== Fix 1.2/4.3: Outbox poison event — dead-lettered after max retries ==========

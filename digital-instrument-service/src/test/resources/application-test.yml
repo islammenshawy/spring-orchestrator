@@ -11,6 +11,11 @@ vendor:
 mongock:
   enabled: false
 
+# Disable circuit breaker for integration tests (mock vendor is always up)
+spring.cloud.openfeign:
+  circuitbreaker:
+    enabled: false
+
 orchestrator:
   kafka:
     command-topic: dis.test.commands
@@ -27,3 +32,5 @@ dis:
     poll-interval-ms: 60000
   approval:
     expiry-hours: 72
+  auth:
+    api-key: test-api-key

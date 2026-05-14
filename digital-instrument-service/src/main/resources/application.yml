@@ -55,6 +55,22 @@ spring.cloud.openfeign:
         connect-timeout: ${vendor.enigio.connect-timeout-ms:5000}
         read-timeout: ${vendor.enigio.read-timeout-ms:30000}
         logger-level: BASIC
+  circuitbreaker:
+    enabled: true
+
+# Resilience4j circuit breaker — fast-fail on vendor outages
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+  timelimiter:
+    configs:
+      default:
+        timeout-duration: 35s
 
 # Digital Instrument Service settings
 dis:
@@ -81,6 +97,10 @@ orchestrator:
     max-interval-ms: 10000                # cap at 10s — gate steps need fast polling
     max-attempts: 10                      # 10 × 10s cap = 100s retry budget before DLT
     jitter-factor: 0.5                    # equal jitter to avoid thundering herd
+
+# API key for endpoint authentication (override via DIS_AUTH_API_KEY env var)
+dis.auth:
+  api-key: ${DIS_AUTH_API_KEY:changeme-dev-key}
 
 management:
   endpoints:

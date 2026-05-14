@@ -5,6 +5,7 @@ DURATION=${DURATION:-5}
 WAVE_SIZE=${WAVE_SIZE:-10}
 WAVE_INTERVAL=${WAVE_INTERVAL:-15}
 DIS_URL=${DIS_URL:-http://localhost:8090}
+API_KEY=${API_KEY:-soak-test-key}
 DRAIN_TIMEOUT=120
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
@@ -48,6 +49,7 @@ submit_flow() {
 
   curl -sf -X POST "$DIS_URL/flows/enigio-instrument" \
     -H "Content-Type: application/json" \
+    -H "X-API-Key: $API_KEY" \
     -d "{
       \"correlationId\": \"$corr\",
       \"reference\": \"$ref\",
@@ -80,7 +82,7 @@ auto_approve() {
 
   for id in $ids; do
     curl -sf -X POST "$DIS_URL/flows/enigio-instrument/$id/approve" \
-      -H "Content-Type: application/json" -d '{}' >/dev/null 2>&1 &
+      -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -d '{}' >/dev/null 2>&1 &
   done
   wait 2>/dev/null
 }

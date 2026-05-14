@@ -225,6 +225,7 @@ services:
       SPRING_MONGODB_URI: mongodb://mongodb:27017/digital_instrument_service
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29093,kafka-3:29094
       VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
+      DIS_AUTH_API_KEY: soak-test-key
     healthcheck:
       test: wget -qO- http://localhost:8087/actuator/health || exit 1
       interval: 5s
@@ -272,6 +273,7 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29093,kafka-3:29094
       VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
       DIS_BASE_URL: http://digital-instrument-service-2:8087
+      DIS_AUTH_API_KEY: soak-test-key
     profiles:
       - multi-instance
     healthcheck:

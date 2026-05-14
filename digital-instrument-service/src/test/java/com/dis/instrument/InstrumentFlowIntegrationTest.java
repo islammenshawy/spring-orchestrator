@@ -53,7 +53,8 @@ class InstrumentFlowIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        rest = RestClient.create("http://localhost:" + port);
+        rest = RestClient.builder().baseUrl("http://localhost:" + port)
+                .defaultHeader("X-API-Key", "test-api-key").build();
         vendorAdmin = RestClient.create("http://localhost:8081");
         // DO NOT reset mock-vendor here — async flows (AWAIT_SIGNATURES) poll
         // the mock-vendor after setUp returns, resetting would wipe in-flight state.
