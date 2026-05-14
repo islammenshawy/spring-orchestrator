@@ -388,6 +388,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setStatus(FlowStatus.FAILED);
         flow.setErrorMessage(errorDetail);
         flow.setUpdatedAt(Instant.now());
+        if (metrics != null) metrics.flowFailed(flowType != null ? flowType : "default");
         saveFlow(flow);
 
         logStep(flowId, stepName != null ? stepName : flow.getCurrentStep(),
