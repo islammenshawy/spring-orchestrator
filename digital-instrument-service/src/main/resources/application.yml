@@ -100,7 +100,7 @@ orchestrator:
 
 # API key for endpoint authentication (override via DIS_AUTH_API_KEY env var)
 dis.auth:
-  api-key: ${DIS_AUTH_API_KEY:changeme-dev-key}
+  api-key: ${DIS_AUTH_API_KEY:}
 
 management:
   endpoints:

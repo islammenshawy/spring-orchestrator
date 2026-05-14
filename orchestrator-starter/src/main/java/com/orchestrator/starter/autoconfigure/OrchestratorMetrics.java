@@ -69,6 +69,13 @@ public class OrchestratorMetrics {
                 .register(registry).increment();
     }
 
+    public void compensationFailed(String flowType) {
+        if (registry == null) return;
+        Counter.builder("orchestrator.compensation.failed")
+                .tag("flowType", flowType)
+                .register(registry).increment();
+    }
+
     public void idempotencyDuplicate() {
         if (registry == null) return;
         Counter.builder("orchestrator.idempotency.duplicates")

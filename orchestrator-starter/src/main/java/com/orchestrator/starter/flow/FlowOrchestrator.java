@@ -519,6 +519,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         if (anyCompensationFailed) {
             flow.setStatus(FlowStatus.COMPENSATION_FAILED);
             flow.setCompensationError(lastCompensationError);
+            if (metrics != null) metrics.compensationFailed(flowType != null ? flowType : "default");
         } else {
             flow.setStatus(FlowStatus.FAILED);
         }

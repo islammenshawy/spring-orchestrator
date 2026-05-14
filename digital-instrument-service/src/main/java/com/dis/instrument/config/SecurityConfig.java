@@ -61,14 +61,25 @@ public class SecurityConfig {
         @Override
         protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                         FilterChain filterChain) throws ServletException, IOException {
+            // Skip auth for permitted paths (actuator, webhooks, swagger)
+            String path = request.getRequestURI();
+            if (path.startsWith("/actuator") || path.startsWith("/webhooks")
+                    || path.startsWith("/v3/api-docs") || path.startsWith("/swagger-ui")) {
+                filterChain.doFilter(request, response);
+                return;
+            }
+
             String key = request.getHeader("X-API-Key");
-            if (apiKey.equals(key)) {
-                // Set authentication so Spring Security authorizeHttpRequests passes
+            if (apiKey != null && !apiKey.isEmpty() && apiKey.equals(key)) {
                 var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
                         "api-client", null, java.util.List.of());
                 org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(auth);
+                filterChain.doFilter(request, response);
+            } else {
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                response.setContentType("application/json");
+                response.getWriter().write("{\"error\":\"Invalid or missing API key\"}");
             }
-            filterChain.doFilter(request, response);
         }
     }
 }
