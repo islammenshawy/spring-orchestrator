@@ -4,6 +4,7 @@
                   Model: GLM-5.1
                   Revised:  2026-05-13 (post-validation pass #1)
                   Re-scan:  2026-05-13 (post-code-update verification #3)
+                  Re-scan:  2026-05-13 (post-code-update verification #4 — no changes since #3)
 ================================================================================
 
 This document identifies design gaps, risks, and improvement opportunities

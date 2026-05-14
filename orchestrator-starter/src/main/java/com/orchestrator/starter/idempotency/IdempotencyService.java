@@ -1,14 +1,23 @@
 package com.orchestrator.starter.idempotency;
 
-import lombok.RequiredArgsConstructor;
+import com.orchestrator.starter.autoconfigure.OrchestratorMetrics;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 
 @Slf4j
-@RequiredArgsConstructor
 public class IdempotencyService {
 
     private final ProcessedEventRepository repository;
+    private final OrchestratorMetrics metrics;
+
+    public IdempotencyService(ProcessedEventRepository repository) {
+        this(repository, null);
+    }
+
+    public IdempotencyService(ProcessedEventRepository repository, OrchestratorMetrics metrics) {
+        this.repository = repository;
+        this.metrics = metrics;
+    }
 
     /**
      * Single-query idempotency: try to insert. If duplicate → already processed.
@@ -22,6 +31,7 @@ public class IdempotencyService {
             repository.save(new ProcessedEvent(eventId));
             return true; // first time — proceed
         } catch (DuplicateKeyException e) {
+            if (metrics != null) metrics.idempotencyDuplicate();
             log.debug("Event {} already processed, skipping", eventId);
             return false; // duplicate — skip
         }

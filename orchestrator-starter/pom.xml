@@ -65,6 +65,27 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- Jakarta Validation for auto-endpoint input validation (optional) -->
+        <dependency>
+            <groupId>jakarta.validation</groupId>
+            <artifactId>jakarta.validation-api</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Micrometer for metrics (optional — no-op when absent) -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Actuator for HealthIndicator (optional — no-op when absent) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- Jackson for message serialization (provided by consumer app) -->
         <dependency>
             <groupId>tools.jackson.core</groupId>

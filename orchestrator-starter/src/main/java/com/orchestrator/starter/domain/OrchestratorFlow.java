@@ -67,4 +67,12 @@ public interface OrchestratorFlow {
      */
     default java.util.Set<String> getCompletedParallelSteps() { return java.util.Set.of(); }
     default void setCompletedParallelSteps(java.util.Set<String> steps) {}
+
+    /** Number of stale recovery re-publishes. Reset on step success. */
+    default int getRecoveryCount() { return 0; }
+    default void setRecoveryCount(int count) {}
+
+    /** Error from failed compensation handler (when status=COMPENSATION_FAILED). */
+    default String getCompensationError() { return null; }
+    default void setCompensationError(String error) {}
 }

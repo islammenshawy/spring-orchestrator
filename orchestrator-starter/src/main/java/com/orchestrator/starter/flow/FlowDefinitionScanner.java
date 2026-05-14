@@ -9,6 +9,9 @@ import com.orchestrator.starter.domain.OrchestratorFlow;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationContext;
 
+import org.springframework.expression.spel.standard.SpelExpressionParser;
+import org.springframework.expression.spel.SpelParseException;
+
 import java.lang.reflect.Method;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -202,6 +205,18 @@ public class FlowDefinitionScanner {
                     throw new IllegalStateException(
                             "@Flow " + clazz.getSimpleName() + ": duplicate step name '" + resolvedName + "'");
                 }
+                // Validate SpEL completedWhen at startup (catch parse errors early)
+                if (!stepAnnotation.completedWhen().isEmpty()) {
+                    try {
+                        new SpelExpressionParser().parseExpression(stepAnnotation.completedWhen());
+                    } catch (SpelParseException e) {
+                        throw new IllegalStateException(
+                                "Invalid SpEL in @Step(completedWhen=\"" + stepAnnotation.completedWhen() +
+                                        "\") on " + clazz.getSimpleName() + "." + method.getName() +
+                                        ": " + e.getMessage());
+                    }
+                }
+
                 stepMethodNames.add(method.getName());
                 handlers.add(new MethodStepAdapter(flowDef, method, stepAnnotation));
             }

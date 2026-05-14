@@ -1,5 +1,6 @@
 package com.orchestrator.starter.recovery;
 
+import com.orchestrator.starter.autoconfigure.OrchestratorMetrics;
 import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
@@ -7,7 +8,6 @@ import com.orchestrator.starter.flow.FlowTypeDescriptor;
 import com.orchestrator.starter.flow.FlowTypeRegistry;
 import com.orchestrator.starter.kafka.StepCommandMessage;
 import tools.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -27,16 +27,38 @@ import java.util.UUID;
  * Guards against false positives:
  * - Skips flows with pending outbox events (pipeline is just busy)
  * - Uses configurable stale threshold (default 15 min, must exceed retry budget)
+ * - Caps recovery at maxRecoveryAttempts to prevent infinite recovery loops
  */
 @Slf4j
-@RequiredArgsConstructor
 public class StaleFlowRecoveryService {
 
     private final FlowTypeRegistry registry;
     private final KafkaTemplate kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final int staleThresholdMinutes;
+    private final int maxRecoveryAttempts;
     private final com.orchestrator.starter.outbox.OutboxEventRepository outboxRepository;
+    private final OrchestratorMetrics metrics;
+
+    public StaleFlowRecoveryService(FlowTypeRegistry registry, KafkaTemplate kafkaTemplate,
+                                     ObjectMapper objectMapper, int staleThresholdMinutes,
+                                     com.orchestrator.starter.outbox.OutboxEventRepository outboxRepository) {
+        this(registry, kafkaTemplate, objectMapper, staleThresholdMinutes, 10, outboxRepository, null);
+    }
+
+    public StaleFlowRecoveryService(FlowTypeRegistry registry, KafkaTemplate kafkaTemplate,
+                                     ObjectMapper objectMapper, int staleThresholdMinutes,
+                                     int maxRecoveryAttempts,
+                                     com.orchestrator.starter.outbox.OutboxEventRepository outboxRepository,
+                                     OrchestratorMetrics metrics) {
+        this.registry = registry;
+        this.kafkaTemplate = kafkaTemplate;
+        this.objectMapper = objectMapper;
+        this.staleThresholdMinutes = staleThresholdMinutes;
+        this.maxRecoveryAttempts = maxRecoveryAttempts;
+        this.outboxRepository = outboxRepository;
+        this.metrics = metrics;
+    }
 
     @Scheduled(fixedDelayString = "${orchestrator.recovery.scan-interval-ms:30000}")
     @SuppressWarnings("unchecked")
@@ -74,6 +96,17 @@ public class StaleFlowRecoveryService {
         }
 
         for (OrchestratorFlow flow : staleFlows) {
+            // Recovery loop detection: cap at maxRecoveryAttempts
+            if (flow.getRecoveryCount() >= maxRecoveryAttempts) {
+                log.error("[Recovery] Flow {} exceeded max recovery attempts ({}) — marking FAILED",
+                        flow.getId(), maxRecoveryAttempts);
+                flow.setStatus(FlowStatus.FAILED);
+                flow.setErrorMessage("Exceeded max recovery attempts (" + maxRecoveryAttempts + ")");
+                flow.setUpdatedAt(Instant.now());
+                flowRepository.save(flow);
+                continue;
+            }
+
             try {
                 StepCommandMessage cmd = StepCommandMessage.builder()
                         .eventId(UUID.randomUUID().toString())
@@ -86,10 +119,12 @@ public class StaleFlowRecoveryService {
                         ? flow.getCorrelationId() : flow.getId();
                 kafkaTemplate.send(commandTopic, partitionKey,
                         objectMapper.writeValueAsString(cmd)).get();
+                flow.setRecoveryCount(flow.getRecoveryCount() + 1);
                 flow.setUpdatedAt(Instant.now());
                 flowRepository.save(flow);
-                log.info("[Recovery] Re-published step {} for flow {} (type: {})",
-                        flow.getCurrentStep(), flow.getId(), flowType);
+                if (metrics != null) metrics.recoveryRecovered(flowType);
+                log.info("[Recovery] Re-published step {} for flow {} (type: {}, attempt: {})",
+                        flow.getCurrentStep(), flow.getId(), flowType, flow.getRecoveryCount());
             } catch (Exception e) {
                 log.error("[Recovery] Failed to recover flow {} (type: {}): {}",
                         flow.getId(), flowType, e.getMessage());

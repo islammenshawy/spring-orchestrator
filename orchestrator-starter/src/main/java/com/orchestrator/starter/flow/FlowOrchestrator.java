@@ -2,6 +2,7 @@ package com.orchestrator.starter.flow;
 
 import com.orchestrator.starter.audit.StepExecutionLog;
 import com.orchestrator.starter.audit.StepExecutionLogRepository;
+import com.orchestrator.starter.autoconfigure.OrchestratorMetrics;
 import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
@@ -14,9 +15,11 @@ import com.orchestrator.starter.outbox.OutboxEvent;
 import com.orchestrator.starter.outbox.OutboxEventRepository;
 import tools.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -50,6 +53,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private final KafkaTemplate kafkaTemplate;
     private final int stepTimeoutSeconds;
     private final ExecutorService stepExecutor;
+    private final OrchestratorMetrics metrics;
     private Class<F> entityClass;
     private org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
 
@@ -67,7 +71,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             KafkaTemplate kafkaTemplate) {
         this(flowRepository, stepRegistry, outboxRepository, stepLogRepository,
                 objectMapper, null, commandTopic, replyTopic, replyEnabled,
-                txTemplate, includeFlowStateInLogs, kafkaTemplate, 60);
+                txTemplate, includeFlowStateInLogs, kafkaTemplate, 60, null);
     }
 
     public FlowOrchestrator(
@@ -83,7 +87,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             TransactionTemplate txTemplate,
             boolean includeFlowStateInLogs,
             KafkaTemplate kafkaTemplate,
-            int stepTimeoutSeconds) {
+            int stepTimeoutSeconds,
+            OrchestratorMetrics metrics) {
         this.flowRepository = flowRepository;
         this.stepRegistry = stepRegistry;
         this.outboxRepository = outboxRepository;
@@ -99,6 +104,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         this.stepTimeoutSeconds = stepTimeoutSeconds;
         this.stepExecutor = stepTimeoutSeconds > 0
                 ? Executors.newVirtualThreadPerTaskExecutor() : null;
+        this.metrics = metrics;
     }
 
     /**
@@ -122,12 +128,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             return f;
         }, flow);
 
-        // Outbox event (line 110) handles Kafka delivery via OutboxPublisher (~500ms).
-        // No direct kafkaTemplate.send() here — avoids double-publish cascade where
-        // both direct send and outbox produce messages for step 1, causing the consumer
-        // to process the duplicate as "already completed" → advance → write outbox for
-        // step 2 → cascade (measured: 1,116 msgs/flow instead of ~22).
-
+        if (metrics != null) metrics.flowStarted(flowType != null ? flowType : "default");
         return savedFlow;
     }
 
@@ -154,6 +155,19 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     }
 
     private void doExecuteStep(String flowId, String stepName) {
+        MDC.put("flowId", flowId);
+        MDC.put("flowType", flowType != null ? flowType : "default");
+        if (stepName != null) MDC.put("stepName", stepName);
+        try {
+        doExecuteStepInner(flowId, stepName);
+        } finally {
+            MDC.remove("flowId");
+            MDC.remove("flowType");
+            MDC.remove("stepName");
+        }
+    }
+
+    private void doExecuteStepInner(String flowId, String stepName) {
         F flow = flowRepository.findById(flowId)
                 .orElseThrow(() -> new NonRetryableStepException("Flow not found: " + flowId));
 
@@ -202,18 +216,22 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         try {
             executeWithTimeout(handler, flow, stepName);
         } catch (WaitingStepException e) {
-            // Gate/polling step — park flow in MongoDB, exit Kafka entirely.
-            // Re-activation via: approval API, webhook, or expiry scheduler.
+            if (metrics != null) metrics.stepExecution(flowType, stepName, "WAITING",
+                    Duration.between(startedAt, Instant.now()));
             logStep(flowId, stepName, "WAITING", flow.getRetryCount(),
                     flowBefore, null, e.getMessage(), startedAt);
             handleWaitingStep(flow, e);
-            return; // Swallow — no throw, no retry topic, no re-publish
+            return;
         } catch (RetryableStepException e) {
+            if (metrics != null) metrics.stepExecution(flowType, stepName, "RETRYING",
+                    Duration.between(startedAt, Instant.now()));
             logStep(flowId, stepName, "RETRYING", flow.getRetryCount() + 1,
                     flowBefore, null, e.getMessage(), startedAt);
             handleRetryableFailure(flow, e);
             throw e;
         } catch (NonRetryableStepException e) {
+            if (metrics != null) metrics.stepExecution(flowType, stepName, "FAILED",
+                    Duration.between(startedAt, Instant.now()));
             logStep(flowId, stepName, "FAILED", flow.getRetryCount() + 1,
                     flowBefore, null, e.getMessage(), startedAt);
             handlePermanentFailure(flow, e);
@@ -238,12 +256,12 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
-        // Step succeeded — clear retry state via $set (no @Version conflict).
-        // Domain fields are already persisted by checkpoint() in the step handler.
+        // Step succeeded — clear retry/recovery state.
         flow.setRetryCount(0);
         flow.setBackoffSeconds(0);
         flow.setNextRetryAt(null);
         flow.setErrorMessage(null);
+        flow.setRecoveryCount(0);
         flow.setUpdatedAt(Instant.now());
 
         // Save flow with version conflict retry.
@@ -264,6 +282,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 }
             }
         }
+
+        if (metrics != null) metrics.stepExecution(flowType, stepName, "COMPLETED",
+                Duration.between(startedAt, Instant.now()));
 
         if (replyEnabled) {
             publishReply(flowId, stepName, "COMPLETED", null, serialize(flow));
@@ -467,6 +488,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setStatus(FlowStatus.COMPENSATING);
         saveFlow(flow);
 
+        boolean anyCompensationFailed = false;
+        String lastCompensationError = null;
+
         // Compensate in reverse order
         for (int i = completedSteps.size() - 1; i >= 0; i--) {
             String stepName = completedSteps.get(i);
@@ -478,6 +502,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                     adapter.compensate(flow);
                     logStep(flow.getId(), stepName, "COMPENSATED", 1, null, null, null, start);
                 } catch (Exception e) {
+                    anyCompensationFailed = true;
+                    lastCompensationError = stepName + ": " + e.getMessage();
                     log.error("[Saga] Compensation failed for step {} on flow {}: {}",
                             stepName, flow.getId(), e.getMessage());
                     logStep(flow.getId(), stepName, "COMPENSATION_FAILED", 1,
@@ -488,9 +514,25 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
-        flow.setStatus(FlowStatus.FAILED);
+        if (anyCompensationFailed) {
+            flow.setStatus(FlowStatus.COMPENSATION_FAILED);
+            flow.setCompensationError(lastCompensationError);
+        } else {
+            flow.setStatus(FlowStatus.FAILED);
+        }
         flow.setUpdatedAt(Instant.now());
         saveFlow(flow);
+    }
+
+    /**
+     * Retry compensation for a flow in COMPENSATION_FAILED status.
+     * Re-runs runCompensation() which will attempt all compensation handlers again.
+     */
+    public void retryCompensation(String flowId) {
+        F flow = flowRepository.findById(flowId).orElse(null);
+        if (flow == null || flow.getStatus() != FlowStatus.COMPENSATION_FAILED) return;
+        flow.setCompensationError(null);
+        runCompensation(flow);
     }
 
     // ========== Internal ==========
@@ -523,6 +565,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                         "updatedAt", Instant.now(),
                         "completedParallelSteps", java.util.List.of()));
             }
+            if (metrics != null) metrics.flowCompleted(flowType != null ? flowType : "default");
             log.info("[Saga] Flow {} completed", flow.getId());
             return;
         }
@@ -666,6 +709,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     }
 
     private void handlePermanentFailure(F flow, NonRetryableStepException e) {
+        if (metrics != null) metrics.flowFailed(flowType != null ? flowType : "default");
         String errorMsg = e.getMessage() != null ? e.getMessage() : "permanent failure";
         if (mongoTemplate != null && entityClass != null) {
             updateFlowPartial(flow.getId(), java.util.Map.of(

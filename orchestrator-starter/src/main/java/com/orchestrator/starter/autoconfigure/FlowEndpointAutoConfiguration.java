@@ -1,5 +1,6 @@
 package com.orchestrator.starter.autoconfigure;
 
+import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.flow.FlowOrchestrator;
@@ -9,6 +10,7 @@ import tools.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 import jakarta.annotation.PostConstruct;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @AutoConfiguration
@@ -26,11 +29,13 @@ public class FlowEndpointAutoConfiguration {
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     @RestController
+    @ConditionalOnMissingBean(name = "flowEndpointController")
     @RequestMapping("${orchestrator.endpoints.base-path:/flows}")
     public static class FlowEndpointController {
 
         @Autowired private FlowTypeRegistry registry;
         @Autowired private ObjectMapper objectMapper;
+        @Autowired(required = false) private jakarta.validation.Validator validator;
 
         @PostConstruct
         void init() {
@@ -71,10 +76,20 @@ public class FlowEndpointAutoConfiguration {
                 body.putIfAbsent("correlationId", UUID.randomUUID().toString());
                 String json = objectMapper.writeValueAsString(body);
                 OrchestratorFlow flow = (OrchestratorFlow) objectMapper.readValue(json, desc.getEntityClass());
-                OrchestratorFlowRepository repo = desc.getRepository();
-                var saved = (OrchestratorFlow) repo.save(flow);
+
+                // Validate entity if Jakarta Validator is available
+                if (validator != null) {
+                    var violations = validator.validate(flow);
+                    if (!violations.isEmpty()) {
+                        String errors = violations.stream()
+                                .map(v -> v.getPropertyPath() + ": " + v.getMessage())
+                                .collect(Collectors.joining(", "));
+                        return ResponseEntity.badRequest().body(Map.of("error", "Validation failed: " + errors));
+                    }
+                }
+
                 FlowOrchestrator orch = (FlowOrchestrator) desc.getOrchestrator();
-                var started = orch.startFlow(saved);
+                var started = orch.startFlow(flow);
 
                 return ResponseEntity.accepted().body(Map.of(
                         "id", started.getId(),
@@ -163,6 +178,39 @@ public class FlowEndpointAutoConfiguration {
                         "currentStep", cancelled.getCurrentStep() != null ? cancelled.getCurrentStep() : "",
                         "message", "Flow cancelled. " + cancelled.getErrorMessage()
                 ));
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            }
+        }
+
+        /**
+         * Retry compensation for a flow stuck in COMPENSATION_FAILED status.
+         * POST /flows/{flowType}/{id}/retry-compensation
+         */
+        @PostMapping("/{flowType}/{id}/retry-compensation")
+        public ResponseEntity<?> retryCompensation(
+                @PathVariable String flowType,
+                @PathVariable String id) {
+            try {
+                FlowTypeDescriptor desc = registry.resolve(flowType);
+                OrchestratorFlowRepository repo = desc.getRepository();
+                OrchestratorFlow flow = (OrchestratorFlow) repo.findById(id).orElse(null);
+                if (flow == null) return ResponseEntity.notFound().build();
+
+                if (flow.getStatus() != FlowStatus.COMPENSATION_FAILED) {
+                    return ResponseEntity.badRequest().body(Map.of(
+                            "error", "Flow is not in COMPENSATION_FAILED status (current: " + flow.getStatus() + ")",
+                            "flowId", id));
+                }
+
+                FlowOrchestrator orch = (FlowOrchestrator) desc.getOrchestrator();
+                orch.retryCompensation(id);
+
+                OrchestratorFlow updated = (OrchestratorFlow) repo.findById(id).orElse(flow);
+                return ResponseEntity.ok(Map.of(
+                        "flowId", id,
+                        "status", updated.getStatus().name(),
+                        "message", "Compensation retried"));
             } catch (IllegalArgumentException e) {
                 return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
             }

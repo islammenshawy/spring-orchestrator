@@ -60,5 +60,11 @@ public abstract class AbstractFlow implements OrchestratorFlow {
 
     private Set<String> completedParallelSteps = new HashSet<>();
 
+    /** Number of times stale recovery has re-published this flow. Reset on step success. */
+    private int recoveryCount = 0;
+
+    /** Error message from a failed compensation handler (when status=COMPENSATION_FAILED). */
+    private String compensationError;
+
     private Instant createdAt = Instant.now();
 }

@@ -49,7 +49,7 @@ class StepTimeoutTest {
         FlowOrchestrator<TestFlow> orchestrator = new FlowOrchestrator(
                 flowRepo, stepRegistry, outboxRepo, stepLogRepo,
                 new ObjectMapper(), "test", "test.commands", "test.commands.replies",
-                true, null, false, kafkaTemplate, 1);
+                true, null, false, kafkaTemplate, 1, null);
 
         TestFlow flow = new TestFlow();
         flow.setId("flow-1");
@@ -88,7 +88,7 @@ class StepTimeoutTest {
         FlowOrchestrator<TestFlow> orchestrator = new FlowOrchestrator(
                 flowRepo, stepRegistry, outboxRepo, stepLogRepo,
                 new ObjectMapper(), "test", "test.commands", "test.commands.replies",
-                true, null, false, kafkaTemplate, 0);
+                true, null, false, kafkaTemplate, 0, null);
 
         TestFlow flow = new TestFlow();
         flow.setId("flow-1");

@@ -1,6 +1,6 @@
 package com.orchestrator.starter.outbox;
 
-import lombok.RequiredArgsConstructor;
+import com.orchestrator.starter.autoconfigure.OrchestratorMetrics;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -26,16 +26,23 @@ public class OutboxPublisher {
     private final OutboxEventRepository repository;
     private final KafkaTemplate kafkaTemplate;
     private final int maxPublishRetries;
+    private final OrchestratorMetrics metrics;
 
     public OutboxPublisher(OutboxEventRepository repository, KafkaTemplate kafkaTemplate) {
-        this(repository, kafkaTemplate, 5);
+        this(repository, kafkaTemplate, 5, null);
     }
 
     public OutboxPublisher(OutboxEventRepository repository, KafkaTemplate kafkaTemplate,
                            int maxPublishRetries) {
+        this(repository, kafkaTemplate, maxPublishRetries, null);
+    }
+
+    public OutboxPublisher(OutboxEventRepository repository, KafkaTemplate kafkaTemplate,
+                           int maxPublishRetries, OrchestratorMetrics metrics) {
         this.repository = repository;
         this.kafkaTemplate = kafkaTemplate;
         this.maxPublishRetries = maxPublishRetries;
+        this.metrics = metrics;
     }
 
     @Scheduled(fixedDelayString = "${orchestrator.outbox.poll-interval-ms:500}")
@@ -49,6 +56,7 @@ public class OutboxPublisher {
                 event.setPublishedAt(Instant.now());
                 event.setFailureCount(0);
                 repository.save(event);
+                if (metrics != null) metrics.outboxPublished();
                 log.debug("[Outbox] Published event {} to {}", event.getId(), event.getTopic());
             } catch (Exception e) {
                 int failures = event.getFailureCount() + 1;
@@ -56,6 +64,7 @@ public class OutboxPublisher {
                 if (failures >= maxPublishRetries) {
                     event.setDeadLettered(true);
                     event.setPublishedAt(Instant.now()); // Enable TTL cleanup (same index as published events)
+                    if (metrics != null) metrics.outboxDeadLettered();
                     log.error("[Outbox] Dead-lettering event {} after {} failures (flow: {}, topic: {}): {}",
                             event.getId(), failures, event.getFlowId(), event.getTopic(), e.getMessage());
                 } else {

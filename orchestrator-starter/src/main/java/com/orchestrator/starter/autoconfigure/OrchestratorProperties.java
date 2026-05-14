@@ -23,6 +23,7 @@ public class OrchestratorProperties {
     private EndpointsConfig endpoints = new EndpointsConfig();
     private RetentionConfig retention = new RetentionConfig();
     private StepConfig step = new StepConfig();
+    private HealthConfig health = new HealthConfig();
 
     /** Per-flow configuration overrides. Key = flowType name from @Flow(name="...").
      *  Only set fields override — null fields fall back to global config. */
@@ -84,6 +85,8 @@ public class OrchestratorProperties {
 
         /** Hours to look back when using TIMESTAMP offset fallback. Default 24h. */
         private int offsetFallbackHours = 24;
+        /** Max recovery attempts before marking a stuck flow as FAILED. Default 10. */
+        private int maxRecoveryAttempts = 10;
     }
 
     public enum OffsetStore {
@@ -131,6 +134,12 @@ public class OrchestratorProperties {
          *  When a step exceeds this timeout, a RetryableStepException is thrown
          *  and the message routes to Kafka retry topics. */
         private int timeoutSeconds = 60;
+    }
+
+    @Data
+    public static class HealthConfig {
+        /** Outbox pending event threshold. Health goes DOWN if pending events exceed this. */
+        private int outboxThreshold = 100;
     }
 
     @Data

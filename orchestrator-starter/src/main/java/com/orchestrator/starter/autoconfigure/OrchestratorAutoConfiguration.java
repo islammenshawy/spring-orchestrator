@@ -67,8 +67,16 @@ public class OrchestratorAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public IdempotencyService orchestratorIdempotencyService(ProcessedEventRepository repository) {
-        return new IdempotencyService(repository);
+    public OrchestratorMetrics orchestratorMetrics(
+            @Autowired(required = false) io.micrometer.core.instrument.MeterRegistry meterRegistry) {
+        return new OrchestratorMetrics(meterRegistry);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public IdempotencyService orchestratorIdempotencyService(
+            ProcessedEventRepository repository, OrchestratorMetrics metrics) {
+        return new IdempotencyService(repository, metrics);
     }
 
     @Bean
@@ -90,9 +98,10 @@ public class OrchestratorAutoConfiguration {
     public OutboxPublisher orchestratorOutboxPublisher(
             OutboxEventRepository outboxRepository,
             KafkaTemplate kafkaTemplate,
-            OrchestratorProperties props) {
+            OrchestratorProperties props,
+            OrchestratorMetrics metrics) {
         return new OutboxPublisher(outboxRepository, kafkaTemplate,
-                props.getOutbox().getMaxPublishRetries());
+                props.getOutbox().getMaxPublishRetries(), metrics);
     }
 
     // ========== FlowTypeRegistry (the core multi-flow bean) ==========
@@ -107,6 +116,7 @@ public class OrchestratorAutoConfiguration {
             ObjectMapper objectMapper,
             OrchestratorProperties props,
             KafkaTemplate kafkaTemplate,
+            OrchestratorMetrics metrics,
             @Autowired(required = false) TransactionTemplate transactionTemplate) {
 
         // Scan all @Flow classes
@@ -123,7 +133,7 @@ public class OrchestratorAutoConfiguration {
                 FlowTypeDescriptor desc = buildDescriptor(
                         "default", Object.class, Object.class,
                         "", handlers, props, mongoTemplate, outboxRepository,
-                        stepLogRepository, objectMapper, kafkaTemplate, transactionTemplate);
+                        stepLogRepository, objectMapper, kafkaTemplate, transactionTemplate, metrics);
                 return new FlowTypeRegistry(List.of(desc));
             }
             throw new IllegalStateException(
@@ -138,7 +148,7 @@ public class OrchestratorAutoConfiguration {
                     info.flowType(), info.entityClass(), info.flowDefinitionClass(),
                     info.annotatedTopic(), info.handlers(),
                     props, mongoTemplate, outboxRepository, stepLogRepository,
-                    objectMapper, kafkaTemplate, transactionTemplate);
+                    objectMapper, kafkaTemplate, transactionTemplate, metrics);
             descriptors.add(desc);
         }
 
@@ -156,7 +166,8 @@ public class OrchestratorAutoConfiguration {
             OutboxEventRepository outboxRepository,
             StepExecutionLogRepository stepLogRepository,
             ObjectMapper objectMapper, KafkaTemplate kafkaTemplate,
-            TransactionTemplate transactionTemplate) {
+            TransactionTemplate transactionTemplate,
+            OrchestratorMetrics metrics) {
 
         // Resolve topics: @Flow(topic=...) > YAML flows.{name}.topic > global
         OrchestratorProperties.FlowConfig flowConfig = props.getFlows().get(flowType);
@@ -202,7 +213,7 @@ public class OrchestratorAutoConfiguration {
                 repository, stepRegistry, outboxRepository, stepLogRepository,
                 objectMapper, flowType, commandTopic, replyTopic, replyEnabled,
                 transactionTemplate, props.getAudit().isIncludeFlowState(), kafkaTemplate,
-                props.getStep().getTimeoutSeconds());
+                props.getStep().getTimeoutSeconds(), metrics);
         if (entityClass != null && entityClass != Object.class) {
             orchestrator.setEntityClass(entityClass);
         }
@@ -482,6 +493,19 @@ public class OrchestratorAutoConfiguration {
                 .create(template);
     }
 
+    // ========== Health Indicator ==========
+
+    @Bean
+    @ConditionalOnMissingBean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnClass(
+            name = "org.springframework.boot.health.contributor.HealthIndicator")
+    public OrchestratorHealthIndicator orchestratorHealthIndicator(
+            OutboxEventRepository outboxRepository,
+            OrchestratorProperties props) {
+        return new OrchestratorHealthIndicator(outboxRepository,
+                props.getHealth().getOutboxThreshold());
+    }
+
     // ========== Recovery Service ==========
 
     @Bean
@@ -491,11 +515,13 @@ public class OrchestratorAutoConfiguration {
             KafkaTemplate kafkaTemplate,
             ObjectMapper objectMapper,
             OrchestratorProperties props,
-            OutboxEventRepository outboxRepository) {
+            OutboxEventRepository outboxRepository,
+            OrchestratorMetrics metrics) {
         return new StaleFlowRecoveryService(
                 registry, kafkaTemplate, objectMapper,
                 props.getRecovery().getStaleThresholdMinutes(),
-                outboxRepository);
+                props.getRecovery().getMaxRecoveryAttempts(),
+                outboxRepository, metrics);
     }
 
     // ========== Backward-compatible singleton beans ==========
