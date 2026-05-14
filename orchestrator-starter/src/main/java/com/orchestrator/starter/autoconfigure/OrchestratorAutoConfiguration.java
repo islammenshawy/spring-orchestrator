@@ -68,8 +68,8 @@ public class OrchestratorAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public OrchestratorMetrics orchestratorMetrics(
-            @Autowired(required = false) io.micrometer.core.instrument.MeterRegistry meterRegistry) {
-        return new OrchestratorMetrics(meterRegistry);
+            org.springframework.beans.factory.ObjectProvider<io.micrometer.core.instrument.MeterRegistry> meterRegistryProvider) {
+        return new OrchestratorMetrics(meterRegistryProvider.getIfAvailable());
     }
 
     @Bean
