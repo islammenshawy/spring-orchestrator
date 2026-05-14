@@ -789,6 +789,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             outboxRepository.save(event);
         } catch (Exception e) {
             log.error("[Saga] Failed to write outbox event: {}", e.getMessage());
+            throw new RuntimeException("Failed to write outbox event for flow " + flow.getId(), e);
         }
     }
 

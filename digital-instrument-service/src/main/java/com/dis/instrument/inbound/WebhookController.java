@@ -272,7 +272,7 @@ public class WebhookController {
                     .stepName(stepName)
                     .flowType("enigio-instrument")
                     .build();
-            kafkaTemplate.send(commandTopic, partitionKey, objectMapper.writeValueAsString(cmd));
+            kafkaTemplate.send(commandTopic, partitionKey, objectMapper.writeValueAsString(cmd)).get();
             log.info("[webhook] Re-activated flow {} at step {}", flowId, stepName);
         } catch (Exception e) {
             log.error("[webhook] Failed to re-activate flow {}: {}", flowId, e.getMessage());

@@ -123,24 +123,26 @@ public class VendorSyncController {
         if (techFuture != null) allFutures.add(techFuture);
         if (sigFuture != null) allFutures.add(sigFuture);
 
-        try {
-            CompletableFuture.allOf(allFutures.toArray(CompletableFuture[]::new)).join();
-        } catch (CompletionException e) {
-            log.warn("Sync: partial failure fetching vendor state for {}: {}", traceOriginalId, e.getMessage());
-            return ResponseEntity.status(502).body(new ErrorResponse(
-                    "Vendor call failed",
-                    traceOriginalId,
-                    null, e.getCause() != null ? e.getCause().getMessage() : e.getMessage()));
+        // Wait for all futures — collect results individually so partial failures
+        // don't discard successful sections
+        for (var future : allFutures) {
+            try { future.join(); } catch (CompletionException e) {
+                log.warn("Sync: partial failure for {}: {}", traceOriginalId, e.getMessage());
+            }
         }
 
         var response = new VendorSyncResponse(
                 traceOriginalId,
-                docFuture != null ? docFuture.join() : null,
-                metaFuture != null ? metaFuture.join() : null,
-                techFuture != null ? techFuture.join() : null,
-                sigFuture != null ? sigFuture.join() : null
+                docFuture != null ? getOrNull(docFuture) : null,
+                metaFuture != null ? getOrNull(metaFuture) : null,
+                techFuture != null ? getOrNull(techFuture) : null,
+                sigFuture != null ? getOrNull(sigFuture) : null
         );
 
         return ResponseEntity.ok(response);
+    }
+
+    private <T> T getOrNull(CompletableFuture<T> future) {
+        try { return future.join(); } catch (Exception e) { return null; }
     }
 }

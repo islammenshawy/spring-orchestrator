@@ -57,6 +57,13 @@ public class GenericFlowRepository<F extends OrchestratorFlow> implements Orches
     }
 
     @Override
+    public long countByStatusAndUpdatedAtBefore(FlowStatus status, Instant threshold) {
+        Query query = new Query(Criteria.where("status").is(status)
+                .and("updatedAt").lt(threshold));
+        return mongoTemplate.count(query, entityClass);
+    }
+
+    @Override
     public List<F> findByStatus(FlowStatus status) {
         Query query = new Query(Criteria.where("status").is(status));
         return mongoTemplate.find(query, entityClass);

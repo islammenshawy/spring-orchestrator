@@ -26,4 +26,6 @@ public interface OrchestratorFlowRepository<F extends OrchestratorFlow> extends 
     List<F> findByStatusAndUpdatedAtBefore(FlowStatus status, Instant threshold);
 
     List<F> findByStatus(FlowStatus status);
+
+    long countByStatusAndUpdatedAtBefore(FlowStatus status, Instant threshold);
 }

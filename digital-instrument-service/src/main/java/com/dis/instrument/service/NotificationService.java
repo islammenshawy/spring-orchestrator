@@ -77,7 +77,7 @@ public class NotificationService {
 
         try {
             String json = objectMapper.writeValueAsString(notification);
-            kafkaTemplate.send(notificationTopic, flow.getId(), json);
+            kafkaTemplate.send(notificationTopic, flow.getId(), json).get();
             flow.setLastNotifiedPhase(phase);
             flow.setLastNotifiedStatus(status);
             log.info("[{}] Published notification: phase={}, status={}",

@@ -1,0 +1,369 @@
+================================================================================
+                  SPRING ORCHESTRATOR — GAP ASSESSMENT (Qwen)
+                  Generated: 2026-05-13
+                  Scope: orchestrator-starter + digital-instrument-service
+                  Excluded: alternat_frameworks, mock-vendor, examples, infra
+================================================================================
+
+This assessment identifies implementation gaps, bugs, and enhancement
+opportunities based on a full read of all source files in the two modules.
+
+================================================================================
+1. CRITICAL — Data Loss / Correctness Risks
+================================================================================
+
+1.1  advanceToNextStep Publishes Without Outbox Safety Net
+      ------------------------------------------------------
+      File: orchestrator-starter/.../flow/FlowOrchestrator.java:603-621
+
+      advanceToNextStep() performs an atomic CAS to advance currentStep,
+      then calls publishStepDirect() to send the next step command to Kafka.
+      If the Kafka send fails (broker down, network issue), the flow is
+      already advanced in MongoDB but the next step command is never sent.
+
+      The initial step (startFlow) is protected by the outbox pattern
+      (save flow + write outbox in one transaction). But subsequent steps
+      bypass the outbox and publish directly. If the direct publish fails,
+      the flow is stuck: currentStep points to a step that was never
+      commanded to execute.
+
+      Recovery path: StaleFlowRecoveryService will eventually re-publish
+      (after 15 min stale threshold), but there is a 15-minute window
+      where the flow is silently stuck.
+
+      Impact:   High — flow stalls for up to 15 minutes on transient
+                Kafka publish failure.
+      Fix:      Write outbox event before direct publish, or use the
+                outbox for all step advancements (not just the first).
+
+1.2  No MongoDB Index on traceOriginalId (Webhook Lookup)
+      -----------------------------------------------------
+      File: digital-instrument-service/.../config/migration/V001_CreateIndexes.java
+
+      WebhookController queries by traceOriginalId (line 126):
+        Query.query(Criteria.where("traceOriginalId").is(traceOriginalId))
+
+      V001_CreateIndexes creates indexes for status+updatedAt, correlationId,
+      flowType, currentStep+status, createdAt, reference — but NOT
+      traceOriginalId. Every webhook from Enigio triggers a full collection
+      scan.
+
+      Same issue for envelopeTraceId (TRANSFER/TRANSFER_REJECTED webhooks,
+      lines 196, 213).
+
+      Impact:   High — every webhook (PARTIALLY_SIGNED, FULLY_SIGNED,
+                TRANSFER, etc.) does a collection scan. At scale this
+                degrades MongoDB and delays flow advancement.
+      Fix:      Add indexes:
+                  - { traceOriginalId: 1 }
+                  - { envelopeTraceId: 1 }
+
+================================================================================
+2. HIGH — Reliability / Operational Gaps
+================================================================================
+
+2.1  NotificationService Fire-and-Forget Kafka Send
+      ------------------------------------------------
+      File: digital-instrument-service/.../service/NotificationService.java:80
+
+      kafkaTemplate.send(notificationTopic, flow.getId(), json) — no .get().
+      If the send fails (broker down, serialization error), the notification
+      is silently lost. Downstream never receives the approval request,
+      and the flow stalls at the gate.
+
+      The dedup flags (lastNotifiedPhase/lastNotifiedStatus) are set AFTER
+      the send attempt (line 81-82), so a failed send won't set dedup —
+      but the catch block (line 85-87) only logs and returns. The next
+      retry cycle won't re-publish because the step handler already moved on.
+
+      Impact:   High — gate approval notifications lost → flow stalls
+                until WaitingFlowScheduler re-triggers (30 min).
+      Fix:      Use .get() with timeout, or write to outbox-like pattern.
+
+2.2  reactivateFlow Fire-and-Forget in WebhookController / FlowController
+      ----------------------------------------------------------------------
+      Files:
+        - digital-instrument-service/.../inbound/WebhookController.java:275
+        - digital-instrument-service/.../inbound/FlowController.java:266
+
+      Both reactivateFlow() methods call kafkaTemplate.send() without .get().
+      If the send fails, the flow is not re-activated. The webhook returns
+      200 to Enigio (or the approver), but the flow never advances.
+
+      Impact:   High — false positive: caller thinks flow advanced, but
+                Kafka message was never delivered.
+      Fix:      Use .get() with timeout and return appropriate error status.
+
+2.3  writeOutboxEvent Silently Swallows Exceptions
+      -----------------------------------------------
+      File: orchestrator-starter/.../flow/FlowOrchestrator.java:790-792
+
+      If the outbox event write fails (MongoDB down, constraint violation),
+      the exception is caught and logged. The startFlow() caller gets the
+      saved flow back, but there is no outbox safety net for the first step.
+      If the direct Kafka publish in startFlow also fails, the flow is
+      started but no step command was ever sent.
+
+      Impact:   High — first step command lost if both Kafka and outbox fail.
+      Fix:      Throw the exception instead of swallowing, or wrap in
+                a RetryableStepException.
+
+2.4  No Circuit Breaker on Feign Clients
+      -------------------------------------
+      File: digital-instrument-service/.../vendor/enigio/feign/*.java
+
+      Three Feign clients (EnigioDocumentClient, EnigioSignatureClient,
+      EnigioEnvelopeClient) have no circuit breaker. If Enigio is down,
+      every step call blocks for the full read timeout (30s), retries
+      via Kafka retry topics, and eventually hits DLT after 10 attempts.
+
+      Total time to DLT: 10 × 30s read timeout + retry backoff = ~5-10 min
+      of blocked threads per flow.
+
+      Impact:   High — vendor outage cascades to thread pool exhaustion.
+      Fix:      Add Resilience4j circuit breaker to Feign config.
+
+2.5  WaitingFlowScheduler Re-publishes Without Idempotency
+      -------------------------------------------------------
+      File: digital-instrument-service/.../service/WaitingFlowScheduler.java:88-104
+
+      The scheduler re-publishes step commands to Kafka for waiting flows.
+      These commands bypass the idempotency check in OrchestratorKafkaConsumer
+      because they use a new eventId (UUID.randomUUID()). The step handler
+      may already be executing (Kafka retry topic redelivery), and this
+      creates a duplicate command.
+
+      Layer 2 idempotency (isAlreadyCompleted) in FlowOrchestrator handles
+      the duplicate, but it still causes unnecessary DB reads, log writes,
+      and metric noise.
+
+      Impact:   Medium — duplicate processing overhead, not data loss.
+      Fix:      Use a deterministic eventId based on flowId + stepName +
+                scheduler run timestamp, or check before publishing.
+
+================================================================================
+3. MEDIUM — Security / Validation Gaps
+================================================================================
+
+3.1  No Authentication on Any DIS Endpoint
+      ---------------------------------------
+      Files: All controllers in digital-instrument-service/.../inbound/
+
+      All REST endpoints are unauthenticated:
+        - POST /flows/enigio-instrument/{id}/approve — anyone can approve
+        - POST /flows/enigio-instrument/{id}/cancel — anyone can cancel
+        - POST /webhooks/enigio — anyone can fake Enigio webhooks
+        - GET /vendor/enigio/documents/{id} — anyone can query vendor state
+        - POST /documents/additional — anyone can upload documents
+
+      Impact:   Medium — unauthorized flow manipulation, data exfiltration.
+      Fix:      Add Spring Security with API key or OAuth2. At minimum,
+                protect approve/cancel endpoints.
+
+3.2  No Input Validation on WebhookController
+      ------------------------------------------
+      File: digital-instrument-service/.../inbound/WebhookController.java:88
+
+      Accepts Map<String, Object> with no validation. Only checks for
+      null traceOriginalId and eventType (line 122). No size limits,
+      no content type validation, no rate limiting.
+
+      Impact:   Medium — malformed payloads, potential DoS via large
+                payloads or rapid-fire webhooks.
+      Fix:      Add @Valid with a typed DTO, rate limiting, and payload
+                size limits.
+
+3.3  No Input Validation on AdditionalDocumentController
+      -----------------------------------------------------
+      File: digital-instrument-service/.../inbound/AdditionalDocumentController.java:98
+
+      Has manual validation (filename not blank, data not blank, max size),
+      but no Jakarta Validation annotations. The UploadRequest record has
+      no @NotBlank, @NotNull constraints.
+
+      Impact:   Low — manual validation covers the basics, but inconsistent
+                with the rest of the codebase which uses Jakarta Validation.
+      Fix:      Add @NotBlank, @NotNull to UploadRequest record fields.
+
+================================================================================
+4. MEDIUM — Operational / Observability Gaps
+================================================================================
+
+4.1  OrchestratorHealthIndicator Doesn't Check Stale Flows
+      ------------------------------------------------------
+      File: orchestrator-starter/.../autoconfigure/OrchestratorHealthIndicator.java:19-30
+
+      Only checks outbox pending count and dead-lettered count. Does NOT
+      check for stale flows (IN_PROGRESS flows older than threshold) or
+      COMPENSATION_FAILED flows. These are the most operationally relevant
+      signals for an orchestrator.
+
+      Impact:   Medium — health endpoint can report UP while flows are
+                stuck or compensation has failed.
+      Fix:      Add stale flow count and COMPENSATION_FAILED count to
+                health check.
+
+4.2  No Alerting on COMPENSATION_FAILED Flows
+      ------------------------------------------
+      File: orchestrator-starter/.../flow/FlowOrchestrator.java:519-526
+
+      When compensation fails, the flow is marked COMPENSATION_FAILED and
+      saved. No metric is emitted, no alert is triggered. The only way to
+      discover this is via the retry-compensation endpoint or manual DB query.
+
+      Impact:   Medium — partial compensation goes unnoticed.
+      Fix:      Emit a metric (orchestrator.compensation.failed) and/or
+                log at ERROR level with alerting-friendly format.
+
+4.3  VendorSyncController Returns 502 on Any Partial Failure
+      ---------------------------------------------------------
+      File: digital-instrument-service/.../inbound/VendorSyncController.java:126-134
+
+      CompletableFuture.allOf().join() throws if ANY future fails. The
+      entire response becomes a 502, even if 3 of 4 sections succeeded.
+      The endpoint description says "individual section failures are
+      returned inline" but the implementation doesn't do this.
+
+      Impact:   Medium — partial data is discarded entirely.
+      Fix:      Use CompletableFuture.whenComplete() per future to capture
+                errors inline, always return 200 with populated sections
+                and error fields for failed ones.
+
+4.4  No Rate Limiting on Webhook Endpoint
+      --------------------------------------
+      File: digital-instrument-service/.../inbound/WebhookController.java
+
+      Enigio could send thousands of webhooks per second (malicious or
+      misconfigured). No rate limiting, no request size limits, no
+      connection throttling.
+
+      Impact:   Medium — DoS via webhook flood.
+      Fix:      Add Spring Cloud Gateway rate limiter or Bucket4j.
+
+================================================================================
+5. LOW — Design / Code Quality
+================================================================================
+
+5.1  SeedDataInitializer Could Run in Production
+      ---------------------------------------------
+      File: digital-instrument-service/.../config/SeedDataInitializer.java:29
+
+      Seeds sample data if collection is empty. No profile guard
+      (e.g., @Profile("dev", "test")). If MongoDB is freshly provisioned
+      in production, this will insert fake flows.
+
+      Impact:   Low — only on first boot with empty DB.
+      Fix:      Add @Profile("dev", "test") or a feature flag.
+
+5.2  executeStepOnly() Just Delegates to executeStep()
+      --------------------------------------------------
+      File: orchestrator-starter/.../flow/FlowOrchestrator.java:304-306
+
+      executeStepOnly() calls executeStep() directly. The name suggests
+      it does something different (execute without advancement), but
+      executeStep() already handles that via the reply mode check in
+      OrchestratorKafkaConsumer (line 63-67).
+
+      Impact:   Low — confusing API, not a bug.
+      Fix:      Remove executeStepOnly() or document why it exists.
+
+5.3  PiiMaskingConverter Doesn't Work with JSON Logs
+      -------------------------------------------------
+      File: digital-instrument-service/.../config/PiiMaskingConverter.java
+
+      Only works with pattern-based log output (%maskedMsg). If the
+      application switches to JSON logging (LogstashEncoder), PII leaks
+      through unmasked.
+
+      Impact:   Low — only relevant if log format changes.
+      Fix:      Add a JsonProvider for Logback JSON encoder.
+
+5.4  AdditionalDocumentController Stores Base64 in MongoDB
+      -------------------------------------------------------
+      File: digital-instrument-service/.../inbound/AdditionalDocumentController.java:129
+
+      Stores base64-encoded document data directly in MongoDB documents.
+      A 10 MB file becomes ~13.3 MB base64 string in a single document.
+      MongoDB has a 16 MB document limit — this leaves very little headroom.
+
+      Impact:   Low — works for small documents, but risks hitting the
+                16 MB limit for larger files.
+      Fix:      Use GridFS for documents > 1 MB, or store in S3/blob store.
+
+5.5  No Index on envelopeTraceId for TRANSFER Webhooks
+      ---------------------------------------------------
+      File: digital-instrument-service/.../config/migration/V001_CreateIndexes.java
+
+      TRANSFER and TRANSFER_REJECTED webhooks query by envelopeTraceId
+      (WebhookController lines 196, 213). No index exists.
+
+      Impact:   Low — TRANSFER webhooks are rare (once per flow).
+      Fix:      Add { envelopeTraceId: 1 } index in V001.
+
+5.6  FlowOrchestrator.saveFlow() Version Conflict Loop Caps at 3
+      -------------------------------------------------------------
+      File: orchestrator-starter/.../flow/FlowOrchestrator.java:272-285
+
+      If all 3 version conflict retry attempts fail, the exception
+      propagates and the step is marked as failed (infrastructure error).
+      The step handler already executed successfully, but the flow state
+      was not saved.
+
+      Impact:   Low — unlikely under normal load (Kafka partition key
+                ensures single consumer per flow).
+      Fix:      Log at ERROR level and consider marking the step as
+                needing manual intervention.
+
+================================================================================
+6. LOW — Documentation / Developer Experience
+================================================================================
+
+6.1  No Migration Guide for Consumers Adding New Flow Types
+      -------------------------------------------------------
+      The README documents the library well, but doesn't cover the full
+      checklist for adding a new flow type:
+        - Entity must extend AbstractFlow
+        - @Flow annotation required
+        - Feign clients need circuit breaker config
+        - MongoDB indexes need to be added via Mongock
+        - Kafka topics need partition planning
+
+      Impact:   Low — discoverable from examples, but not documented.
+      Fix:      Add a "New Flow Type Checklist" section to README.
+
+6.2  No OpenAPI Schema for Flow Start Request Body
+      -----------------------------------------------
+      File: digital-instrument-service/.../inbound/FlowController.java
+
+      The auto-generated POST /flows/{flowType} endpoint accepts
+      Map<String, Object>. Swagger UI shows no schema, making it hard
+      for downstream consumers to discover required fields.
+
+      Impact:   Low — EnigioInstrumentEntity has Jakarta Validation
+                annotations, but the endpoint doesn't expose them in OpenAPI.
+      Fix:      Add @RequestBody with a typed schema or document in Swagger.
+
+================================================================================
+SUMMARY
+================================================================================
+
+  CRITICAL:  2  (1.1 advanceToNextStep data loss, 1.2 missing indexes)
+  HIGH:      4  (2.1 notification fire-and-forget, 2.2 reactivateFlow
+                  fire-and-forget, 2.3 writeOutboxEvent silent swallow,
+                  2.4 no circuit breaker)
+  MEDIUM:    5  (2.5 WaitingFlowScheduler duplicate, 3.1 no auth,
+                  3.2 no webhook validation, 4.1 health doesn't check
+                  stale flows, 4.3 VendorSyncController partial failure)
+  LOW:       8  (3.3, 4.2, 4.4, 5.1-5.6, 6.1-6.2)
+
+Top 3 recommendations:
+  1. Fix 1.2 — Add missing MongoDB indexes (traceOriginalId, envelopeTraceId)
+     — single migration, immediate performance impact on webhook processing.
+  2. Fix 2.1/2.2 — Make notification and reactivateFlow sends synchronous
+     (.get() with timeout) — prevents silent flow stalls.
+  3. Fix 3.1 — Add authentication to approve/cancel endpoints — lowest
+     effort security improvement with highest impact.
+
+================================================================================
+END OF ASSESSMENT
+================================================================================

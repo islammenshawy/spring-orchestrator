@@ -22,6 +22,7 @@ import java.util.Map;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@org.springframework.context.annotation.Profile("!prod")
 public class SeedDataInitializer implements CommandLineRunner {
 
     private final MongoTemplate mongoTemplate;

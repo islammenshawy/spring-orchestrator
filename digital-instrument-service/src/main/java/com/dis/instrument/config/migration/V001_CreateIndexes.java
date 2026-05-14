@@ -69,6 +69,16 @@ public class V001_CreateIndexes {
                 new Index().on("reference", Sort.Direction.ASC)
                         .named("reference_idx"));
 
+        // Webhook lookup by Enigio traceOriginalId (signing/document events)
+        mongoTemplate.indexOps(FLOWS).ensureIndex(
+                new Index().on("traceOriginalId", Sort.Direction.ASC)
+                        .named("traceOriginalId_idx"));
+
+        // Webhook lookup by envelope traceId (TRANSFER/TRANSFER_REJECTED events)
+        mongoTemplate.indexOps(FLOWS).ensureIndex(
+                new Index().on("envelopeTraceId", Sort.Direction.ASC)
+                        .named("envelopeTraceId_idx"));
+
         // ===== Outbox =====
 
         // Outbox publisher polls for unpublished events every 500ms

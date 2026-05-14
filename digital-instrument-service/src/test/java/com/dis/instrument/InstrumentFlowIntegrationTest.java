@@ -574,8 +574,9 @@ class InstrumentFlowIntegrationTest {
         var result = startInstrumentFlow("PN-DOUBLE-CANCEL", InstrumentType.PROMISSORY_NOTE);
         String flowId = (String) result.get("id");
 
-        // Wait for any step
+        // Wait for gate step, then let any in-flight Kafka messages settle
         waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(2));
+        try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
 
         // First cancel
         rest.post().uri("/flows/enigio-instrument/" + flowId + "/cancel")

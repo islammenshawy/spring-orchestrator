@@ -502,9 +502,11 @@ public class OrchestratorAutoConfiguration {
             name = "org.springframework.boot.health.contributor.HealthIndicator")
     public OrchestratorHealthIndicator orchestratorHealthIndicator(
             OutboxEventRepository outboxRepository,
+            FlowTypeRegistry registry,
             OrchestratorProperties props) {
-        return new OrchestratorHealthIndicator(outboxRepository,
-                props.getHealth().getOutboxThreshold());
+        return new OrchestratorHealthIndicator(outboxRepository, registry,
+                props.getHealth().getOutboxThreshold(),
+                props.getRecovery().getStaleThresholdMinutes());
     }
 
     // ========== Recovery Service ==========

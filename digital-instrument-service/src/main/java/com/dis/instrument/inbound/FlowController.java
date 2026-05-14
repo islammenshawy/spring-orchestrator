@@ -263,7 +263,7 @@ public class FlowController {
                     .stepName(stepName)
                     .flowType("enigio-instrument")
                     .build();
-            kafkaTemplate.send(commandTopic, partitionKey, objectMapper.writeValueAsString(cmd));
+            kafkaTemplate.send(commandTopic, partitionKey, objectMapper.writeValueAsString(cmd)).get();
             log.info("[{}] Re-activated flow at step {} via Kafka", flowId, stepName);
         } catch (Exception e) {
             log.error("[{}] Failed to re-activate flow: {}", flowId, e.getMessage());
