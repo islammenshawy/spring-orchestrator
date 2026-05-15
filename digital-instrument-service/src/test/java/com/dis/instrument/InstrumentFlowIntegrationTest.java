@@ -44,11 +44,8 @@ class InstrumentFlowIntegrationTest {
     private RestClient vendorAdmin;
 
     @BeforeAll
-    static void clearTestData(@Autowired MongoTemplate mongo) throws InterruptedException {
-        for (String col : mongo.getCollectionNames()) {
-            mongo.dropCollection(col);
-        }
-        Thread.sleep(5000); // Wait for Kafka consumers to join groups
+    static void waitForKafka(@Autowired MongoTemplate mongo) throws InterruptedException {
+        Thread.sleep(3000); // Wait for Kafka consumers to join groups on first run
     }
 
     @BeforeEach
