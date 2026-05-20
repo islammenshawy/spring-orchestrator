@@ -62,6 +62,23 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
     }
 
     @Override
+    public java.time.Duration getExpiresAfter() {
+        return parseExpiresAfter(stepAnnotation.expiresAfter());
+    }
+
+    /** Parse "48h" or "7d" into a Duration. Returns null if empty. */
+    public static java.time.Duration parseExpiresAfter(String value) {
+        if (value == null || value.isEmpty()) return null;
+        try {
+            if (value.endsWith("h")) return java.time.Duration.ofHours(Long.parseLong(value.substring(0, value.length() - 1)));
+            if (value.endsWith("d")) return java.time.Duration.ofDays(Long.parseLong(value.substring(0, value.length() - 1)));
+        } catch (NumberFormatException e) {
+            // fall through to error
+        }
+        throw new IllegalArgumentException("Invalid expiresAfter: '" + value + "' — use format like '48h' or '7d'");
+    }
+
+    @Override
     public boolean isAlreadyCompleted(F flow) {
         String expr = stepAnnotation.completedWhen();
         if (expr.isEmpty()) return false;

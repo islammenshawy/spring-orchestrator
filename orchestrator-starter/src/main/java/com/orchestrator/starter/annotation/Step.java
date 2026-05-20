@@ -47,4 +47,16 @@ public @interface Step {
      *   "status == 'VERIFIED'"
      */
     String completedWhen() default "";
+
+    /**
+     * Gate step expiry. When a step throws WaitingStepException (or auto-parks
+     * because completedWhen is still false after execution), the library tracks
+     * how long it has been waiting. If this duration is exceeded, the flow is
+     * automatically failed by StaleFlowRecoveryService.
+     *
+     * Format: number + unit. Supported units: h (hours), d (days).
+     * Examples: "48h", "7d", "72h"
+     * Empty = no expiry (default).
+     */
+    String expiresAfter() default "";
 }

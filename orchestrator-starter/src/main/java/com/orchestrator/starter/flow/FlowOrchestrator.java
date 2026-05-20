@@ -257,12 +257,27 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
+        // Auto-park: if step has expiresAfter and completedWhen is still false,
+        // the step is a gate that did its one-time setup — auto-throw WaitingStepException
+        java.time.Duration stepExpiry = (handler instanceof MethodStepAdapter)
+                ? handler.getExpiresAfter() : null;
+        if (stepExpiry != null && !handler.isAlreadyCompleted(flow)) {
+            logStep(flowId, stepName, "WAITING", flow.getRetryCount(),
+                    flowBefore, null, "auto-park: completedWhen still false", startedAt);
+            metrics.stepExecution(flowType, stepName, "WAITING",
+                    Duration.between(startedAt, Instant.now()));
+            handleWaitingStep(flow, new WaitingStepException(
+                    "Waiting: completedWhen not satisfied after step execution"));
+            return;
+        }
+
         // Step succeeded — clear retry/recovery state.
         flow.setRetryCount(0);
         flow.setBackoffSeconds(0);
         flow.setNextRetryAt(null);
         flow.setErrorMessage(null);
         flow.setRecoveryCount(0);
+        flow.setWaitingSince(null);
         flow.setUpdatedAt(Instant.now());
 
         // Save flow with version conflict retry.
@@ -674,14 +689,22 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         String errorMsg = e.getMessage() != null ? e.getMessage() : "waiting for external event";
 
         if (mongoTemplate != null && entityClass != null) {
-            updateFlowPartial(flow.getId(), java.util.Map.of(
-                    "status", FlowStatus.WAITING_RETRY.name(),
-                    "errorMessage", errorMsg,
-                    "updatedAt", Instant.now()));
+            var fields = new java.util.LinkedHashMap<String, Object>();
+            fields.put("status", FlowStatus.WAITING_RETRY.name());
+            fields.put("errorMessage", errorMsg);
+            fields.put("updatedAt", Instant.now());
+            // Set waitingSince only on first entry — don't reset on re-activation
+            if (flow.getWaitingSince() == null) {
+                fields.put("waitingSince", Instant.now());
+            }
+            updateFlowPartial(flow.getId(), fields);
         } else {
             flow.setStatus(FlowStatus.WAITING_RETRY);
             flow.setErrorMessage(errorMsg);
             flow.setUpdatedAt(Instant.now());
+            if (flow.getWaitingSince() == null) {
+                flow.setWaitingSince(Instant.now());
+            }
             saveFlow(flow);
         }
     }

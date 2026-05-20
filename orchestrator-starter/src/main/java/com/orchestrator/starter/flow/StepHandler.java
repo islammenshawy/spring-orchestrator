@@ -77,4 +77,7 @@ public interface StepHandler<F extends OrchestratorFlow> {
      * 3. Default: any unhandled exception is treated as retryable
      */
     void execute(F flow);
+
+    /** Step expiry duration. Null = no expiry. */
+    default java.time.Duration getExpiresAfter() { return null; }
 }

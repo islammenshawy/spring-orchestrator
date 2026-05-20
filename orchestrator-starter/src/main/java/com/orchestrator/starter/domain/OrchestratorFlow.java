@@ -75,4 +75,8 @@ public interface OrchestratorFlow {
     /** Error from failed compensation handler (when status=COMPENSATION_FAILED). */
     default String getCompensationError() { return null; }
     default void setCompensationError(String error) {}
+
+    /** When this step first entered WAITING_RETRY. Set by library, reset on advancement. */
+    default Instant getWaitingSince() { return null; }
+    default void setWaitingSince(Instant waitingSince) {}
 }

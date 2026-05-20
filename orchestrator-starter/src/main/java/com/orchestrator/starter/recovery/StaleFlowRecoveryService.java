@@ -6,6 +6,8 @@ import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.flow.FlowTypeDescriptor;
 import com.orchestrator.starter.flow.FlowTypeRegistry;
+import com.orchestrator.starter.flow.StepHandler;
+import com.orchestrator.starter.flow.StepRegistry;
 import com.orchestrator.starter.kafka.StepCommandMessage;
 import tools.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -73,13 +75,16 @@ public class StaleFlowRecoveryService {
                     (OrchestratorFlowRepository<OrchestratorFlow>) descriptor.getRepository();
             if (flowRepository == null) continue;
 
-            recoverFlowType(descriptor.getFlowType(), flowRepository, commandTopic, threshold);
+            recoverFlowType(descriptor.getFlowType(), flowRepository, commandTopic,
+                    threshold, descriptor.getStepRegistry());
         }
     }
 
+    @SuppressWarnings("unchecked")
     private void recoverFlowType(String flowType,
                                   OrchestratorFlowRepository<OrchestratorFlow> flowRepository,
-                                  String commandTopic, Instant threshold) {
+                                  String commandTopic, Instant threshold,
+                                  StepRegistry<?> stepRegistry) {
         List<OrchestratorFlow> staleFlows = flowRepository
                 .findByStatusAndUpdatedAtBefore(FlowStatus.IN_PROGRESS, threshold);
 
@@ -128,6 +133,40 @@ public class StaleFlowRecoveryService {
             } catch (Exception e) {
                 log.error("[Recovery] Failed to recover flow {} (type: {}): {}",
                         flow.getId(), flowType, e.getMessage());
+            }
+        }
+
+        // Expire WAITING_RETRY flows that exceeded step-level expiresAfter
+        expireWaitingFlows(flowType, flowRepository, stepRegistry);
+    }
+
+    private void expireWaitingFlows(String flowType,
+                                     OrchestratorFlowRepository<OrchestratorFlow> flowRepository,
+                                     StepRegistry<?> stepRegistry) {
+        List<OrchestratorFlow> waitingFlows = flowRepository
+                .findByStatus(FlowStatus.WAITING_RETRY);
+
+        for (OrchestratorFlow flow : waitingFlows) {
+            Instant waitingSince = flow.getWaitingSince();
+            if (waitingSince == null) continue;
+
+            String stepName = flow.getCurrentStep();
+            StepHandler<?> handler = stepRegistry != null ? stepRegistry.getHandler(stepName) : null;
+            if (handler == null) continue;
+
+            java.time.Duration expiresAfter = handler.getExpiresAfter();
+            if (expiresAfter == null) continue;
+
+            if (waitingSince.plus(expiresAfter).isBefore(Instant.now())) {
+                long waitedHours = java.time.Duration.between(waitingSince, Instant.now()).toHours();
+                flow.setStatus(FlowStatus.FAILED);
+                flow.setErrorMessage("Step " + stepName + " expired after " + waitedHours +
+                        "h (limit: " + expiresAfter.toHours() + "h)");
+                flow.setUpdatedAt(Instant.now());
+                flowRepository.save(flow);
+                metrics.flowFailed(flowType);
+                log.info("[Recovery] Expired flow {} at step {} (waited {}h, limit {}h)",
+                        flow.getId(), stepName, waitedHours, expiresAfter.toHours());
             }
         }
     }

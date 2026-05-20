@@ -66,5 +66,8 @@ public abstract class AbstractFlow implements OrchestratorFlow {
     /** Error message from a failed compensation handler (when status=COMPENSATION_FAILED). */
     private String compensationError;
 
+    /** When the current step first entered WAITING_RETRY. Set by library, reset on advancement. */
+    private Instant waitingSince;
+
     private Instant createdAt = Instant.now();
 }
