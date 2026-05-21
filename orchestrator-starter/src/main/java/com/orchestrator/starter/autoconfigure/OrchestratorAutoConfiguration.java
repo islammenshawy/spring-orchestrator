@@ -117,7 +117,8 @@ public class OrchestratorAutoConfiguration {
             OrchestratorProperties props,
             KafkaTemplate kafkaTemplate,
             OrchestratorMetrics metrics,
-            @Autowired(required = false) TransactionTemplate transactionTemplate) {
+            @Autowired(required = false) TransactionTemplate transactionTemplate,
+            @Autowired(required = false) jakarta.validation.Validator validator) {
 
         // Scan all @Flow classes
         Map<String, FlowDefinitionScanner.FlowTypeInfo> flowTypes =
@@ -153,6 +154,16 @@ public class OrchestratorAutoConfiguration {
         }
 
         FlowTypeRegistry registry = new FlowTypeRegistry(descriptors);
+
+        // Wire validator into all orchestrators for startFlow() validation
+        if (validator != null) {
+            registry.getAll().forEach(d -> {
+                if (d.getOrchestrator() != null) {
+                    ((FlowOrchestrator) d.getOrchestrator()).setValidator(validator);
+                }
+            });
+        }
+
         log.info("Multi-flow registry: {} flow type(s): {}",
                 registry.size(), registry.getFlowTypeNames());
         return registry;
@@ -219,6 +230,8 @@ public class OrchestratorAutoConfiguration {
         }
         orchestrator.setMongoTemplate(mongoTemplate);
         orchestrator.setMaxLogSnapshotBytes(props.getAudit().getMaxLogSnapshotBytes());
+        // Validator is set separately after bean creation (injected via ObjectProvider in registry bean)
+        // See orchestratorFlowTypeRegistry() for wiring
 
         log.info("Flow '{}': topic={}, reply={}, dlt={}, steps={}, entity={}",
                 flowType, commandTopic,

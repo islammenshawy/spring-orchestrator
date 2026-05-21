@@ -57,6 +57,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private int MAX_LOG_SNAPSHOT_BYTES = 32_768; // 32 KB default
     private Class<F> entityClass;
     private org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
+    private jakarta.validation.Validator validator;
 
     public FlowOrchestrator(
             OrchestratorFlowRepository<F> flowRepository,
@@ -117,6 +118,17 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      * The outbox event is also written as a safety net for subsequent steps.
      */
     public F startFlow(F flow) {
+        // Validate entity before starting (catches missing required fields early)
+        if (validator != null) {
+            var violations = validator.validate(flow);
+            if (!violations.isEmpty()) {
+                String errors = violations.stream()
+                        .map(v -> v.getPropertyPath() + ": " + v.getMessage())
+                        .collect(java.util.stream.Collectors.joining(", "));
+                throw new IllegalArgumentException("Invalid flow entity: " + errors);
+            }
+        }
+
         flow.setCurrentStep(stepRegistry.getFirstStep());
         flow.setStatus(FlowStatus.IN_PROGRESS);
         flow.setUpdatedAt(Instant.now());
@@ -866,6 +878,10 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     public void setMongoTemplate(org.springframework.data.mongodb.core.MongoTemplate mongoTemplate) {
         this.mongoTemplate = mongoTemplate;
+    }
+
+    public void setValidator(jakarta.validation.Validator validator) {
+        this.validator = validator;
     }
 
     public void setMaxLogSnapshotBytes(int maxLogSnapshotBytes) {
