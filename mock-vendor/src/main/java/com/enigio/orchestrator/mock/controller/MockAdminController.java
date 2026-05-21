@@ -29,6 +29,18 @@ public class MockAdminController {
         return ResponseEntity.ok(failureConfig.getEndpointFailures());
     }
 
+    @PostMapping("/flaky-rate")
+    public ResponseEntity<Map<String, Object>> setFlakyRate(@RequestBody Map<String, Object> body) {
+        double rate = ((Number) body.get("rate")).doubleValue();
+        failureConfig.setFlakyRate(rate);
+        return ResponseEntity.ok(Map.of("flakyRate", rate));
+    }
+
+    @GetMapping("/flaky-rate")
+    public ResponseEntity<Map<String, Object>> getFlakyRate() {
+        return ResponseEntity.ok(Map.of("flakyRate", failureConfig.getFlakyRate()));
+    }
+
     @PostMapping("/reset")
     public ResponseEntity<Map<String, String>> reset() {
         service.resetAll();

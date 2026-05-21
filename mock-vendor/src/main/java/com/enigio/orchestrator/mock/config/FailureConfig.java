@@ -13,6 +13,9 @@ public class FailureConfig {
 
     private final Map<String, FailureScenario> endpointFailures = new ConcurrentHashMap<>();
 
+    /** Probability of failure for FLAKY mode (0.0 to 1.0). Default 0.3 = 30%. */
+    private volatile double flakyRate = 0.3;
+
     public FailureScenario getFailureFor(String endpoint) {
         return endpointFailures.getOrDefault(endpoint, FailureScenario.NONE);
     }
@@ -23,5 +26,6 @@ public class FailureConfig {
 
     public void reset() {
         endpointFailures.clear();
+        flakyRate = 0.3;
     }
 }

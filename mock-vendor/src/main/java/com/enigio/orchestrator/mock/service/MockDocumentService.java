@@ -488,7 +488,7 @@ public class MockDocumentService {
             case HTTP_502 -> throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Simulated 502 for " + endpoint);
             case HTTP_503 -> throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Simulated 503 for " + endpoint);
             case FLAKY -> {
-                if (ThreadLocalRandom.current().nextBoolean()) {
+                if (ThreadLocalRandom.current().nextDouble() < failureConfig.getFlakyRate()) {
                     throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Simulated flaky error for " + endpoint);
                 }
             }
