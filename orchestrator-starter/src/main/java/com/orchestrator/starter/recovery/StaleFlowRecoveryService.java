@@ -127,12 +127,23 @@ public class StaleFlowRecoveryService {
                                   String commandTopic, StepRegistry<?> stepRegistry) {
         Instant threshold = Instant.now().minus(staleThresholdMinutes, ChronoUnit.MINUTES);
 
-        // Step 1: Claim a batch atomically
+        // Step 1: Find candidate IDs (limited to batchSize)
+        Query candidateQuery = Query.query(Criteria.where("status").is(FlowStatus.IN_PROGRESS.name())
+                .and("updatedAt").lt(threshold)
+                .and("claimedBy").is(null))
+                .limit(batchSize);
+        candidateQuery.fields().include("_id");
+        List<?> candidates = mongoTemplate.find(candidateQuery, entityClass);
+        if (candidates.isEmpty()) return;
+
+        List<String> candidateIds = candidates.stream()
+                .map(c -> ((OrchestratorFlow) c).getId())
+                .toList();
+
+        // Step 2: Claim those IDs atomically via updateMulti with $in
         long claimed = mongoTemplate.updateMulti(
-                Query.query(Criteria.where("status").is(FlowStatus.IN_PROGRESS.name())
-                        .and("updatedAt").lt(threshold)
-                        .and("claimedBy").is(null))
-                        .limit(batchSize),
+                Query.query(Criteria.where("_id").in(candidateIds)
+                        .and("claimedBy").is(null)),
                 new Update()
                         .set("claimedBy", podId)
                         .set("claimedAt", Instant.now()),
@@ -140,7 +151,7 @@ public class StaleFlowRecoveryService {
 
         if (claimed == 0) return;
 
-        // Step 2: Find the claimed batch
+        // Step 3: Find the claimed batch
         List<?> batch = mongoTemplate.find(
                 Query.query(Criteria.where("claimedBy").is(podId)
                         .and("status").is(FlowStatus.IN_PROGRESS.name())),
@@ -228,13 +239,24 @@ public class StaleFlowRecoveryService {
 
             Instant expiryThreshold = Instant.now().minus(expiresAfter);
 
-            // Claim expired flows atomically
+            // Find candidate IDs (limited to batchSize)
+            Query expiryCandidateQuery = Query.query(Criteria.where("status").is(FlowStatus.WAITING_RETRY.name())
+                    .and("currentStep").is(stepName)
+                    .and("waitingSince").lt(expiryThreshold)
+                    .and("claimedBy").is(null))
+                    .limit(batchSize);
+            expiryCandidateQuery.fields().include("_id");
+            List<?> expiryCandidates = mongoTemplate.find(expiryCandidateQuery, entityClass);
+            if (expiryCandidates.isEmpty()) continue;
+
+            List<String> expiryIds = expiryCandidates.stream()
+                    .map(c -> ((OrchestratorFlow) c).getId())
+                    .toList();
+
+            // Claim those IDs atomically
             long claimed = mongoTemplate.updateMulti(
-                    Query.query(Criteria.where("status").is(FlowStatus.WAITING_RETRY.name())
-                            .and("currentStep").is(stepName)
-                            .and("waitingSince").lt(expiryThreshold)
-                            .and("claimedBy").is(null))
-                            .limit(batchSize),
+                    Query.query(Criteria.where("_id").in(expiryIds)
+                            .and("claimedBy").is(null)),
                     new Update()
                             .set("claimedBy", podId)
                             .set("claimedAt", Instant.now()),

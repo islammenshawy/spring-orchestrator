@@ -120,13 +120,13 @@ class StepExpiryTest {
         when(stepRegistry.getStepNames()).thenReturn(List.of("AWAIT_APPROVAL"));
         when(stepRegistry.getHandler("AWAIT_APPROVAL")).thenReturn(handler);
 
-        // Expiry claim returns 1 flow
-        when(mongoTemplate.updateMulti(argThat(q -> q.toString().contains("WAITING_RETRY")
-                && q.toString().contains("AWAIT_APPROVAL")),
+        // find candidates + find claimed batch both return the flow
+        when(mongoTemplate.find(any(Query.class), eq(TestFlow.class)))
+                .thenReturn(List.of(flow));
+        // updateMulti for claim returns 1
+        when(mongoTemplate.updateMulti(argThat(q -> q.toString().contains("$in")),
                 any(Update.class), eq(TestFlow.class)))
                 .thenReturn(UpdateResult.acknowledged(1, 1L, null));
-        when(mongoTemplate.find(argThat(q -> q.toString().contains("AWAIT_APPROVAL")), eq(TestFlow.class)))
-                .thenReturn(List.of(flow));
 
         FlowTypeDescriptor desc = FlowTypeDescriptor.builder()
                 .flowType("test").entityClass(TestFlow.class)
@@ -159,8 +159,9 @@ class StepExpiryTest {
         when(stepRegistry.getStepNames()).thenReturn(List.of("AWAIT_APPROVAL"));
         when(stepRegistry.getHandler("AWAIT_APPROVAL")).thenReturn(handler);
 
-        // Claim returns 0 — nothing expired (10h < 48h threshold, query won't match)
-        // updateMulti already defaults to 0 from setUp
+        // find returns empty — nothing expired (10h < 48h, query won't match)
+        when(mongoTemplate.find(any(Query.class), eq(TestFlow.class)))
+                .thenReturn(List.of());
 
         FlowTypeDescriptor desc = FlowTypeDescriptor.builder()
                 .flowType("test").entityClass(TestFlow.class)
@@ -173,8 +174,9 @@ class StepExpiryTest {
 
         createService(registry).recoverStaleFlows();
 
-        // No find or updateFirst calls for expiry (claim returned 0)
-        verify(mongoTemplate, never()).find(argThat(q -> q.toString().contains("AWAIT_APPROVAL")), eq(TestFlow.class));
+        // No updateMulti for claim (candidates empty)
+        verify(mongoTemplate, never()).updateMulti(argThat(q -> q.toString().contains("$in")),
+                any(Update.class), eq(TestFlow.class));
     }
 
     @Test

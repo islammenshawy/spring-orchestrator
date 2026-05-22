@@ -94,13 +94,24 @@ public class WaitingFlowScheduler {
 
         Instant staleThreshold = Instant.now().minus(pollIntervalMinutes, ChronoUnit.MINUTES);
 
-        // Step 1: Claim a batch atomically
+        // Step 1: Find candidate IDs (limited to batchSize)
+        Query candidateQuery = Query.query(Criteria.where("status").is(FlowStatus.WAITING_RETRY.name())
+                .and("currentStep").in(WAIT_STEPS)
+                .and("updatedAt").lt(staleThreshold)
+                .and("claimedBy").is(null))
+                .limit(batchSize);
+        candidateQuery.fields().include("_id");
+        List<EnigioInstrumentEntity> candidates = mongoTemplate.find(candidateQuery, EnigioInstrumentEntity.class);
+        if (candidates.isEmpty()) return;
+
+        List<String> candidateIds = candidates.stream()
+                .map(EnigioInstrumentEntity::getId)
+                .toList();
+
+        // Step 2: Claim those IDs atomically via updateMulti with $in
         long claimed = mongoTemplate.updateMulti(
-                Query.query(Criteria.where("status").is(FlowStatus.WAITING_RETRY.name())
-                        .and("currentStep").in(WAIT_STEPS)
-                        .and("updatedAt").lt(staleThreshold)
-                        .and("claimedBy").is(null))
-                        .limit(batchSize),
+                Query.query(Criteria.where("_id").in(candidateIds)
+                        .and("claimedBy").is(null)),
                 new Update()
                         .set("claimedBy", podId)
                         .set("claimedAt", Instant.now()),
@@ -108,7 +119,7 @@ public class WaitingFlowScheduler {
 
         if (claimed == 0) return;
 
-        // Step 2: Find the claimed batch
+        // Step 3: Find the claimed batch
         List<EnigioInstrumentEntity> batch = mongoTemplate.find(
                 Query.query(Criteria.where("claimedBy").is(podId)
                         .and("status").is(FlowStatus.WAITING_RETRY.name())
