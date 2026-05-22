@@ -530,13 +530,16 @@ public class OrchestratorAutoConfiguration {
             FlowTypeRegistry registry,
             KafkaTemplate kafkaTemplate,
             ObjectMapper objectMapper,
+            MongoTemplate mongoTemplate,
             OrchestratorProperties props,
             OutboxEventRepository outboxRepository,
             OrchestratorMetrics metrics) {
         return new StaleFlowRecoveryService(
-                registry, kafkaTemplate, objectMapper,
+                registry, kafkaTemplate, objectMapper, mongoTemplate,
                 props.getRecovery().getStaleThresholdMinutes(),
                 props.getRecovery().getMaxRecoveryAttempts(),
+                props.getRecovery().getBatchSize(),
+                props.getRecovery().getClaimTtlMinutes(),
                 outboxRepository, metrics);
     }
 

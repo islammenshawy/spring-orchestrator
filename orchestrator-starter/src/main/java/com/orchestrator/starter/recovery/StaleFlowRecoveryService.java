@@ -3,7 +3,6 @@ package com.orchestrator.starter.recovery;
 import com.orchestrator.starter.autoconfigure.OrchestratorMetrics;
 import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.domain.OrchestratorFlow;
-import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.flow.FlowTypeDescriptor;
 import com.orchestrator.starter.flow.FlowTypeRegistry;
 import com.orchestrator.starter.flow.StepHandler;
@@ -11,6 +10,10 @@ import com.orchestrator.starter.flow.StepRegistry;
 import com.orchestrator.starter.kafka.StepCommandMessage;
 import tools.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -23,13 +26,16 @@ import java.util.UUID;
  * Recovers flows stuck in IN_PROGRESS after a container crash.
  * Re-publishes the current step command to Kafka.
  *
- * Iterates ALL registered flow types — each flow type has its own
- * repository and command topic.
+ * Uses atomic batch claiming via MongoDB updateMulti + claimedBy/claimedAt
+ * to ensure each flow is processed by exactly one pod in a multi-pod deployment.
+ *
+ * Pattern: claim batch → find claimed → process → release
  *
  * Guards against false positives:
  * - Skips flows with pending outbox events (pipeline is just busy)
  * - Uses configurable stale threshold (default 15 min, must exceed retry budget)
  * - Caps recovery at maxRecoveryAttempts to prevent infinite recovery loops
+ * - Orphan cleanup releases claims from crashed pods (claimTtl)
  */
 @Slf4j
 public class StaleFlowRecoveryService {
@@ -37,78 +43,135 @@ public class StaleFlowRecoveryService {
     private final FlowTypeRegistry registry;
     private final KafkaTemplate kafkaTemplate;
     private final ObjectMapper objectMapper;
+    private final MongoTemplate mongoTemplate;
     private final int staleThresholdMinutes;
     private final int maxRecoveryAttempts;
+    private final int batchSize;
+    private final int claimTtlMinutes;
+    private final String podId;
     private final com.orchestrator.starter.outbox.OutboxEventRepository outboxRepository;
     private final OrchestratorMetrics metrics;
 
     public StaleFlowRecoveryService(FlowTypeRegistry registry, KafkaTemplate kafkaTemplate,
-                                     ObjectMapper objectMapper, int staleThresholdMinutes,
-                                     com.orchestrator.starter.outbox.OutboxEventRepository outboxRepository) {
-        this(registry, kafkaTemplate, objectMapper, staleThresholdMinutes, 10, outboxRepository, null);
-    }
-
-    public StaleFlowRecoveryService(FlowTypeRegistry registry, KafkaTemplate kafkaTemplate,
-                                     ObjectMapper objectMapper, int staleThresholdMinutes,
-                                     int maxRecoveryAttempts,
+                                     ObjectMapper objectMapper, MongoTemplate mongoTemplate,
+                                     int staleThresholdMinutes, int maxRecoveryAttempts,
+                                     int batchSize, int claimTtlMinutes,
                                      com.orchestrator.starter.outbox.OutboxEventRepository outboxRepository,
                                      OrchestratorMetrics metrics) {
         this.registry = registry;
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
+        this.mongoTemplate = mongoTemplate;
         this.staleThresholdMinutes = staleThresholdMinutes;
         this.maxRecoveryAttempts = maxRecoveryAttempts;
+        this.batchSize = batchSize;
+        this.claimTtlMinutes = claimTtlMinutes;
         this.outboxRepository = outboxRepository;
         this.metrics = metrics != null ? metrics : OrchestratorMetrics.noop();
+
+        // Pod identity for claim ownership — unique per JVM
+        String hostname = System.getenv("HOSTNAME");
+        this.podId = (hostname != null && !hostname.isBlank())
+                ? hostname : "pod-" + UUID.randomUUID().toString().substring(0, 8);
+        log.info("[Recovery] Pod identity: {}, batchSize={}, claimTtl={}min",
+                this.podId, batchSize, claimTtlMinutes);
     }
 
     @Scheduled(fixedDelayString = "${orchestrator.recovery.scan-interval-ms:30000}")
     @SuppressWarnings("unchecked")
     public void recoverStaleFlows() {
-        Instant threshold = Instant.now().minus(staleThresholdMinutes, ChronoUnit.MINUTES);
-
         for (FlowTypeDescriptor descriptor : registry.getAll()) {
             String commandTopic = descriptor.getCommandTopic();
             if (commandTopic == null || commandTopic.isBlank()) continue;
+            if (descriptor.getEntityClass() == null || descriptor.getEntityClass() == Object.class) continue;
 
-            OrchestratorFlowRepository<OrchestratorFlow> flowRepository =
-                    (OrchestratorFlowRepository<OrchestratorFlow>) descriptor.getRepository();
-            if (flowRepository == null) continue;
+            // Release orphaned claims first (crashed pods)
+            releaseOrphanedClaims(descriptor.getEntityClass());
 
-            recoverFlowType(descriptor.getFlowType(), flowRepository, commandTopic,
-                    threshold, descriptor.getStepRegistry());
+            recoverFlowType(descriptor.getFlowType(), descriptor.getEntityClass(),
+                    commandTopic, descriptor.getStepRegistry());
+
+            expireWaitingFlows(descriptor.getFlowType(), descriptor.getEntityClass(),
+                    descriptor.getStepRegistry());
         }
     }
 
+    /**
+     * Release claims from pods that crashed before finishing processing.
+     * A claim is orphaned if claimedAt + claimTtl < now.
+     */
+    private void releaseOrphanedClaims(Class<?> entityClass) {
+        Instant orphanThreshold = Instant.now().minus(claimTtlMinutes, ChronoUnit.MINUTES);
+
+        long released = mongoTemplate.updateMulti(
+                Query.query(Criteria.where("claimedBy").ne(null)
+                        .and("claimedAt").lt(orphanThreshold)),
+                new Update().set("claimedBy", null).set("claimedAt", null),
+                entityClass).getModifiedCount();
+
+        if (released > 0) {
+            log.warn("[Recovery] Released {} orphaned claims (claimTtl={}min)", released, claimTtlMinutes);
+        }
+    }
+
+    /**
+     * Atomic batch claim → find → process → release pattern.
+     *
+     * 1. updateMulti: atomically set claimedBy=podId on up to batchSize unclaimed stale flows
+     * 2. find: retrieve the claimed batch
+     * 3. process: for each flow, check outbox + recovery count, then publish to Kafka
+     * 4. release: clear claimedBy/claimedAt, bump updatedAt, inc recoveryCount
+     */
     @SuppressWarnings("unchecked")
-    private void recoverFlowType(String flowType,
-                                  OrchestratorFlowRepository<OrchestratorFlow> flowRepository,
-                                  String commandTopic, Instant threshold,
-                                  StepRegistry<?> stepRegistry) {
-        List<OrchestratorFlow> staleFlows = flowRepository
-                .findByStatusAndUpdatedAtBefore(FlowStatus.IN_PROGRESS, threshold);
+    private void recoverFlowType(String flowType, Class<?> entityClass,
+                                  String commandTopic, StepRegistry<?> stepRegistry) {
+        Instant threshold = Instant.now().minus(staleThresholdMinutes, ChronoUnit.MINUTES);
 
-        // Filter out flows with pending outbox events — pipeline is just busy, not stuck
-        if (outboxRepository != null) {
-            staleFlows = staleFlows.stream()
-                    .filter(f -> outboxRepository.countByFlowIdAndPublishedFalse(f.getId()) == 0)
-                    .toList();
-        }
+        // Step 1: Claim a batch atomically
+        long claimed = mongoTemplate.updateMulti(
+                Query.query(Criteria.where("status").is(FlowStatus.IN_PROGRESS.name())
+                        .and("updatedAt").lt(threshold)
+                        .and("claimedBy").is(null))
+                        .limit(batchSize),
+                new Update()
+                        .set("claimedBy", podId)
+                        .set("claimedAt", Instant.now()),
+                entityClass).getModifiedCount();
 
-        if (!staleFlows.isEmpty()) {
-            log.info("[Recovery] Found {} truly stale flows for type '{}' (no pending outbox)",
-                    staleFlows.size(), flowType);
-        }
+        if (claimed == 0) return;
 
-        for (OrchestratorFlow flow : staleFlows) {
+        // Step 2: Find the claimed batch
+        List<?> batch = mongoTemplate.find(
+                Query.query(Criteria.where("claimedBy").is(podId)
+                        .and("status").is(FlowStatus.IN_PROGRESS.name())),
+                entityClass);
+
+        log.info("[Recovery] Claimed {} stale flows for type '{}' (pod: {})", batch.size(), flowType, podId);
+
+        // Step 3: Process each flow
+        for (Object obj : batch) {
+            OrchestratorFlow flow = (OrchestratorFlow) obj;
+
+            // Filter out flows with pending outbox events — pipeline is just busy
+            if (outboxRepository != null && outboxRepository.countByFlowIdAndPublishedFalse(flow.getId()) > 0) {
+                releaseClaim(flow.getId(), entityClass);
+                continue;
+            }
+
             // Recovery loop detection: cap at maxRecoveryAttempts
             if (flow.getRecoveryCount() >= maxRecoveryAttempts) {
                 log.error("[Recovery] Flow {} exceeded max recovery attempts ({}) — marking FAILED",
                         flow.getId(), maxRecoveryAttempts);
-                flow.setStatus(FlowStatus.FAILED);
-                flow.setErrorMessage("Exceeded max recovery attempts (" + maxRecoveryAttempts + ")");
-                flow.setUpdatedAt(Instant.now());
-                flowRepository.save(flow);
+                mongoTemplate.updateFirst(
+                        Query.query(Criteria.where("_id").is(flow.getId())),
+                        new Update()
+                                .set("status", FlowStatus.FAILED.name())
+                                .set("errorMessage", "Exceeded max recovery attempts (" + maxRecoveryAttempts + ")")
+                                .set("updatedAt", Instant.now())
+                                .set("claimedBy", null)
+                                .set("claimedAt", null),
+                        entityClass);
+                metrics.flowFailed(flowType);
                 continue;
             }
 
@@ -124,50 +187,98 @@ public class StaleFlowRecoveryService {
                         ? flow.getCorrelationId() : flow.getId();
                 kafkaTemplate.send(commandTopic, partitionKey,
                         objectMapper.writeValueAsString(cmd)).get();
-                flow.setRecoveryCount(flow.getRecoveryCount() + 1);
-                flow.setUpdatedAt(Instant.now());
-                flowRepository.save(flow);
+
+                // Step 4: Release claim + increment recoveryCount atomically
+                mongoTemplate.updateFirst(
+                        Query.query(Criteria.where("_id").is(flow.getId())),
+                        new Update()
+                                .inc("recoveryCount", 1)
+                                .set("updatedAt", Instant.now())
+                                .set("claimedBy", null)
+                                .set("claimedAt", null),
+                        entityClass);
                 metrics.recoveryRecovered(flowType);
                 log.info("[Recovery] Re-published step {} for flow {} (type: {}, attempt: {})",
-                        flow.getCurrentStep(), flow.getId(), flowType, flow.getRecoveryCount());
+                        flow.getCurrentStep(), flow.getId(), flowType, flow.getRecoveryCount() + 1);
             } catch (Exception e) {
+                // Release claim on failure so another pod or next cycle can retry
+                releaseClaim(flow.getId(), entityClass);
                 log.error("[Recovery] Failed to recover flow {} (type: {}): {}",
                         flow.getId(), flowType, e.getMessage());
             }
         }
-
-        // Expire WAITING_RETRY flows that exceeded step-level expiresAfter
-        expireWaitingFlows(flowType, flowRepository, stepRegistry);
     }
 
-    private void expireWaitingFlows(String flowType,
-                                     OrchestratorFlowRepository<OrchestratorFlow> flowRepository,
+    /**
+     * Expire WAITING_RETRY flows that exceeded step-level expiresAfter.
+     * Uses batch claiming to prevent duplicate expiry across pods.
+     */
+    @SuppressWarnings("unchecked")
+    private void expireWaitingFlows(String flowType, Class<?> entityClass,
                                      StepRegistry<?> stepRegistry) {
-        List<OrchestratorFlow> waitingFlows = flowRepository
-                .findByStatus(FlowStatus.WAITING_RETRY);
+        if (stepRegistry == null) return;
 
-        for (OrchestratorFlow flow : waitingFlows) {
-            Instant waitingSince = flow.getWaitingSince();
-            if (waitingSince == null) continue;
-
-            String stepName = flow.getCurrentStep();
-            StepHandler<?> handler = stepRegistry != null ? stepRegistry.getHandler(stepName) : null;
+        // Find all step handlers with expiresAfter configured
+        for (String stepName : stepRegistry.getStepNames()) {
+            StepHandler<?> handler = stepRegistry.getHandler(stepName);
             if (handler == null) continue;
 
             java.time.Duration expiresAfter = handler.getExpiresAfter();
             if (expiresAfter == null) continue;
 
-            if (waitingSince.plus(expiresAfter).isBefore(Instant.now())) {
+            Instant expiryThreshold = Instant.now().minus(expiresAfter);
+
+            // Claim expired flows atomically
+            long claimed = mongoTemplate.updateMulti(
+                    Query.query(Criteria.where("status").is(FlowStatus.WAITING_RETRY.name())
+                            .and("currentStep").is(stepName)
+                            .and("waitingSince").lt(expiryThreshold)
+                            .and("claimedBy").is(null))
+                            .limit(batchSize),
+                    new Update()
+                            .set("claimedBy", podId)
+                            .set("claimedAt", Instant.now()),
+                    entityClass).getModifiedCount();
+
+            if (claimed == 0) continue;
+
+            List<?> batch = mongoTemplate.find(
+                    Query.query(Criteria.where("claimedBy").is(podId)
+                            .and("status").is(FlowStatus.WAITING_RETRY.name())
+                            .and("currentStep").is(stepName)),
+                    entityClass);
+
+            for (Object obj : batch) {
+                OrchestratorFlow flow = (OrchestratorFlow) obj;
+                Instant waitingSince = flow.getWaitingSince();
+                if (waitingSince == null) {
+                    releaseClaim(flow.getId(), entityClass);
+                    continue;
+                }
+
                 long waitedHours = java.time.Duration.between(waitingSince, Instant.now()).toHours();
-                flow.setStatus(FlowStatus.FAILED);
-                flow.setErrorMessage("Step " + stepName + " expired after " + waitedHours +
-                        "h (limit: " + expiresAfter.toHours() + "h)");
-                flow.setUpdatedAt(Instant.now());
-                flowRepository.save(flow);
+                mongoTemplate.updateFirst(
+                        Query.query(Criteria.where("_id").is(flow.getId())),
+                        new Update()
+                                .set("status", FlowStatus.FAILED.name())
+                                .set("errorMessage", "Step " + stepName + " expired after " + waitedHours +
+                                        "h (limit: " + expiresAfter.toHours() + "h)")
+                                .set("updatedAt", Instant.now())
+                                .set("claimedBy", null)
+                                .set("claimedAt", null),
+                        entityClass);
                 metrics.flowFailed(flowType);
                 log.info("[Recovery] Expired flow {} at step {} (waited {}h, limit {}h)",
                         flow.getId(), stepName, waitedHours, expiresAfter.toHours());
             }
         }
+    }
+
+    /** Release a claim without modifying any other fields. */
+    private void releaseClaim(String flowId, Class<?> entityClass) {
+        mongoTemplate.updateFirst(
+                Query.query(Criteria.where("_id").is(flowId)),
+                new Update().set("claimedBy", null).set("claimedAt", null),
+                entityClass);
     }
 }

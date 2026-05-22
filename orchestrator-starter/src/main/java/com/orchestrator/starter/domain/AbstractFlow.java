@@ -71,5 +71,11 @@ public abstract class AbstractFlow implements OrchestratorFlow {
     /** When the current step first entered WAITING_RETRY. Set by library, reset on advancement. */
     private Instant waitingSince;
 
+    /** Pod ID that claimed this flow for recovery processing. Null = unclaimed. */
+    private String claimedBy;
+
+    /** When this flow was claimed. Used for orphan TTL cleanup. */
+    private Instant claimedAt;
+
     private Instant createdAt = Instant.now();
 }

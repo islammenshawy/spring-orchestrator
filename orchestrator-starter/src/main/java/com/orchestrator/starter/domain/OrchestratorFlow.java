@@ -88,4 +88,12 @@ public interface OrchestratorFlow {
      */
     default java.util.Set<String> getCompletedSteps() { return java.util.Set.of(); }
     default void setCompletedSteps(java.util.Set<String> steps) {}
+
+    /** Pod ID that claimed this flow for recovery. Null = unclaimed. */
+    default String getClaimedBy() { return null; }
+    default void setClaimedBy(String claimedBy) {}
+
+    /** When this flow was claimed for recovery. Used for orphan TTL. */
+    default Instant getClaimedAt() { return null; }
+    default void setClaimedAt(Instant claimedAt) {}
 }

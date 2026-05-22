@@ -87,6 +87,10 @@ public class OrchestratorProperties {
         private int offsetFallbackHours = 24;
         /** Max recovery attempts before marking a stuck flow as FAILED. Default 10. */
         private int maxRecoveryAttempts = 10;
+        /** Number of flows to claim per batch in recovery/expiry scans. Default 100. */
+        private int batchSize = 100;
+        /** Minutes before an orphaned claim is released. Default 5. */
+        private int claimTtlMinutes = 5;
     }
 
     public enum OffsetStore {

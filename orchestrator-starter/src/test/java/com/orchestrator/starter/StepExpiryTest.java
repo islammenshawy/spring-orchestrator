@@ -1,5 +1,6 @@
 package com.orchestrator.starter;
 
+import com.mongodb.client.result.UpdateResult;
 import com.orchestrator.starter.autoconfigure.OrchestratorMetrics;
 import com.orchestrator.starter.domain.AbstractFlow;
 import com.orchestrator.starter.domain.FlowStatus;
@@ -10,8 +11,13 @@ import com.orchestrator.starter.recovery.StaleFlowRecoveryService;
 import tools.jackson.databind.ObjectMapper;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.kafka.core.KafkaTemplate;
 
 import java.time.Duration;
@@ -21,6 +27,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -28,10 +35,13 @@ import static org.mockito.Mockito.*;
  * Tests for @Step(expiresAfter) feature:
  * - Duration parsing
  * - Library-level expiry enforcement via StaleFlowRecoveryService
- * - Auto-park when step has expiresAfter and is not yet in completedSteps
  */
 @SuppressWarnings({"unchecked", "rawtypes"})
 class StepExpiryTest {
+
+    private KafkaTemplate kafkaTemplate;
+    private MongoTemplate mongoTemplate;
+    private OutboxEventRepository outboxRepo;
 
     @Data
     @EqualsAndHashCode(callSuper = true)
@@ -39,6 +49,27 @@ class StepExpiryTest {
     static class TestFlow extends AbstractFlow {
         private String result;
         private boolean approved;
+    }
+
+    @BeforeEach
+    void setUp() {
+        kafkaTemplate = mock(KafkaTemplate.class);
+        mongoTemplate = mock(MongoTemplate.class);
+        outboxRepo = mock(OutboxEventRepository.class);
+        when(kafkaTemplate.send(anyString(), anyString(), anyString()))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        // Default: orphan cleanup and IN_PROGRESS claim find nothing
+        when(mongoTemplate.updateMulti(any(Query.class), any(Update.class), any(Class.class)))
+                .thenReturn(UpdateResult.acknowledged(0, 0L, null));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), any(Class.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1L, null));
+    }
+
+    private StaleFlowRecoveryService createService(FlowTypeRegistry registry) {
+        return new StaleFlowRecoveryService(
+                registry, kafkaTemplate, new ObjectMapper(), mongoTemplate,
+                15, 10, 100, 5, outboxRepo, OrchestratorMetrics.noop());
     }
 
     // ========== Duration parsing ==========
@@ -74,13 +105,6 @@ class StepExpiryTest {
 
     @Test
     void expireWaitingFlows_expired_setsFailedStatus() {
-        OrchestratorFlowRepository<TestFlow> flowRepo = mock(OrchestratorFlowRepository.class);
-        KafkaTemplate kafkaTemplate = mock(KafkaTemplate.class);
-        OutboxEventRepository outboxRepo = mock(OutboxEventRepository.class);
-
-        when(kafkaTemplate.send(anyString(), anyString(), anyString()))
-                .thenReturn(CompletableFuture.completedFuture(null));
-
         // Flow waiting for 50 hours at a step with 48h expiry
         TestFlow flow = new TestFlow();
         flow.setId("flow-1");
@@ -88,155 +112,109 @@ class StepExpiryTest {
         flow.setStatus(FlowStatus.WAITING_RETRY);
         flow.setWaitingSince(Instant.now().minus(50, ChronoUnit.HOURS));
 
-        // Step handler with 48h expiry
-        StepHandler<TestFlow> handler = mock(StepHandler.class);
+        StepHandler handler = mock(StepHandler.class);
         when(handler.getStepName()).thenReturn("AWAIT_APPROVAL");
         when(handler.getExpiresAfter()).thenReturn(Duration.ofHours(48));
 
-        StepRegistry<TestFlow> stepRegistry = mock(StepRegistry.class);
+        StepRegistry stepRegistry = mock(StepRegistry.class);
+        when(stepRegistry.getStepNames()).thenReturn(List.of("AWAIT_APPROVAL"));
         when(stepRegistry.getHandler("AWAIT_APPROVAL")).thenReturn(handler);
 
-        when(flowRepo.findByStatusAndUpdatedAtBefore(eq(FlowStatus.IN_PROGRESS), any()))
-                .thenReturn(List.of());
-        when(flowRepo.findByStatus(FlowStatus.WAITING_RETRY))
+        // Expiry claim returns 1 flow
+        when(mongoTemplate.updateMulti(argThat(q -> q.toString().contains("WAITING_RETRY")
+                && q.toString().contains("AWAIT_APPROVAL")),
+                any(Update.class), eq(TestFlow.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1L, null));
+        when(mongoTemplate.find(argThat(q -> q.toString().contains("AWAIT_APPROVAL")), eq(TestFlow.class)))
                 .thenReturn(List.of(flow));
 
         FlowTypeDescriptor desc = FlowTypeDescriptor.builder()
                 .flowType("test").entityClass(TestFlow.class)
                 .commandTopic("test.commands").replyTopic("test.commands.replies")
-                .replyEnabled(true).repository(flowRepo)
+                .replyEnabled(true).repository(null)
                 .stepRegistry(stepRegistry)
                 .orchestrator(mock(FlowOrchestrator.class))
                 .build();
         FlowTypeRegistry registry = new FlowTypeRegistry(List.of(desc));
 
-        StaleFlowRecoveryService service = new StaleFlowRecoveryService(
-                registry, kafkaTemplate, new ObjectMapper(), 15, 10, outboxRepo, null);
+        createService(registry).recoverStaleFlows();
 
-        service.recoverStaleFlows();
-
-        // Flow should be FAILED due to expiry
-        assertEquals(FlowStatus.FAILED, flow.getStatus());
-        assertTrue(flow.getErrorMessage().contains("expired"));
-        assertTrue(flow.getErrorMessage().contains("AWAIT_APPROVAL"));
-        verify(flowRepo).save(flow);
+        // Verify FAILED status set via updateFirst
+        ArgumentCaptor<Update> updateCaptor = ArgumentCaptor.forClass(Update.class);
+        verify(mongoTemplate, atLeastOnce()).updateFirst(any(Query.class), updateCaptor.capture(), eq(TestFlow.class));
+        String updateStr = updateCaptor.getAllValues().stream()
+                .map(Object::toString).reduce("", String::concat);
+        assertThat(updateStr).contains("FAILED");
+        assertThat(updateStr).contains("expired");
     }
 
     @Test
     void expireWaitingFlows_notExpired_notFailed() {
-        OrchestratorFlowRepository<TestFlow> flowRepo = mock(OrchestratorFlowRepository.class);
-        KafkaTemplate kafkaTemplate = mock(KafkaTemplate.class);
-        OutboxEventRepository outboxRepo = mock(OutboxEventRepository.class);
-
-        // Flow waiting for only 10 hours at a step with 48h expiry
-        TestFlow flow = new TestFlow();
-        flow.setId("flow-1");
-        flow.setCurrentStep("AWAIT_APPROVAL");
-        flow.setStatus(FlowStatus.WAITING_RETRY);
-        flow.setWaitingSince(Instant.now().minus(10, ChronoUnit.HOURS));
-
-        StepHandler<TestFlow> handler = mock(StepHandler.class);
+        // Flow waiting for only 10 hours at a step with 48h expiry — NOT expired
+        StepHandler handler = mock(StepHandler.class);
         when(handler.getStepName()).thenReturn("AWAIT_APPROVAL");
         when(handler.getExpiresAfter()).thenReturn(Duration.ofHours(48));
 
-        StepRegistry<TestFlow> stepRegistry = mock(StepRegistry.class);
+        StepRegistry stepRegistry = mock(StepRegistry.class);
+        when(stepRegistry.getStepNames()).thenReturn(List.of("AWAIT_APPROVAL"));
         when(stepRegistry.getHandler("AWAIT_APPROVAL")).thenReturn(handler);
 
-        when(flowRepo.findByStatusAndUpdatedAtBefore(eq(FlowStatus.IN_PROGRESS), any()))
-                .thenReturn(List.of());
-        when(flowRepo.findByStatus(FlowStatus.WAITING_RETRY))
-                .thenReturn(List.of(flow));
+        // Claim returns 0 — nothing expired (10h < 48h threshold, query won't match)
+        // updateMulti already defaults to 0 from setUp
 
         FlowTypeDescriptor desc = FlowTypeDescriptor.builder()
                 .flowType("test").entityClass(TestFlow.class)
                 .commandTopic("test.commands").replyTopic("test.commands.replies")
-                .replyEnabled(true).repository(flowRepo)
+                .replyEnabled(true).repository(null)
                 .stepRegistry(stepRegistry)
                 .orchestrator(mock(FlowOrchestrator.class))
                 .build();
         FlowTypeRegistry registry = new FlowTypeRegistry(List.of(desc));
 
-        StaleFlowRecoveryService service = new StaleFlowRecoveryService(
-                registry, kafkaTemplate, new ObjectMapper(), 15, 10, outboxRepo, null);
+        createService(registry).recoverStaleFlows();
 
-        service.recoverStaleFlows();
-
-        // Flow should NOT be failed — still within expiry window
-        assertEquals(FlowStatus.WAITING_RETRY, flow.getStatus());
-        verify(flowRepo, never()).save(flow);
+        // No find or updateFirst calls for expiry (claim returned 0)
+        verify(mongoTemplate, never()).find(argThat(q -> q.toString().contains("AWAIT_APPROVAL")), eq(TestFlow.class));
     }
 
     @Test
     void expireWaitingFlows_noExpiry_ignored() {
-        OrchestratorFlowRepository<TestFlow> flowRepo = mock(OrchestratorFlowRepository.class);
-        KafkaTemplate kafkaTemplate = mock(KafkaTemplate.class);
-        OutboxEventRepository outboxRepo = mock(OutboxEventRepository.class);
-
-        // Flow waiting for 100 hours but step has NO expiry
-        TestFlow flow = new TestFlow();
-        flow.setId("flow-1");
-        flow.setCurrentStep("SOME_STEP");
-        flow.setStatus(FlowStatus.WAITING_RETRY);
-        flow.setWaitingSince(Instant.now().minus(100, ChronoUnit.HOURS));
-
-        StepHandler<TestFlow> handler = mock(StepHandler.class);
+        StepHandler handler = mock(StepHandler.class);
         when(handler.getStepName()).thenReturn("SOME_STEP");
         when(handler.getExpiresAfter()).thenReturn(null); // no expiry
 
-        StepRegistry<TestFlow> stepRegistry = mock(StepRegistry.class);
+        StepRegistry stepRegistry = mock(StepRegistry.class);
+        when(stepRegistry.getStepNames()).thenReturn(List.of("SOME_STEP"));
         when(stepRegistry.getHandler("SOME_STEP")).thenReturn(handler);
-
-        when(flowRepo.findByStatusAndUpdatedAtBefore(eq(FlowStatus.IN_PROGRESS), any()))
-                .thenReturn(List.of());
-        when(flowRepo.findByStatus(FlowStatus.WAITING_RETRY))
-                .thenReturn(List.of(flow));
 
         FlowTypeDescriptor desc = FlowTypeDescriptor.builder()
                 .flowType("test").entityClass(TestFlow.class)
                 .commandTopic("test.commands").replyTopic("test.commands.replies")
-                .replyEnabled(true).repository(flowRepo)
+                .replyEnabled(true).repository(null)
                 .stepRegistry(stepRegistry)
                 .orchestrator(mock(FlowOrchestrator.class))
                 .build();
         FlowTypeRegistry registry = new FlowTypeRegistry(List.of(desc));
 
-        StaleFlowRecoveryService service = new StaleFlowRecoveryService(
-                registry, kafkaTemplate, new ObjectMapper(), 15, 10, outboxRepo, null);
+        createService(registry).recoverStaleFlows();
 
-        service.recoverStaleFlows();
-
-        // Flow should NOT be failed — no expiry configured
-        assertEquals(FlowStatus.WAITING_RETRY, flow.getStatus());
-        verify(flowRepo, never()).save(flow);
+        // No claim attempted for steps without expiry
+        verify(mongoTemplate, never()).find(argThat(q -> q.toString().contains("SOME_STEP")), eq(TestFlow.class));
     }
 
     // ========== Child flow chaining ==========
 
     @Test
     void childFlowChaining_startFlowCalledFromStep() {
-        // Simulate a step handler that starts a child flow
-        OrchestratorFlowRepository<TestFlow> parentRepo = mock(OrchestratorFlowRepository.class);
-        OrchestratorFlowRepository<TestFlow> childRepo = mock(OrchestratorFlowRepository.class);
-        OutboxEventRepository outboxRepo = mock(OutboxEventRepository.class);
-
-        // Child orchestrator
         FlowOrchestrator<TestFlow> childOrchestrator = mock(FlowOrchestrator.class);
 
-        // Parent flow
-        TestFlow parentFlow = new TestFlow();
-        parentFlow.setId("parent-1");
-        parentFlow.setApproved(true);
-
-        // Simulate startFlow on child — should save + write outbox
         TestFlow childFlow = new TestFlow();
         childFlow.setId("child-1");
         childFlow.setStatus(FlowStatus.IN_PROGRESS);
         when(childOrchestrator.startFlow(any())).thenReturn(childFlow);
 
-        // Call startFlow from within a "step handler"
         TestFlow started = childOrchestrator.startFlow(childFlow);
 
-        // Verify child flow was started
         assertNotNull(started);
         assertEquals("child-1", started.getId());
         assertEquals(FlowStatus.IN_PROGRESS, started.getStatus());

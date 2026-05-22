@@ -94,6 +94,17 @@ public class IndexInitializer {
             // createdAt for sorting
             ensureIndex(desc, "createdAt_idx",
                     new Index().on("createdAt", Sort.Direction.DESC));
+
+            // Batch claiming: recovery + waiting scheduler claim queries
+            ensureIndex(desc, "status_updated_claimed_idx",
+                    new Index().on("status", Sort.Direction.ASC)
+                            .on("updatedAt", Sort.Direction.ASC)
+                            .on("claimedBy", Sort.Direction.ASC));
+
+            // Orphan cleanup: find claimed flows by claimedAt
+            ensureIndex(desc, "claimedBy_claimedAt_idx",
+                    new Index().on("claimedBy", Sort.Direction.ASC)
+                            .on("claimedAt", Sort.Direction.ASC));
         }
 
         // ===== Consumer offset store =====
