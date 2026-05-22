@@ -270,21 +270,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
-        // Auto-park: if step has expiresAfter and step is not yet in completedSteps,
-        // the step is a gate that did its one-time setup — auto-throw WaitingStepException
-        java.time.Duration stepExpiry = (handler instanceof MethodStepAdapter)
-                ? handler.getExpiresAfter() : null;
-        if (stepExpiry != null && !flow.getCompletedSteps().contains(stepName)) {
-            logStep(flowId, stepName, StepOutcome.WAITING.name(), flow.getRetryCount(),
-                    flowBefore, null, "auto-park: step not yet completed", startedAt);
-            metrics.stepExecution(flowType, stepName, StepOutcome.WAITING.name(),
-                    Duration.between(startedAt, Instant.now()));
-            handleWaitingStep(flow, new WaitingStepException(
-                    "Waiting: step not yet completed after execution"));
-            return;
-        }
-
         // Step succeeded — mark as completed and clear retry/recovery state.
+        // Note: gate steps that need to wait call waitUntil() which throws
+        // WaitingStepException — caught above. If we reach here, the step is done.
         flow.getCompletedSteps().add(stepName);
         flow.setRetryCount(0);
         flow.setBackoffSeconds(0);
