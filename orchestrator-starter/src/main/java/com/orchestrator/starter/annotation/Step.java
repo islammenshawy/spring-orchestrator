@@ -14,7 +14,7 @@ import java.lang.annotation.Target;
  *
  * Usage:
  * <pre>
- * @Step(order = 1, completedWhen = "documentId != null")
+ * @Step(order = 1)
  * @RecoverOn(httpStatus = 409, action = RecoverAction.SKIP)
  * public void createDocument(MyFlow flow) {
  *     var res = vendorClient.createDocument(...);
@@ -38,20 +38,9 @@ public @interface Step {
     int order();
 
     /**
-     * SpEL expression evaluated against the flow object.
-     * If true, the step is already completed — skip execution.
-     * Empty = always execute (e.g., for stateless checks like signature verification).
-     *
-     * Examples:
-     *   "documentId != null"
-     *   "status == 'VERIFIED'"
-     */
-    String completedWhen() default "";
-
-    /**
-     * Gate step expiry. When a step throws WaitingStepException (or auto-parks
-     * because completedWhen is still false after execution), the library tracks
-     * how long it has been waiting. If this duration is exceeded, the flow is
+     * Gate step expiry. When a step throws WaitingStepException (or calls
+     * waitUntil() which throws internally), the library tracks how long
+     * it has been waiting. If this duration is exceeded, the flow is
      * automatically failed by StaleFlowRecoveryService.
      *
      * Format: number + unit. Supported units: h (hours), d (days).

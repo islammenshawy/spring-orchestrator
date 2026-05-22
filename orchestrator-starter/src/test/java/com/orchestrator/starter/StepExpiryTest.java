@@ -28,7 +28,7 @@ import static org.mockito.Mockito.*;
  * Tests for @Step(expiresAfter) feature:
  * - Duration parsing
  * - Library-level expiry enforcement via StaleFlowRecoveryService
- * - Auto-park when completedWhen is false after handler returns
+ * - Auto-park when step has expiresAfter and is not yet in completedSteps
  */
 @SuppressWarnings({"unchecked", "rawtypes"})
 class StepExpiryTest {

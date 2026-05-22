@@ -50,7 +50,6 @@ class StepRegistryTest {
         return new StepHandler<>() {
             public String getStepName() { return name; }
             public int getOrder() { return order; }
-            public boolean isAlreadyCompleted(TestFlow f) { return false; }
             public void execute(TestFlow f) {}
         };
     }

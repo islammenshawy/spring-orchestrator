@@ -39,14 +39,14 @@ class ParallelJoinFlowTest {
 
     @Flow(name = "parallel-test")
     static class ParallelJoinFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1, completedWhen = "result != null")
+        @Step(order = 1)
         public void init(TestFlow flow) { flow.setResult("init"); }
 
-        @Step(order = 2, completedWhen = "result != null")
+        @Step(order = 2)
         @Parallel(group = "processing")
         public void processA(TestFlow flow) {}
 
-        @Step(order = 2, completedWhen = "result != null")
+        @Step(order = 2)
         @Parallel(group = "processing")
         public void processB(TestFlow flow) {}
 
@@ -54,7 +54,7 @@ class ParallelJoinFlowTest {
         @JoinOn(group = "processing")
         public void mergeResults(TestFlow flow) {}
 
-        @Step(order = 4, completedWhen = "result != null")
+        @Step(order = 4)
         public void finalize(TestFlow flow) {}
     }
 
@@ -118,14 +118,14 @@ class ParallelJoinFlowTest {
 
     @Flow(name = "double-parallel")
     static class DoubleParallelFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1, completedWhen = "true")
+        @Step(order = 1)
         public void start(TestFlow flow) {}
 
-        @Step(order = 2, completedWhen = "true")
+        @Step(order = 2)
         @Parallel(group = "group1")
         public void g1a(TestFlow flow) {}
 
-        @Step(order = 2, completedWhen = "true")
+        @Step(order = 2)
         @Parallel(group = "group1")
         public void g1b(TestFlow flow) {}
 
@@ -133,11 +133,11 @@ class ParallelJoinFlowTest {
         @JoinOn(group = "group1")
         public void join1(TestFlow flow) {}
 
-        @Step(order = 4, completedWhen = "true")
+        @Step(order = 4)
         @Parallel(group = "group2")
         public void g2a(TestFlow flow) {}
 
-        @Step(order = 4, completedWhen = "true")
+        @Step(order = 4)
         @Parallel(group = "group2")
         public void g2b(TestFlow flow) {}
 
@@ -145,7 +145,7 @@ class ParallelJoinFlowTest {
         @JoinOn(group = "group2")
         public void join2(TestFlow flow) {}
 
-        @Step(order = 6, completedWhen = "true")
+        @Step(order = 6)
         public void end(TestFlow flow) {}
     }
 
@@ -178,33 +178,11 @@ class ParallelJoinFlowTest {
         ctx.close();
     }
 
-    // ========== Invalid: @Parallel without completedWhen ==========
-
-    @Flow(name = "bad-parallel")
-    static class BadParallelFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1)  // missing completedWhen
-        @Parallel(group = "g")
-        public void badStep(TestFlow flow) {}
-    }
-
-    @Configuration
-    static class BadParallelConfig {
-        @Bean BadParallelFlow flow() { return new BadParallelFlow(); }
-    }
-
-    @Test
-    void parallelWithoutCompletedWhen_failsStartup() {
-        var ctx = new AnnotationConfigApplicationContext(BadParallelConfig.class);
-        assertThrows(IllegalStateException.class,
-                () -> FlowDefinitionScanner.scanByFlowType(ctx));
-        ctx.close();
-    }
-
     // ========== Invalid: @JoinOn references non-existent group ==========
 
     @Flow(name = "bad-join")
     static class BadJoinFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1, completedWhen = "true")
+        @Step(order = 1)
         public void step1(TestFlow flow) {}
 
         @Step(order = 2)

@@ -11,7 +11,7 @@ import java.lang.annotation.Target;
  *
  * Usage:
  * <pre>
- * @Step(order = 1, completedWhen = "documentId != null")
+ * @Step(order = 1)
  * public void createDocument(MyFlow flow) {
  *     flow.setDocumentId(vendor.create(...));
  * }

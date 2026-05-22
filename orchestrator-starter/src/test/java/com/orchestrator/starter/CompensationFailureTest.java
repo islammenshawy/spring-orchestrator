@@ -75,7 +75,7 @@ class CompensationFailureTest {
         // Step B handler throws NonRetryableStepException → triggers compensation
         StepHandler<TestFlow> handlerB = mock(StepHandler.class);
         when(handlerB.getStepName()).thenReturn("STEP_B");
-        when(handlerB.isAlreadyCompleted(flow)).thenReturn(false);
+
         doThrow(new NonRetryableStepException("bad request")).when(handlerB).execute(flow);
 
         // Step A compensation handler throws
@@ -107,7 +107,7 @@ class CompensationFailureTest {
 
         StepHandler<TestFlow> handlerB = mock(StepHandler.class);
         when(handlerB.getStepName()).thenReturn("STEP_B");
-        when(handlerB.isAlreadyCompleted(flow)).thenReturn(false);
+
         doThrow(new NonRetryableStepException("bad request")).when(handlerB).execute(flow);
 
         // Step A compensation succeeds
@@ -137,7 +137,7 @@ class CompensationFailureTest {
 
         StepHandler<TestFlow> handlerC = mock(StepHandler.class);
         when(handlerC.getStepName()).thenReturn("STEP_C");
-        when(handlerC.isAlreadyCompleted(flow)).thenReturn(false);
+
         doThrow(new NonRetryableStepException("step C failed")).when(handlerC).execute(flow);
 
         // Step B compensation succeeds

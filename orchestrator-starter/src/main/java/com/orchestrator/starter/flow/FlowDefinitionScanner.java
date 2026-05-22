@@ -9,9 +9,6 @@ import com.orchestrator.starter.domain.OrchestratorFlow;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationContext;
 
-import org.springframework.expression.spel.standard.SpelExpressionParser;
-import org.springframework.expression.spel.SpelParseException;
-
 import java.lang.reflect.Method;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -114,13 +111,6 @@ public class FlowDefinitionScanner {
                 Parallel parallel = method.getAnnotation(Parallel.class);
                 if (parallel != null) {
                     parallelGroups.add(parallel.group());
-                    // Parallel steps must have completedWhen (needed for join check)
-                    Step step = method.getAnnotation(Step.class);
-                    if (step != null && step.completedWhen().isEmpty()) {
-                        throw new IllegalStateException(
-                                "@Parallel step " + clazz.getSimpleName() + "." + method.getName() +
-                                        " must have completedWhen (needed for join verification)");
-                    }
                 }
                 JoinOn joinOn = method.getAnnotation(JoinOn.class);
                 if (joinOn != null) joinGroups.add(joinOn.group());
@@ -205,18 +195,6 @@ public class FlowDefinitionScanner {
                     throw new IllegalStateException(
                             "@Flow " + clazz.getSimpleName() + ": duplicate step name '" + resolvedName + "'");
                 }
-                // Validate SpEL completedWhen at startup (catch parse errors early)
-                if (!stepAnnotation.completedWhen().isEmpty()) {
-                    try {
-                        new SpelExpressionParser().parseExpression(stepAnnotation.completedWhen());
-                    } catch (SpelParseException e) {
-                        throw new IllegalStateException(
-                                "Invalid SpEL in @Step(completedWhen=\"" + stepAnnotation.completedWhen() +
-                                        "\") on " + clazz.getSimpleName() + "." + method.getName() +
-                                        ": " + e.getMessage());
-                    }
-                }
-
                 // Validate expiresAfter format at startup
                 if (!stepAnnotation.expiresAfter().isEmpty()) {
                     try {
@@ -254,10 +232,6 @@ public class FlowDefinitionScanner {
                 Parallel parallel = method.getAnnotation(Parallel.class);
                 if (parallel != null) {
                     parallelGroups.add(parallel.group());
-                    Step step = method.getAnnotation(Step.class);
-                    if (step != null && step.completedWhen().isEmpty()) {
-                        throw new IllegalStateException("@Parallel step must have completedWhen");
-                    }
                 }
                 JoinOn joinOn = method.getAnnotation(JoinOn.class);
                 if (joinOn != null) joinGroups.add(joinOn.group());

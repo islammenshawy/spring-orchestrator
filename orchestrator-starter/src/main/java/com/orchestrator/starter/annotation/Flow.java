@@ -20,14 +20,14 @@ import java.lang.annotation.Target;
  * @FailOn(httpStatus = {400, 403})
  * public class EnigioDocumentFlow extends FlowDefinition&lt;EnigioFlow&gt; {
  *
- *     @Step(order = 1, completedWhen = "documentId != null")
+ *     @Step(order = 1)
  *     @RecoverOn(httpStatus = 409, action = RecoverAction.SKIP)
  *     public void createDocument(EnigioFlow flow) { ... }
  *
  *     @Step(order = 2)
  *     public void saveAuditRecord(EnigioFlow flow) { ... }
  *
- *     @Step(order = 3, completedWhen = "signatureId != null")
+ *     @Step(order = 3)
  *     public void requestSignature(EnigioFlow flow) { ... }
  * }
  * </pre>

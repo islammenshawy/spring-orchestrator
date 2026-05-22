@@ -127,7 +127,7 @@ class EnigioInstrumentFlowTest {
 
             assertThatThrownBy(() -> flow.awaitPreparationApproval(e))
                     .isInstanceOf(WaitingStepException.class)
-                    .hasMessageContaining("approve");
+                    .hasMessageContaining("Waiting for condition");
 
             assertThat(e.isPreparationNotified()).isTrue();
             verify(notificationPublisher).notifyPhaseComplete(eq(e),
@@ -343,7 +343,7 @@ class EnigioInstrumentFlowTest {
 
             assertThatThrownBy(() -> flow.awaitDeliveryApproval(e))
                     .isInstanceOf(WaitingStepException.class)
-                    .hasMessageContaining("approve");
+                    .hasMessageContaining("Waiting for condition");
 
             assertThat(e.isSigningNotified()).isTrue();
             verify(notificationPublisher).notifyPhaseComplete(eq(e),

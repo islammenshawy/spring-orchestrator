@@ -73,7 +73,7 @@ class FlowOrchestratorTest {
 
         StepHandler<TestFlow> handler = mock(StepHandler.class);
         when(handler.getStepName()).thenReturn("STEP_A");
-        when(handler.isAlreadyCompleted(flow)).thenReturn(false);
+
 
         when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
         when(stepRegistry.getHandler("STEP_A")).thenReturn(handler);
@@ -112,7 +112,7 @@ class FlowOrchestratorTest {
 
         StepHandler<TestFlow> handler = mock(StepHandler.class);
         when(handler.getStepName()).thenReturn("STEP_A");
-        when(handler.isAlreadyCompleted(flow)).thenReturn(true); // completedWhen = true
+        flow.getCompletedSteps().add("STEP_A"); // simulate already completed
 
         when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
         when(stepRegistry.getHandler("STEP_A")).thenReturn(handler);
@@ -134,7 +134,7 @@ class FlowOrchestratorTest {
 
         StepHandler<TestFlow> handler = mock(StepHandler.class);
         when(handler.getStepName()).thenReturn("STEP_A");
-        when(handler.isAlreadyCompleted(flow)).thenReturn(false);
+
         doThrow(new RetryableStepException("timeout")).when(handler).execute(flow);
 
         when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
@@ -160,7 +160,7 @@ class FlowOrchestratorTest {
 
         StepHandler<TestFlow> handler = mock(StepHandler.class);
         when(handler.getStepName()).thenReturn("STEP_A");
-        when(handler.isAlreadyCompleted(flow)).thenReturn(false);
+
         doThrow(new NonRetryableStepException("bad request")).when(handler).execute(flow);
 
         when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
@@ -194,7 +194,7 @@ class FlowOrchestratorTest {
 
         StepHandler<TestFlow> handler = mock(StepHandler.class);
         when(handler.getStepName()).thenReturn("STEP_A");
-        when(handler.isAlreadyCompleted(flow)).thenReturn(false);
+
 
         when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
         when(stepRegistry.getHandler("STEP_A")).thenReturn(handler);
@@ -255,7 +255,7 @@ class FlowOrchestratorTest {
 
         StepHandler<TestFlow> handler = mock(StepHandler.class);
         when(handler.getStepName()).thenReturn("STEP_A");
-        when(handler.isAlreadyCompleted(flow)).thenReturn(false);
+
 
         when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
         when(stepRegistry.getHandler("STEP_A")).thenReturn(handler);

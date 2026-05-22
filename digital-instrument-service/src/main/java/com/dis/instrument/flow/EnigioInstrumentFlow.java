@@ -12,7 +12,6 @@ import com.dis.instrument.model.Signer;
 import com.orchestrator.starter.annotation.*;
 import com.orchestrator.starter.exception.NonRetryableStepException;
 import com.orchestrator.starter.exception.RetryableStepException;
-import com.orchestrator.starter.exception.WaitingStepException;
 import com.orchestrator.starter.flow.FlowDefinition;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -64,14 +63,14 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
 
     // ===== Group 1: Document Preparation =====
 
-    @Step(order = 1, completedWhen = "pdfGenerated == true")
+    @Step(order = 1)
     public void createDraft(EnigioInstrumentEntity flow) {
         log.info("[{}] Creating draft for reference={}", flow.getId(), flow.getReference());
         flow.setPdfGenerated(true);
         checkpoint(flow);
     }
 
-    @Step(order = 2, completedWhen = "traceOriginalId != null")
+    @Step(order = 2)
     @RecoverOn(httpStatus = 409, message = "already", action = RecoverAction.SKIP)
     public void registerDocument(EnigioInstrumentEntity flow) {
         log.info("[{}] Registering document on Enigio (ref={})", flow.getId(), flow.getReference());
@@ -102,7 +101,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         checkpoint(flow);
     }
 
-    @Step(order = 3, completedWhen = "attachmentVersionKey != null")
+    @Step(order = 3)
     @RecoverOn(httpStatus = 409, action = RecoverAction.SKIP)
     public void addAttachment(EnigioInstrumentEntity flow) {
         List<Attachment> attachments = flow.getAttachments();
@@ -129,7 +128,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
 
     // ===== Gate 1: Notify downstream, await approval for signing =====
 
-    @Step(order = 4, completedWhen = "signingApproved == true")
+    @Step(order = 4, expiresAfter = "72h")
     public void awaitPreparationApproval(EnigioInstrumentEntity flow) {
         if (!flow.isPreparationNotified()) {
             log.info("[{}] Document preparation complete. Publishing notification.", flow.getId());
@@ -151,18 +150,14 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             }
         }
 
-        if (!flow.isSigningApproved()) {
-            throw new WaitingStepException(
-                    "Awaiting downstream approval for signing phase. " +
-                    "Call POST /flows/enigio-instrument/" + flow.getId() + "/approve");
-        }
+        waitUntil(() -> flow.isSigningApproved());
 
         log.info("[{}] Signing phase approved by downstream", flow.getId());
     }
 
     // ===== Group 2: Signing Ceremony =====
 
-    @Step(order = 5, completedWhen = "signersAdded == true")
+    @Step(order = 5)
     public void addSigners(EnigioInstrumentEntity flow) {
         log.info("[{}] Adding {} signer(s) to document {}", flow.getId(),
                 flow.getSigners().size(), flow.getTraceOriginalId());
@@ -173,7 +168,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         checkpoint(flow);
     }
 
-    @Step(order = 6, completedWhen = "signingEmailsSent == true")
+    @Step(order = 6)
     public void sendForSigning(EnigioInstrumentEntity flow) {
         log.info("[{}] Sending signing emails for document {}", flow.getId(),
                 flow.getTraceOriginalId());
@@ -216,7 +211,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
      * Each PARTIALLY_SIGNED webhook increments signaturesReceived and notifies downstream.
      * Flow advances only when signingStatus == SigningStatus.SIGNED.name().
      */
-    @Step(order = 7, completedWhen = "signingStatus == 'SIGNED'")
+    @Step(order = 7, expiresAfter = "48h")
     public void awaitSignatures(EnigioInstrumentEntity flow) {
         // 1. Check if webhook already set the status (fast path)
         if (SigningStatus.SIGNED.name().equals(flow.getSigningStatus())) {
@@ -280,16 +275,14 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             throw new NonRetryableStepException("Signature rejected by signer");
         }
 
-        // Still pending — poll again with short delay (not exponential backoff)
+        // Still pending — park and wait for webhook or next poll
         flow.setSigningStatus(status);
-        throw new WaitingStepException(
-                "Awaiting signatures: " + flow.getSignaturesReceived() + "/" +
-                flow.getSignaturesRequired() + " signed. Webhook or next poll will advance.");
+        waitUntil(() -> SigningStatus.SIGNED.name().equals(flow.getSigningStatus()));
     }
 
     // ===== Gate 2: Notify downstream, await approval for delivery =====
 
-    @Step(order = 8, completedWhen = "deliveryApproved == true")
+    @Step(order = 8, expiresAfter = "72h")
     public void awaitDeliveryApproval(EnigioInstrumentEntity flow) {
         if (!flow.isSigningNotified()) {
             log.info("[{}] Signing ceremony complete. Publishing notification.", flow.getId());
@@ -311,18 +304,14 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             }
         }
 
-        if (!flow.isDeliveryApproved()) {
-            throw new WaitingStepException(
-                    "Awaiting downstream approval for delivery phase. " +
-                    "Call POST /flows/enigio-instrument/" + flow.getId() + "/approve");
-        }
+        waitUntil(() -> flow.isDeliveryApproved());
 
         log.info("[{}] Delivery phase approved by downstream", flow.getId());
     }
 
     // ===== Group 3: Packaging & Delivery =====
 
-    @Step(order = 9, completedWhen = "validationResult == 'VALID'")
+    @Step(order = 9)
     public void validateDocument(EnigioInstrumentEntity flow) {
         log.info("[{}] Validating document {} against ledger", flow.getId(),
                 flow.getTraceOriginalId());
@@ -336,7 +325,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         }
     }
 
-    @Step(order = 10, completedWhen = "envelopeTraceId != null")
+    @Step(order = 10)
     @RecoverOn(httpStatus = 409, action = RecoverAction.SKIP)
     public void createEnvelope(EnigioInstrumentEntity flow) {
         log.info("[{}] Creating and sealing envelope for document {}", flow.getId(),
@@ -390,7 +379,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         checkpoint(flow);
     }
 
-    @Step(order = 11, completedWhen = "transferAccepted == true")
+    @Step(order = 11, expiresAfter = "72h")
     public void transferDocument(EnigioInstrumentEntity flow) {
         // Phase 1: Initiate transfer (if not already done)
         if (flow.getTransferId() == null) {
@@ -441,7 +430,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         }
 
         // Still waiting — park in DB, TRANSFER/TRANSFER_REJECTED webhook will re-activate
-        throw new WaitingStepException("Awaiting recipient acceptance for transfer " + flow.getTransferId());
+        waitUntil(() -> flow.isTransferAccepted());
     }
 
     // ===== Cancellation Handlers =====

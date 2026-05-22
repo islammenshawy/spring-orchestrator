@@ -53,7 +53,6 @@ class StepErrorHandlerTest {
     static class AnnotatedStep implements StepHandler<TestFlow> {
         public String getStepName() { return "TEST"; }
         public int getOrder() { return 1; }
-        public boolean isAlreadyCompleted(TestFlow f) { return false; }
         public void execute(TestFlow f) {}
     }
 

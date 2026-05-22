@@ -79,4 +79,13 @@ public interface OrchestratorFlow {
     /** When this step first entered WAITING_RETRY. Set by library, reset on advancement. */
     default Instant getWaitingSince() { return null; }
     default void setWaitingSince(Instant waitingSince) {}
+
+    /**
+     * Tracks which steps have completed successfully.
+     * Managed by the library — users don't interact with this.
+     * Used for idempotency (skip already-completed steps on redelivery)
+     * and parallel join-point checks.
+     */
+    default java.util.Set<String> getCompletedSteps() { return java.util.Set.of(); }
+    default void setCompletedSteps(java.util.Set<String> steps) {}
 }

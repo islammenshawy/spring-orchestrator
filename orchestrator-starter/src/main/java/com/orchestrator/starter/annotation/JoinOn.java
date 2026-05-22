@@ -9,7 +9,7 @@ import java.lang.annotation.Target;
  * Marks a @Step method as a join point — it only executes after all
  * @Parallel steps in the named group have completed.
  *
- * The orchestrator checks each parallel step's completedWhen condition.
+ * The orchestrator checks each parallel step against the flow's completedSteps set.
  * If any parallel step hasn't completed, the join step is skipped and
  * the message is not acknowledged (it will be redelivered).
  *

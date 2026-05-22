@@ -20,7 +20,7 @@ import java.util.Map;
  *
  * Class-level annotations set defaults for all steps.
  * Method-level annotations override per step.
- * completedWhen SpEL prevents duplicate API calls on redelivery.
+ * The library's completedSteps set prevents duplicate API calls on redelivery.
  *
  * The library handles everything else: Kafka retry topics with jitter,
  * outbox for atomic persistence, idempotency, DLT, recovery.
@@ -45,7 +45,7 @@ public class EnigioDocumentFlow extends FlowDefinition<EnigioFlow> {
                 .build();
     }
 
-    @Step(order = 1, completedWhen = "enigioDocumentId != null")
+    @Step(order = 1)
     @RecoverOn(httpStatus = 409, message = "already", action = RecoverAction.SKIP)
     public void createDocument(EnigioFlow flow) {
         log.info("Creating document for flow {}", flow.getId());
@@ -56,8 +56,7 @@ public class EnigioDocumentFlow extends FlowDefinition<EnigioFlow> {
                 .retrieve().bodyToMono(Map.class).block();
 
         // 2. Save result immediately — protects against crash between API
-        //    call and library's flow save. On redelivery, completedWhen sees
-        //    enigioDocumentId is set, skips the API call entirely.
+        //    call and library's flow save.
         flow.setEnigioDocumentId((String) res.get("documentId"));
         checkpoint(flow);
 
@@ -71,7 +70,7 @@ public class EnigioDocumentFlow extends FlowDefinition<EnigioFlow> {
         // In production: vendorClient.delete().uri("/documents/{id}", flow.getEnigioDocumentId())...
     }
 
-    @Step(order = 2, completedWhen = "attachmentId != null")
+    @Step(order = 2)
     @RecoverOn(httpStatus = 409, action = RecoverAction.SKIP)
     public void uploadAttachment(EnigioFlow flow) {
         log.info("Uploading attachment for flow {}", flow.getId());
@@ -81,7 +80,7 @@ public class EnigioDocumentFlow extends FlowDefinition<EnigioFlow> {
         flow.setAttachmentId((String) res.get("attachmentId"));
     }
 
-    @Step(order = 3, completedWhen = "signatureRequestId != null")
+    @Step(order = 3)
     @RecoverOn(httpStatus = 409, message = "already signed", action = RecoverAction.SKIP)
     public void requestSignature(EnigioFlow flow) {
         log.info("Requesting signature for flow {}", flow.getId());
@@ -103,7 +102,7 @@ public class EnigioDocumentFlow extends FlowDefinition<EnigioFlow> {
         }
     }
 
-    @Step(order = 5, completedWhen = "finalDocumentUrl != null")
+    @Step(order = 5)
     @RecoverOn(httpStatus = 409, message = "already finalized", action = RecoverAction.SKIP)
     public void finalizeDocument(EnigioFlow flow) {
         log.info("Finalizing document for flow {}", flow.getId());

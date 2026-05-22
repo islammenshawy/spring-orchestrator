@@ -2,7 +2,10 @@ package com.orchestrator.starter.flow;
 
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
+import com.orchestrator.starter.exception.WaitingStepException;
 import org.springframework.beans.factory.annotation.Autowired;
+
+import java.util.function.BooleanSupplier;
 
 /**
  * Base class for single-class flow definitions.
@@ -12,13 +15,13 @@ import org.springframework.beans.factory.annotation.Autowired;
  * the same step.
  *
  * <pre>
- * @Step(order = 1, completedWhen = "paymentId != null")
+ * @Step(order = 1)
  * public void chargePayment(MyFlow flow) {
  *     // 1. Call vendor API
  *     var result = paymentClient.charge(flow.getAmount());
  *
  *     // 2. Save result immediately — if container crashes after this,
- *     //    redelivery sees paymentId is set, skips the API call
+ *     //    the library's completedSteps set already has this step marked
  *     flow.setPaymentId(result.getId());
  *     checkpoint(flow);
  *
@@ -28,11 +31,10 @@ import org.springframework.beans.factory.annotation.Autowired;
  * </pre>
  *
  * Without checkpoint: crash between API call and library's flow save
- * loses the paymentId. On redelivery, completedWhen is false, API is
- * called again (double charge on non-idempotent APIs).
+ * loses the paymentId. On redelivery, the library skips the step
+ * (completedSteps contains it), but domain fields may be lost.
  *
- * With checkpoint: paymentId is persisted immediately. Redelivery sees
- * completedWhen = true, skips the API call entirely.
+ * With checkpoint: paymentId is persisted immediately.
  *
  * @param <F> the flow entity type
  */
@@ -49,11 +51,29 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
      * before doing additional work in the same step.
      *
      * This ensures that if the container crashes after the API call,
-     * the result is already persisted and completedWhen will return true
-     * on redelivery — preventing duplicate API calls.
+     * the result is already persisted. On redelivery, the library checks
+     * completedSteps — preventing duplicate API calls.
      */
     @SuppressWarnings("unchecked")
     protected void checkpoint(F flow) {
         rawRepository.save(flow);
+    }
+
+    /**
+     * Gate step helper — parks the flow until the condition is true.
+     * Hides the WaitingStepException from users.
+     *
+     * <pre>
+     * waitUntil(() -> flow.isSigningApproved());
+     * </pre>
+     *
+     * If the condition is false, throws WaitingStepException internally,
+     * which parks the flow in WAITING_RETRY. On the next Kafka retry
+     * (or webhook re-activation), the condition is checked again.
+     */
+    protected void waitUntil(BooleanSupplier condition) {
+        if (!condition.getAsBoolean()) {
+            throw new WaitingStepException("Waiting for condition");
+        }
     }
 }

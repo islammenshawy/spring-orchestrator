@@ -60,6 +60,8 @@ public abstract class AbstractFlow implements OrchestratorFlow {
 
     private Set<String> completedParallelSteps = new HashSet<>();
 
+    private Set<String> completedSteps = new HashSet<>();
+
     /** Number of times stale recovery has re-published this flow. Reset on step success. */
     private int recoveryCount = 0;
 

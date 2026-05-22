@@ -11,11 +11,11 @@ import java.lang.annotation.Target;
  * Use @JoinOn to wait for all steps in a group to complete.
  *
  * <pre>
- * @Step(order = 2, completedWhen = "attachmentId != null")
+ * @Step(order = 2)
  * @Parallel(group = "prep")
  * public void uploadAttachment(MyFlow flow) { ... }
  *
- * @Step(order = 2, completedWhen = "signatureRequestId != null")
+ * @Step(order = 2)
  * @Parallel(group = "prep")
  * public void requestSignature(MyFlow flow) { ... }
  *
@@ -26,8 +26,8 @@ import java.lang.annotation.Target;
  *
  * Under the hood: the orchestrator publishes one Kafka message per
  * parallel step. Each runs independently with its own retry/idempotency.
- * The join step only executes when all parallel steps satisfy their
- * completedWhen condition.
+ * The join step only executes when all parallel steps are in the
+ * flow's completedSteps set.
  */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)

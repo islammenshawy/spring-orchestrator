@@ -5,6 +5,7 @@ import com.orchestrator.starter.audit.StepExecutionLogRepository;
 import com.orchestrator.starter.autoconfigure.OrchestratorMetrics;
 import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.domain.OrchestratorFlow;
+import com.orchestrator.starter.domain.StepOutcome;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.exception.NonRetryableStepException;
 import com.orchestrator.starter.exception.RetryableStepException;
@@ -199,7 +200,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             String group = adapter.getJoinOnGroup();
             List<StepHandler<F>> parallelSteps = stepRegistry.getParallelGroup(group);
             boolean allDone = parallelSteps.stream()
-                    .allMatch(ps -> ps.isAlreadyCompleted(flow));
+                    .allMatch(ps -> flow.getCompletedSteps().contains(ps.getStepName()));
             if (!allDone) {
                 log.info("[Saga] Join {} waiting — not all parallel steps in group '{}' completed",
                         stepName, group);
@@ -210,7 +211,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
 
         // Layer 2 idempotency — skip if flow already advanced past this step
-        if (handler.isAlreadyCompleted(flow)) {
+        if (flow.getCompletedSteps().contains(stepName)) {
             String currentStep = flow.getCurrentStep();
             if (currentStep != null && !currentStep.equals(stepName)) {
                 log.debug("[Saga] Step {} completed, flow at {} — skipping", stepName, currentStep);
@@ -229,23 +230,23 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         try {
             executeWithTimeout(handler, flow, stepName);
         } catch (WaitingStepException e) {
-            metrics.stepExecution(flowType, stepName, "WAITING",
+            metrics.stepExecution(flowType, stepName, StepOutcome.WAITING.name(),
                     Duration.between(startedAt, Instant.now()));
-            logStep(flowId, stepName, "WAITING", flow.getRetryCount(),
+            logStep(flowId, stepName, StepOutcome.WAITING.name(), flow.getRetryCount(),
                     flowBefore, null, e.getMessage(), startedAt);
             handleWaitingStep(flow, e);
             return;
         } catch (RetryableStepException e) {
-            metrics.stepExecution(flowType, stepName, "RETRYING",
+            metrics.stepExecution(flowType, stepName, StepOutcome.RETRYING.name(),
                     Duration.between(startedAt, Instant.now()));
-            logStep(flowId, stepName, "RETRYING", flow.getRetryCount() + 1,
+            logStep(flowId, stepName, StepOutcome.RETRYING.name(), flow.getRetryCount() + 1,
                     flowBefore, null, e.getMessage(), startedAt);
             handleRetryableFailure(flow, e);
             throw e;
         } catch (NonRetryableStepException e) {
-            metrics.stepExecution(flowType, stepName, "FAILED",
+            metrics.stepExecution(flowType, stepName, StepOutcome.FAILED.name(),
                     Duration.between(startedAt, Instant.now()));
-            logStep(flowId, stepName, "FAILED", flow.getRetryCount() + 1,
+            logStep(flowId, stepName, StepOutcome.FAILED.name(), flow.getRetryCount() + 1,
                     flowBefore, null, e.getMessage(), startedAt);
             handlePermanentFailure(flow, e);
             return;
@@ -253,37 +254,38 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             try {
                 StepErrorHandler.handleError(handler, e);
                 // Recovered (e.g., HTTP 409)
-                logStep(flowId, stepName, "RECOVERED", flow.getRetryCount() + 1,
+                logStep(flowId, stepName, StepOutcome.RECOVERED.name(), flow.getRetryCount() + 1,
                         flowBefore, includeFlowStateInLogs ? serializeForLog(flow) : null, e.getMessage(), startedAt);
                 log.info("[Saga] Step {} recovered for flow {}", stepName, flowId);
             } catch (RetryableStepException re) {
-                logStep(flowId, stepName, "RETRYING", flow.getRetryCount() + 1,
+                logStep(flowId, stepName, StepOutcome.RETRYING.name(), flow.getRetryCount() + 1,
                         flowBefore, null, re.getMessage(), startedAt);
                 handleRetryableFailure(flow, re);
                 throw re;
             } catch (NonRetryableStepException nre) {
-                logStep(flowId, stepName, "FAILED", flow.getRetryCount() + 1,
+                logStep(flowId, stepName, StepOutcome.FAILED.name(), flow.getRetryCount() + 1,
                         flowBefore, null, nre.getMessage(), startedAt);
                 handlePermanentFailure(flow, nre);
                 return;
             }
         }
 
-        // Auto-park: if step has expiresAfter and completedWhen is still false,
+        // Auto-park: if step has expiresAfter and step is not yet in completedSteps,
         // the step is a gate that did its one-time setup — auto-throw WaitingStepException
         java.time.Duration stepExpiry = (handler instanceof MethodStepAdapter)
                 ? handler.getExpiresAfter() : null;
-        if (stepExpiry != null && !handler.isAlreadyCompleted(flow)) {
-            logStep(flowId, stepName, "WAITING", flow.getRetryCount(),
-                    flowBefore, null, "auto-park: completedWhen still false", startedAt);
-            metrics.stepExecution(flowType, stepName, "WAITING",
+        if (stepExpiry != null && !flow.getCompletedSteps().contains(stepName)) {
+            logStep(flowId, stepName, StepOutcome.WAITING.name(), flow.getRetryCount(),
+                    flowBefore, null, "auto-park: step not yet completed", startedAt);
+            metrics.stepExecution(flowType, stepName, StepOutcome.WAITING.name(),
                     Duration.between(startedAt, Instant.now()));
             handleWaitingStep(flow, new WaitingStepException(
-                    "Waiting: completedWhen not satisfied after step execution"));
+                    "Waiting: step not yet completed after execution"));
             return;
         }
 
-        // Step succeeded — clear retry/recovery state.
+        // Step succeeded — mark as completed and clear retry/recovery state.
+        flow.getCompletedSteps().add(stepName);
         flow.setRetryCount(0);
         flow.setBackoffSeconds(0);
         flow.setNextRetryAt(null);
@@ -311,16 +313,16 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
-        metrics.stepExecution(flowType, stepName, "COMPLETED",
+        metrics.stepExecution(flowType, stepName, StepOutcome.COMPLETED.name(),
                 Duration.between(startedAt, Instant.now()));
 
         if (replyEnabled) {
-            publishReply(flowId, stepName, "COMPLETED", null, serialize(flow));
+            publishReply(flowId, stepName, StepOutcome.COMPLETED.name(), null, serialize(flow));
         } else {
             markParallelStepCompleted(flow, stepName, handler);
         }
 
-        logStep(flowId, stepName, "COMPLETED", 1,
+        logStep(flowId, stepName, StepOutcome.COMPLETED.name(), 1,
                 flowBefore, includeFlowStateInLogs ? serializeForLog(flow) : null, null, startedAt);
     }
 
@@ -404,7 +406,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         var optFlow = flowRepository.findById(flowId);
         if (optFlow.isEmpty()) {
             log.warn("[DLT] Flow {} not found in database — orphaned Kafka message", flowId);
-            logStep(flowId, stepName != null ? stepName : "UNKNOWN", "DEAD_LETTERED", 0,
+            logStep(flowId, stepName != null ? stepName : "UNKNOWN", StepOutcome.DEAD_LETTERED.name(), 0,
                     null, null, "[DLT] Flow not found: " + (exceptionMessage != null ? exceptionMessage : "orphaned message"), Instant.now());
             return;
         }
@@ -420,7 +422,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         saveFlow(flow);
 
         logStep(flowId, stepName != null ? stepName : flow.getCurrentStep(),
-                "DEAD_LETTERED", flow.getRetryCount(),
+                StepOutcome.DEAD_LETTERED.name(), flow.getRetryCount(),
                 null, null, errorDetail, Instant.now());
 
         // Run compensation for all completed steps in reverse
@@ -463,14 +465,11 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     private void runCancellation(F flow) {
         List<String> completedSteps = stepRegistry.getCompletedStepsBefore(flow.getCurrentStep());
-        // Include current step if it has a result (completedWhen is true)
+        // Include current step if it has completed (is in completedSteps set)
         String currentStep = flow.getCurrentStep();
-        if (currentStep != null) {
-            StepHandler<F> currentHandler = stepRegistry.getHandler(currentStep);
-            if (currentHandler != null && currentHandler.isAlreadyCompleted(flow)) {
-                completedSteps = new ArrayList<>(completedSteps);
-                completedSteps.add(currentStep);
-            }
+        if (currentStep != null && flow.getCompletedSteps().contains(currentStep)) {
+            completedSteps = new ArrayList<>(completedSteps);
+            completedSteps.add(currentStep);
         }
 
         if (completedSteps.isEmpty()) {
@@ -489,11 +488,11 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 Instant start = Instant.now();
                 try {
                     adapter.cancel(flow);
-                    logStep(flow.getId(), stepName, "CANCELLED", 1, null, null, null, start);
+                    logStep(flow.getId(), stepName, StepOutcome.CANCELLED.name(), 1, null, null, null, start);
                 } catch (Exception e) {
                     log.error("[Saga] Cancel handler failed for step {} on flow {}: {}",
                             stepName, flow.getId(), e.getMessage());
-                    logStep(flow.getId(), stepName, "CANCEL_FAILED", 1,
+                    logStep(flow.getId(), stepName, StepOutcome.CANCEL_FAILED.name(), 1,
                             null, null, e.getMessage(), start);
                 }
             }
@@ -529,13 +528,13 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 Instant start = Instant.now();
                 try {
                     adapter.compensate(flow);
-                    logStep(flow.getId(), stepName, "COMPENSATED", 1, null, null, null, start);
+                    logStep(flow.getId(), stepName, StepOutcome.COMPENSATED.name(), 1, null, null, null, start);
                 } catch (Exception e) {
                     anyCompensationFailed = true;
                     lastCompensationError = stepName + ": " + e.getMessage();
                     log.error("[Saga] Compensation failed for step {} on flow {}: {}",
                             stepName, flow.getId(), e.getMessage());
-                    logStep(flow.getId(), stepName, "COMPENSATION_FAILED", 1,
+                    logStep(flow.getId(), stepName, StepOutcome.COMPENSATION_FAILED.name(), 1,
                             null, null, e.getMessage(), start);
                 }
             } else {
@@ -782,7 +781,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             saveFlow(flow);
 
             List<StepHandler<F>> siblings = stepRegistry.getParallelGroup(adapter.getParallelGroup());
-            boolean allDone = siblings.stream().allMatch(s -> s.isAlreadyCompleted(flow));
+            boolean allDone = siblings.stream().allMatch(s -> flow.getCompletedSteps().contains(s.getStepName()));
 
             if (allDone) {
                 log.info("[Saga] All parallel steps in group '{}' completed for flow {}",

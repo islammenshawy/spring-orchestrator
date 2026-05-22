@@ -47,7 +47,7 @@ class StartupValidationTest {
 
     @Flow
     static class BadCompensateFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1, completedWhen = "true")
+        @Step(order = 1)
         public void doWork(TestFlow flow) {}
 
         @Compensate(step = "typoMethodName")  // ← doesn't exist
@@ -75,7 +75,7 @@ class StartupValidationTest {
 
     @Flow
     static class BadJoinFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1, completedWhen = "true")
+        @Step(order = 1)
         public void doWork(TestFlow flow) {}
 
         @Step(order = 2)
@@ -98,38 +98,14 @@ class StartupValidationTest {
         ctx.close();
     }
 
-    // ======== Invalid: @Parallel without completedWhen ========
-
-    @Flow
-    static class ParallelNoGuardFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1)  // ← missing completedWhen
-        @Parallel(group = "g")
-        public void parallelStep(TestFlow flow) {}
-    }
-
-    @Configuration
-    static class ParallelNoGuardConfig {
-        @Bean ParallelNoGuardFlow flow() { return new ParallelNoGuardFlow(); }
-    }
-
-    @Test
-    void failsStartupOnParallelWithoutCompletedWhen() {
-        var ctx = new AnnotationConfigApplicationContext(ParallelNoGuardConfig.class);
-        var ex = assertThrows(IllegalStateException.class,
-                () -> FlowDefinitionScanner.scan(ctx));
-        assertTrue(ex.getMessage().contains("completedWhen"),
-                "Error should mention completedWhen: " + ex.getMessage());
-        ctx.close();
-    }
-
     // ======== Invalid: duplicate step order ========
 
     @Flow
     static class DuplicateOrderFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1, completedWhen = "true")
+        @Step(order = 1)
         public void stepA(TestFlow flow) {}
 
-        @Step(order = 1, completedWhen = "true")  // ← same order, not @Parallel
+        @Step(order = 1)  // ← same order, not @Parallel
         public void stepB(TestFlow flow) {}
     }
 
@@ -171,7 +147,7 @@ class StartupValidationTest {
 
     @Flow
     static class MinimalValidFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1, completedWhen = "true")
+        @Step(order = 1)
         public void onlyStep(TestFlow flow) {}
     }
 
@@ -193,13 +169,13 @@ class StartupValidationTest {
 
     @Flow
     static class ValidCompensateFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1, completedWhen = "true")
+        @Step(order = 1)
         public void doWork(TestFlow flow) {}
 
         @Compensate(step = "doWork")
         public void undoWork(TestFlow flow) {}
 
-        @Step(order = 2, completedWhen = "true")
+        @Step(order = 2)
         public void doMoreWork(TestFlow flow) {}
     }
 

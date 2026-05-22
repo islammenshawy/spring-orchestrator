@@ -24,14 +24,14 @@ import java.util.UUID;
 @Flow(name = "parallel-document")
 public class ParallelDocumentFlow extends FlowDefinition<ParallelFlow> {
 
-    @Step(order = 1, completedWhen = "initResult != null")
+    @Step(order = 1)
     public void init(ParallelFlow flow) {
         log.info("[Parallel] Init for flow {}", flow.getId());
         flow.setInitResult("initialized-" + UUID.randomUUID().toString().substring(0, 8));
         checkpoint(flow);
     }
 
-    @Step(order = 2, completedWhen = "validationResult != null")
+    @Step(order = 2)
     @Parallel(group = "validation")
     public void validate(ParallelFlow flow) {
         log.info("[Parallel] Validate for flow {}", flow.getId());
@@ -40,7 +40,7 @@ public class ParallelDocumentFlow extends FlowDefinition<ParallelFlow> {
         checkpoint(flow);
     }
 
-    @Step(order = 2, completedWhen = "enrichmentResult != null")
+    @Step(order = 2)
     @Parallel(group = "validation")
     public void enrich(ParallelFlow flow) {
         log.info("[Parallel] Enrich for flow {}", flow.getId());
@@ -49,7 +49,7 @@ public class ParallelDocumentFlow extends FlowDefinition<ParallelFlow> {
         checkpoint(flow);
     }
 
-    @Step(order = 3, completedWhen = "mergedResult != null")
+    @Step(order = 3)
     @JoinOn(group = "validation")
     public void mergeResults(ParallelFlow flow) {
         log.info("[Parallel] Merge for flow {} (validation={}, enrichment={})",
@@ -58,7 +58,7 @@ public class ParallelDocumentFlow extends FlowDefinition<ParallelFlow> {
         checkpoint(flow);
     }
 
-    @Step(order = 4, completedWhen = "notificationResult != null")
+    @Step(order = 4)
     @Parallel(group = "delivery")
     public void notify(ParallelFlow flow) {
         log.info("[Parallel] Notify for flow {}", flow.getId());
@@ -66,7 +66,7 @@ public class ParallelDocumentFlow extends FlowDefinition<ParallelFlow> {
         checkpoint(flow);
     }
 
-    @Step(order = 4, completedWhen = "archiveResult != null")
+    @Step(order = 4)
     @Parallel(group = "delivery")
     public void archive(ParallelFlow flow) {
         log.info("[Parallel] Archive for flow {}", flow.getId());
@@ -74,7 +74,7 @@ public class ParallelDocumentFlow extends FlowDefinition<ParallelFlow> {
         checkpoint(flow);
     }
 
-    @Step(order = 5, completedWhen = "finalResult != null")
+    @Step(order = 5)
     @JoinOn(group = "delivery")
     public void finalize(ParallelFlow flow) {
         log.info("[Parallel] Finalize for flow {} (notification={}, archive={})",

@@ -28,10 +28,6 @@ import com.orchestrator.starter.domain.OrchestratorFlow;
  * public class CreateDocumentStep implements StepHandler&lt;MyFlow&gt; {
  *     // no getStepName/getOrder needed — read from annotation
  *
- *     public boolean isAlreadyCompleted(MyFlow flow) {
- *         return flow.getDocumentId() != null;
- *     }
- *
  *     public void execute(MyFlow flow) {
  *         // no try/catch needed — @RetryOn/@RecoverOn/@FailOn handle it
  *         var result = vendorClient.createDocument(...);
@@ -61,12 +57,6 @@ public interface StepHandler<F extends OrchestratorFlow> {
         throw new IllegalStateException(
                 this.getClass().getSimpleName() + ": override getOrder() or use @Step annotation");
     }
-
-    /**
-     * Idempotency guard — return true if this step already completed
-     * (result field already set on flow). Prevents duplicate API calls.
-     */
-    boolean isAlreadyCompleted(F flow);
 
     /**
      * Execute the step. Set results on the flow object.

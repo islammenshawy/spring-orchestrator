@@ -17,7 +17,7 @@ import java.lang.annotation.Target;
  *
  * Example:
  * <pre>
- * @Step(order = 2, completedWhen = "traceOriginalId != null")
+ * @Step(order = 2)
  * public void registerDocument(MyFlow flow) {
  *     var res = enigioClient.createDocument(...);
  *     flow.setTraceOriginalId(res.traceOriginalId());

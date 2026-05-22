@@ -41,10 +41,10 @@ class FlowDefinitionScannerTest {
     // Valid flow
     @Flow
     static class ValidFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1, completedWhen = "true")
+        @Step(order = 1)
         public void stepA(TestFlow flow) {}
 
-        @Step(order = 2, completedWhen = "true")
+        @Step(order = 2)
         public void stepB(TestFlow flow) {}
 
         @Compensate(step = "stepA")
@@ -54,7 +54,7 @@ class FlowDefinitionScannerTest {
     // Invalid: @Compensate references non-existent step
     @Flow
     static class InvalidCompensateFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1, completedWhen = "true")
+        @Step(order = 1)
         public void stepA(TestFlow flow) {}
 
         @Compensate(step = "nonExistent")
@@ -64,30 +64,22 @@ class FlowDefinitionScannerTest {
     // Invalid: duplicate order
     @Flow
     static class DuplicateOrderFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1, completedWhen = "true")
+        @Step(order = 1)
         public void stepA(TestFlow flow) {}
 
-        @Step(order = 1, completedWhen = "true")
+        @Step(order = 1)
         public void stepB(TestFlow flow) {}
     }
 
     // Invalid: @JoinOn references non-existent parallel group
     @Flow
     static class InvalidJoinFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1, completedWhen = "true")
+        @Step(order = 1)
         public void stepA(TestFlow flow) {}
 
         @Step(order = 2)
         @JoinOn(group = "nonExistent")
         public void joinStep(TestFlow flow) {}
-    }
-
-    // Invalid: @Parallel without completedWhen
-    @Flow
-    static class ParallelWithoutCompletedWhenFlow extends FlowDefinition<TestFlow> {
-        @Step(order = 1)
-        @Parallel(group = "g")
-        public void stepA(TestFlow flow) {}
     }
 
     @Configuration
@@ -108,11 +100,6 @@ class FlowDefinitionScannerTest {
     @Configuration
     static class InvalidJoinConfig {
         @Bean InvalidJoinFlow flow() { return new InvalidJoinFlow(); }
-    }
-
-    @Configuration
-    static class ParallelNoCompletedConfig {
-        @Bean ParallelWithoutCompletedWhenFlow flow() { return new ParallelWithoutCompletedWhenFlow(); }
     }
 
     @Test
@@ -146,10 +133,4 @@ class FlowDefinitionScannerTest {
         ctx.close();
     }
 
-    @Test
-    void failsOnParallelWithoutCompletedWhen() {
-        var ctx = new AnnotationConfigApplicationContext(ParallelNoCompletedConfig.class);
-        assertThrows(IllegalStateException.class, () -> FlowDefinitionScanner.scan(ctx));
-        ctx.close();
-    }
 }

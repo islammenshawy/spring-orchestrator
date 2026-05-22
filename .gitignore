@@ -9,3 +9,4 @@ target/
 nohup.out
 .playwright-mcp/
 scripts/load-test-results/
+.claude/

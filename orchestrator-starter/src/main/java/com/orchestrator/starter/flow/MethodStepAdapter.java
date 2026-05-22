@@ -3,10 +3,6 @@ package com.orchestrator.starter.flow;
 import com.orchestrator.starter.annotation.*;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.BeanUtils;
-import org.springframework.expression.ExpressionParser;
-import org.springframework.expression.spel.standard.SpelExpressionParser;
-import org.springframework.expression.spel.support.StandardEvaluationContext;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
@@ -17,14 +13,10 @@ import java.lang.reflect.Method;
  *
  * Handles:
  * - Step name from annotation or method name (camelCase → UPPER_SNAKE)
- * - completedWhen SpEL evaluation for idempotency
- * - Annotation inheritance: method-level overrides class-level
  * - Annotation inheritance: method-level overrides class-level
  */
 @Slf4j
 public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandler<F> {
-
-    private static final ExpressionParser SPEL = new SpelExpressionParser();
 
     private final Object flowDefinition;
     private final Method method;
@@ -76,21 +68,6 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
             // fall through to error
         }
         throw new IllegalArgumentException("Invalid expiresAfter: '" + value + "' — use format like '48h' or '7d'");
-    }
-
-    @Override
-    public boolean isAlreadyCompleted(F flow) {
-        String expr = stepAnnotation.completedWhen();
-        if (expr.isEmpty()) return false;
-
-        try {
-            StandardEvaluationContext ctx = new StandardEvaluationContext(flow);
-            Boolean result = SPEL.parseExpression(expr).getValue(ctx, Boolean.class);
-            return Boolean.TRUE.equals(result);
-        } catch (Exception e) {
-            log.warn("[Step:{}] Failed to evaluate completedWhen='{}': {}", stepName, expr, e.getMessage());
-            return false;
-        }
     }
 
     @Override

@@ -58,7 +58,7 @@ class StepTimeoutTest {
 
         StepHandler<TestFlow> handler = mock(StepHandler.class);
         when(handler.getStepName()).thenReturn("SLOW_STEP");
-        when(handler.isAlreadyCompleted(flow)).thenReturn(false);
+
         // Simulate a hanging step (sleeps 5s, timeout is 1s)
         doAnswer(inv -> { Thread.sleep(5000); return null; }).when(handler).execute(flow);
 
@@ -97,7 +97,7 @@ class StepTimeoutTest {
 
         StepHandler<TestFlow> handler = mock(StepHandler.class);
         when(handler.getStepName()).thenReturn("FAST_STEP");
-        when(handler.isAlreadyCompleted(flow)).thenReturn(false);
+
 
         when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
         when(stepRegistry.getHandler("FAST_STEP")).thenReturn(handler);
