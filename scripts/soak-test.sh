@@ -135,8 +135,13 @@ chaos_kill_pod() {
   CHAOS_STUCK_COUNT=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
     "print(db.dis_instrument_flows.countDocuments({status:'IN_PROGRESS'}))" 2>/dev/null)
 
-  log "  [CHAOS] Killing DIS-1 (${CHAOS_STUCK_COUNT} flows IN_PROGRESS will need recovery)"
-  docker stop infra-digital-instrument-service-1 >/dev/null 2>&1 || true
+  # SIGKILL — no graceful shutdown, no consumer group leave.
+  # Kafka detects via session.timeout.ms (~45s) then rebalances.
+  # If any flow was mid-step (consumed msg, didn't write outbox),
+  # it stays IN_PROGRESS in MongoDB. Recovery scanner (2min threshold)
+  # picks it up if Kafka rebalance doesn't cover it.
+  log "  [CHAOS] SIGKILL DIS-1 (${CHAOS_STUCK_COUNT} flows IN_PROGRESS, Kafka rebalance in ~45s, recovery scanner threshold=2min)"
+  docker kill infra-digital-instrument-service-1 >/dev/null 2>&1 || true
 }
 
 # Restart DIS-1 after kill
@@ -167,12 +172,24 @@ chaos_report() {
   recovered=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
     "print(db.dis_instrument_flows.countDocuments({recoveryCount:{\$gte:1}}))" 2>/dev/null)
   log "  Flows recovered by scanner: $recovered"
+  if [ "$recovered" -eq 0 ] && [ "$CHAOS_POD_KILLED" -eq 1 ]; then
+    log "    (Kafka consumer rebalance handled failover before scanner threshold — system working as designed)"
+  fi
 
   # Check if any flow was claimed more than once (duplicate claiming)
   local multi_recovery
   multi_recovery=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
     "print(db.dis_instrument_flows.countDocuments({recoveryCount:{\$gt:1}}))" 2>/dev/null)
   log "  Flows with recoveryCount > 1: $multi_recovery (should be 0 — no duplicate claiming)"
+
+  # Show recovery count distribution
+  log "  Recovery count distribution:"
+  docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval '
+    db.dis_instrument_flows.aggregate([
+      {$group:{_id:"$recoveryCount",count:{$sum:1}}},
+      {$sort:{_id:1}}
+    ]).forEach(r => print("    recoveryCount=" + r._id + ": " + r.count + " flows"))
+  ' 2>/dev/null
 
   # Check processed events vs expected (dedup effectiveness)
   local processed
