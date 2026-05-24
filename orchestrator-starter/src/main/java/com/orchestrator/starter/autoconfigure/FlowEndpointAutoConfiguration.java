@@ -229,8 +229,7 @@ public class FlowEndpointAutoConfiguration {
                 if (signalName == null || signalName.isBlank()) {
                     return ResponseEntity.badRequest().body(Map.of("error", "signalName is required"));
                 }
-                @SuppressWarnings("unchecked")
-                Map<String, Object> payload = (Map<String, Object>) body.getOrDefault("payload", Map.of());
+                Object payload = body.getOrDefault("payload", Map.of());
                 orch.signal(id, signalName, payload);
                 return ResponseEntity.ok(Map.of(
                         "flowId", id,

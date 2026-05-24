@@ -437,8 +437,19 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      * - If flow is PARKED/WAITING_RETRY: execute handler immediately, re-publish step
      * - If flow is IN_PROGRESS: queue as pendingSignal, executed after current step completes
      */
+    /**
+     * Send a signal to a running flow with a typed payload.
+     *
+     * <pre>
+     * orchestrator.signal(flowId, "updatePriority",
+     *     PriorityUpdate.builder().priority(Priority.URGENT).reason("escalation").build());
+     * </pre>
+     *
+     * - PARKED/WAITING_RETRY: executes handler immediately, re-publishes step
+     * - IN_PROGRESS: queues as pendingSignal, executed after current step completes
+     */
     @SuppressWarnings("unchecked")
-    public void signal(String flowId, String signalName, java.util.Map<String, Object> payload) {
+    public void signal(String flowId, String signalName, Object payload) {
         if (signalRegistry == null) {
             throw new IllegalStateException("No signals registered for flow type " + flowType);
         }
@@ -457,7 +468,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
         if (status == FlowStatus.PARKED || status == FlowStatus.WAITING_RETRY) {
             // Safe to execute immediately — nothing else is running
-            Object typedPayload = deserializePayload(handler, payload);
+            Object typedPayload = convertPayload(handler, payload);
             handler.invoke(flow, typedPayload);
             saveFlow(flow);
             log.info("[Signal] Executed '{}' on flow {} (was {})", signalName, flowId, status);
@@ -471,12 +482,12 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 log.warn("[Signal] Failed to re-publish step after signal: {}", e.getMessage());
             }
         } else if (status == FlowStatus.IN_PROGRESS) {
-            // Queue for execution between steps
+            // Serialize payload to JSON for MongoDB storage
+            String payloadJson = serializePayload(payload);
             var pending = new com.orchestrator.starter.domain.PendingSignal(
-                    signalName, payload, Instant.now());
+                    signalName, payloadJson, Instant.now());
 
             if (mongoTemplate != null && entityClass != null) {
-                // Atomic $push — no version conflict with running step
                 mongoTemplate.updateFirst(
                         org.springframework.data.mongodb.core.query.Query.query(
                                 org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flowId)),
@@ -485,7 +496,6 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                         entityClass);
                 log.info("[Signal] Queued '{}' on flow {} (IN_PROGRESS)", signalName, flowId);
             } else {
-                // Fallback: add to in-memory list
                 var signals = flow.getPendingSignals();
                 if (signals == null) {
                     signals = new java.util.ArrayList<>();
@@ -502,7 +512,6 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     /**
      * Execute all pending signals after a step completes, before advancing.
-     * Signals run in the order they were queued (FIFO).
      */
     private void drainPendingSignals(F flow) {
         var pending = flow.getPendingSignals();
@@ -517,7 +526,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 continue;
             }
             try {
-                Object typedPayload = deserializePayload(handler, ps.getPayload());
+                Object typedPayload = deserializePayload(handler, ps.getPayloadJson());
                 handler.invoke(flow, typedPayload);
                 log.info("[Signal] Executed pending '{}' on flow {}", ps.getSignalName(), flow.getId());
             } catch (Exception e) {
@@ -530,16 +539,37 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         saveFlow(flow);
     }
 
-    /** Deserialize signal payload to the handler's expected type. */
-    private Object deserializePayload(SignalHandler<F> handler, java.util.Map<String, Object> payload) {
+    /** Convert payload to the handler's expected type via Jackson. */
+    private Object convertPayload(SignalHandler<F> handler, Object payload) {
         if (handler.getPayloadType() == null || payload == null) return null;
+        if (handler.getPayloadType().isInstance(payload)) return payload;
         try {
-            String json = objectMapper.writeValueAsString(payload);
-            return objectMapper.readValue(json, handler.getPayloadType());
+            return objectMapper.convertValue(payload, handler.getPayloadType());
+        } catch (Exception e) {
+            log.warn("[Signal] Failed to convert payload to {}: {}",
+                    handler.getPayloadType().getSimpleName(), e.getMessage());
+            return payload;
+        }
+    }
+
+    /** Deserialize queued payload JSON to the handler's expected type. */
+    private Object deserializePayload(SignalHandler<F> handler, String payloadJson) {
+        if (handler.getPayloadType() == null || payloadJson == null) return null;
+        try {
+            return objectMapper.readValue(payloadJson, handler.getPayloadType());
         } catch (Exception e) {
             log.warn("[Signal] Failed to deserialize payload to {}: {}",
                     handler.getPayloadType().getSimpleName(), e.getMessage());
-            return payload; // fallback: pass raw map
+            return null;
+        }
+    }
+
+    private String serializePayload(Object payload) {
+        if (payload == null) return null;
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (Exception e) {
+            return null;
         }
     }
 

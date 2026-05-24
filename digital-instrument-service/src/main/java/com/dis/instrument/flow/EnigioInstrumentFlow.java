@@ -8,6 +8,7 @@ import com.dis.instrument.model.FlowPhase;
 import com.dis.instrument.model.WebhookEvent;
 import com.dis.instrument.model.AdditionalDocumentRepository;
 import com.dis.instrument.model.Attachment;
+import com.dis.instrument.model.PriorityUpdate;
 import com.dis.instrument.model.Signer;
 import com.orchestrator.starter.annotation.*;
 import com.orchestrator.starter.exception.NonRetryableStepException;
@@ -548,9 +549,9 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
     // ========== Signals ==========
 
     @Signal
-    public void updatePriority(EnigioInstrumentEntity flow, java.util.Map<String, Object> data) {
-        String priority = (String) data.get("priority");
-        log.info("[{}] Priority updated to '{}' via signal", flow.getId(), priority);
-        flow.setPriority(priority);
+    public void updatePriority(EnigioInstrumentEntity flow, PriorityUpdate data) {
+        log.info("[{}] Priority updated to {} via signal (reason: {})",
+                flow.getId(), data.getPriority(), data.getReason());
+        flow.setPriority(data.getPriority().name());
     }
 }

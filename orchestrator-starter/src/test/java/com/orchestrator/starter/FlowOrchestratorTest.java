@@ -409,7 +409,7 @@ class FlowOrchestratorTest {
         registry.register("approve", handler);
         orchestrator.setSignalRegistry(registry);
 
-        orchestrator.signal("flow-1", "approve", java.util.Map.of());
+        orchestrator.signal("flow-1", "approve", null);
 
         assertTrue(flow.isApproved(), "Signal handler should set approved=true");
         verify(flowRepo).save(flow);
@@ -432,7 +432,7 @@ class FlowOrchestratorTest {
         registry.register("approve", handler);
         orchestrator.setSignalRegistry(registry);
 
-        orchestrator.signal("flow-1", "approve", java.util.Map.of("note", "urgent"));
+        orchestrator.signal("flow-1", "approve", "urgent");
 
         // Should NOT execute handler (flow is IN_PROGRESS)
         assertFalse(flow.isApproved());
@@ -467,7 +467,7 @@ class FlowOrchestratorTest {
 
         // Pre-queue a pending signal
         var pending = new java.util.ArrayList<PendingSignal>();
-        pending.add(new PendingSignal("approve", java.util.Map.of(), java.time.Instant.now()));
+        pending.add(new PendingSignal("approve", null, java.time.Instant.now()));
         flow.setPendingSignals(pending);
 
         var method = getApproveMethod();
