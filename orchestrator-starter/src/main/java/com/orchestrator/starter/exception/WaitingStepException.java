@@ -19,7 +19,7 @@ import java.time.Duration;
 public class WaitingStepException extends RuntimeException {
 
     /** Determines how the orchestrator handles a waiting step. */
-    public enum WaitMode { PARKED, POLLING }
+    public enum WaitMode { PARKED, POLLING, SLEEPING }
 
     private final WaitMode waitMode;
     private final Duration pollInterval;

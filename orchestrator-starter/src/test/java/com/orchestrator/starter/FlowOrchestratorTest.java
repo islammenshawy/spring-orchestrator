@@ -2,6 +2,7 @@ package com.orchestrator.starter;
 
 import com.orchestrator.starter.audit.StepExecutionLog;
 import com.orchestrator.starter.audit.StepExecutionLogRepository;
+import com.orchestrator.starter.annotation.SearchAttribute;
 import com.orchestrator.starter.domain.AbstractFlow;
 import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
@@ -44,6 +45,8 @@ class FlowOrchestratorTest {
     @Document(collection = "test_flows")
     static class TestFlow extends AbstractFlow {
         private String result;
+        @SearchAttribute
+        private String customerId;
     }
 
     @BeforeEach
@@ -300,6 +303,34 @@ class FlowOrchestratorTest {
         verify(flowRepo).save(flow);
     }
 
+    @Test
+    void executeStep_sleeping_setsParkedWithNextRetryAt() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+
+        StepHandler<TestFlow> handler = mock(StepHandler.class);
+        when(handler.getStepName()).thenReturn("STEP_A");
+
+        // Sleeping step — SLEEPING mode with 1h duration
+        doThrow(new WaitingStepException("Sleeping until ...",
+                WaitingStepException.WaitMode.SLEEPING, null, Duration.ofHours(1)))
+                .when(handler).execute(flow);
+
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+        when(stepRegistry.getHandler("STEP_A")).thenReturn(handler);
+
+        orchestrator.executeStep("flow-1", "STEP_A");
+
+        assertEquals(FlowStatus.PARKED, flow.getStatus()); // SLEEPING uses PARKED status
+        assertEquals(0, flow.getRetryCount());
+        assertNotNull(flow.getWaitingSince());
+        assertNotNull(flow.getNextRetryAt()); // SLEEPING sets nextRetryAt (scheduler wakes it)
+        assertNull(flow.getExpiresAt()); // SLEEPING has no expiry — the sleep IS the intended wait
+        verify(flowRepo).save(flow);
+    }
+
     // ========== Reply mode vs inline ==========
 
     @Test
@@ -328,5 +359,28 @@ class FlowOrchestratorTest {
         verify(kafkaTemplate, never()).send(eq("test.commands.replies"), anyString(), anyString());
         // Flow completed inline
         assertEquals(FlowStatus.COMPLETED, flow.getStatus());
+    }
+
+    // ========== Search Attributes ==========
+
+    @Test
+    void searchAttribute_annotationDiscoveredOnEntityField() {
+        // Verify @SearchAttribute is discoverable via reflection
+        var fields = TestFlow.class.getDeclaredFields();
+        boolean found = false;
+        for (var field : fields) {
+            if (field.isAnnotationPresent(SearchAttribute.class)) {
+                assertEquals("customerId", field.getName());
+                found = true;
+            }
+        }
+        assertTrue(found, "@SearchAttribute should be on customerId field");
+    }
+
+    @Test
+    void findFlows_withoutMongoTemplate_returnsEmpty() {
+        // Orchestrator without mongoTemplate/entityClass → returns empty
+        var results = orchestrator.findFlows(java.util.Map.of("customerId", "cust-1"));
+        assertTrue(results.isEmpty());
     }
 }

@@ -219,23 +219,28 @@ public class StaleFlowRecoveryService {
     }
 
     /**
-     * Re-deliver polling steps (WAITING_RETRY) whose nextRetryAt has elapsed.
-     * These are steps using pollUntil() that need periodic re-execution.
+     * Re-deliver flows whose nextRetryAt has elapsed:
+     * - WAITING_RETRY: polling steps (pollUntil)
+     * - PARKED with nextRetryAt: sleeping steps (sleep/sleepUntil)
      */
     @SuppressWarnings("unchecked")
     private void redeliverPollingFlows(String flowType, Class<?> entityClass, String commandTopic) {
         Instant now = Instant.now();
 
-        Query candidateQuery = Query.query(Criteria.where("status").is(FlowStatus.WAITING_RETRY.name())
-                .and("nextRetryAt").lt(now)
-                .and("claimedBy").is(null))
+        Query candidateQuery = Query.query(new Criteria().andOperator(
+                Criteria.where("nextRetryAt").lt(now),
+                Criteria.where("claimedBy").is(null),
+                new Criteria().orOperator(
+                        Criteria.where("status").is(FlowStatus.WAITING_RETRY.name()),
+                        Criteria.where("status").is(FlowStatus.PARKED.name())
+                )))
                 .limit(batchSize);
-        candidateQuery.fields().include("_id");
+        candidateQuery.fields().include("_id", "status");
         List<?> candidates = mongoTemplate.find(candidateQuery, entityClass);
         if (candidates.isEmpty()) return;
 
         republishBatch(candidates, entityClass, commandTopic, flowType,
-                FlowStatus.WAITING_RETRY, "polling");
+                null, "polling/sleeping");
     }
 
     /**
@@ -278,10 +283,11 @@ public class StaleFlowRecoveryService {
 
         if (claimed == 0) return;
 
-        List<?> batch = mongoTemplate.find(
-                Query.query(Criteria.where("claimedBy").is(podId)
-                        .and("status").is(expectedStatus.name())),
-                entityClass);
+        var claimedCriteria = Criteria.where("claimedBy").is(podId);
+        if (expectedStatus != null) {
+            claimedCriteria = claimedCriteria.and("status").is(expectedStatus.name());
+        }
+        List<?> batch = mongoTemplate.find(Query.query(claimedCriteria), entityClass);
 
         log.info("[Recovery] Claimed {} {} flows for type '{}' (pod: {})",
                 batch.size(), label, flowType, podId);

@@ -633,4 +633,69 @@ class InstrumentFlowIntegrationTest {
         fail("Flow " + flowId + " did not reach step " + targetStep + " within " + timeout);
         return null;
     }
+
+    // ===== Search Attributes =====
+
+    @Test
+    @Order(20)
+    @DisplayName("Search API — find flows by @SearchAttribute reference")
+    void searchFlows_byReference() {
+        // Start a flow with a unique reference
+        var result = startInstrumentFlow("SEARCH-REF-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+        assertNotNull(flowId);
+
+        // Wait briefly for the flow to be persisted
+        try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
+
+        // Search by reference
+        @SuppressWarnings("unchecked")
+        var searchResult = rest.get()
+                .uri("/flows/enigio-instrument/search?reference=SEARCH-REF-001")
+                .retrieve()
+                .body(Map.class);
+
+        assertNotNull(searchResult);
+        assertEquals("enigio-instrument", searchResult.get("flowType"));
+        assertTrue(((Number) searchResult.get("count")).intValue() >= 1,
+                "Should find at least 1 flow with reference SEARCH-REF-001");
+    }
+
+    @Test
+    @Order(21)
+    @DisplayName("Search API — find flows by @SearchAttribute instrumentType")
+    void searchFlows_byInstrumentType() {
+        // Start flows with different instrument types
+        startInstrumentFlow("SEARCH-TYPE-PN", InstrumentType.PROMISSORY_NOTE);
+        try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
+
+        @SuppressWarnings("unchecked")
+        var searchResult = rest.get()
+                .uri("/flows/enigio-instrument/search?instrumentType=PROMISSORY_NOTE")
+                .retrieve()
+                .body(Map.class);
+
+        assertNotNull(searchResult);
+        assertTrue(((Number) searchResult.get("count")).intValue() >= 1,
+                "Should find flows with instrumentType PROMISSORY_NOTE");
+    }
+
+    @Test
+    @Order(22)
+    @DisplayName("Search API — combined search attributes")
+    void searchFlows_combined() {
+        String uniqueRef = "SEARCH-COMBO-" + System.currentTimeMillis();
+        startInstrumentFlow(uniqueRef, InstrumentType.BILL_OF_EXCHANGE);
+        try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
+
+        @SuppressWarnings("unchecked")
+        var searchResult = rest.get()
+                .uri("/flows/enigio-instrument/search?reference=" + uniqueRef + "&instrumentType=BILL_OF_EXCHANGE")
+                .retrieve()
+                .body(Map.class);
+
+        assertNotNull(searchResult);
+        assertEquals(1, ((Number) searchResult.get("count")).intValue(),
+                "Should find exactly 1 flow matching both attributes");
+    }
 }

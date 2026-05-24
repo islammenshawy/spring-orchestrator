@@ -1,5 +1,8 @@
 package com.orchestrator.starter.autoconfigure;
 
+import com.orchestrator.starter.annotation.SearchAttribute;
+import com.orchestrator.starter.flow.FlowTypeDescriptor;
+import com.orchestrator.starter.flow.FlowTypeRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -7,7 +10,9 @@ import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.index.Index;
+import org.springframework.data.mongodb.core.mapping.Document;
 
+import java.lang.reflect.Field;
 import java.time.Duration;
 
 /**
@@ -22,11 +27,18 @@ import java.time.Duration;
  * so we create all indexes programmatically here.
  */
 @Slf4j
-@RequiredArgsConstructor
 public class IndexInitializer {
 
     private final MongoTemplate mongoTemplate;
     private final OrchestratorProperties props;
+    private final FlowTypeRegistry flowTypeRegistry;
+
+    public IndexInitializer(MongoTemplate mongoTemplate, OrchestratorProperties props,
+                            FlowTypeRegistry flowTypeRegistry) {
+        this.mongoTemplate = mongoTemplate;
+        this.props = props;
+        this.flowTypeRegistry = flowTypeRegistry;
+    }
 
     @EventListener(ApplicationReadyEvent.class)
     public void createIndexes() {
@@ -107,8 +119,43 @@ public class IndexInitializer {
                             .on("claimedAt", Sort.Direction.ASC));
         }
 
+        // ===== Search attribute indexes =====
+        createSearchAttributeIndexes();
+
         // ===== Consumer offset store =====
         // Uses _id as composite key (consumerGroup|topic|partition) — already indexed
+    }
+
+    /**
+     * Scan entity classes for @SearchAttribute fields and create indexes.
+     */
+    private void createSearchAttributeIndexes() {
+        if (flowTypeRegistry == null) return;
+
+        for (FlowTypeDescriptor descriptor : flowTypeRegistry.getAll()) {
+            Class<?> entityClass = descriptor.getEntityClass();
+            if (entityClass == null || entityClass == Object.class) continue;
+
+            String collection = resolveCollectionName(entityClass);
+            if (collection == null) continue;
+
+            for (Field field : entityClass.getDeclaredFields()) {
+                if (field.isAnnotationPresent(SearchAttribute.class)) {
+                    String fieldName = field.getName();
+                    ensureIndex(collection, fieldName + "_search_idx",
+                            new Index().on(fieldName, Sort.Direction.ASC));
+                    log.info("[Index] Search attribute index on {}.{}", collection, fieldName);
+                }
+            }
+        }
+    }
+
+    private String resolveCollectionName(Class<?> entityClass) {
+        Document doc = entityClass.getAnnotation(Document.class);
+        if (doc != null && !doc.collection().isEmpty()) return doc.collection();
+        // Fallback: lowercase class name
+        return entityClass.getSimpleName().substring(0, 1).toLowerCase()
+                + entityClass.getSimpleName().substring(1);
     }
 
     /**

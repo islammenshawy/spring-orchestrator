@@ -36,6 +36,8 @@ public class FlowEndpointAutoConfiguration {
         @Autowired private FlowTypeRegistry registry;
         @Autowired private ObjectMapper objectMapper;
         @Autowired(required = false) private jakarta.validation.Validator validator;
+        @org.springframework.beans.factory.annotation.Value("${orchestrator.search.api-enabled:false}")
+        private boolean searchApiEnabled;
 
         @PostConstruct
         void init() {
@@ -178,6 +180,33 @@ public class FlowEndpointAutoConfiguration {
                         "currentStep", cancelled.getCurrentStep() != null ? cancelled.getCurrentStep() : "",
                         "message", "Flow cancelled. " + cancelled.getErrorMessage()
                 ));
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            }
+        }
+
+        /**
+         * Search flows by @SearchAttribute fields.
+         * GET /flows/{flowType}/search?field=value&field2=value2
+         * Enabled via orchestrator.search.api-enabled=true (default: false)
+         */
+        @GetMapping("/{flowType}/search")
+        public ResponseEntity<?> searchFlows(
+                @PathVariable String flowType,
+                @RequestParam Map<String, String> params) {
+            if (!searchApiEnabled) {
+                return ResponseEntity.status(403).body(Map.of(
+                        "error", "Search API is disabled. Set orchestrator.search.api-enabled=true"));
+            }
+            try {
+                FlowTypeDescriptor desc = registry.resolve(flowType);
+                FlowOrchestrator orch = (FlowOrchestrator) desc.getOrchestrator();
+                var searchParams = new java.util.LinkedHashMap<String, Object>(params);
+                var results = orch.findFlows(searchParams);
+                return ResponseEntity.ok(Map.of(
+                        "flowType", flowType,
+                        "count", results.size(),
+                        "flows", results));
             } catch (IllegalArgumentException e) {
                 return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
             }

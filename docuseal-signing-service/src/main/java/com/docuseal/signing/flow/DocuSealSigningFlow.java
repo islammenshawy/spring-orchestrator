@@ -116,6 +116,13 @@ public class DocuSealSigningFlow extends FlowDefinition<SigningFlowEntity> {
     }
 
     @Step(order = 3)
+    public void reviewPeriod(SigningFlowEntity flow) {
+        log.info("[{}] Party A signed — 30s review period before notifying Party B", flow.getId());
+        sleep(flow, Duration.ofSeconds(30));
+        log.info("[{}] Review period complete", flow.getId());
+    }
+
+    @Step(order = 4)
     public void enrichPartyB(SigningFlowEntity flow) {
         log.info("[{}] Enriching Party B fields with Party A's values", flow.getId());
 
@@ -141,7 +148,7 @@ public class DocuSealSigningFlow extends FlowDefinition<SigningFlowEntity> {
         log.info("[{}] Party B notified and signing link sent to {}", flow.getId(), flow.getPartyBEmail());
     }
 
-    @Step(order = 4)
+    @Step(order = 5)
     @SuppressWarnings("unchecked")
     public void pollPartyB(SigningFlowEntity flow) {
         log.info("[{}] Polling Party B signing status (submitter {})",
@@ -177,7 +184,7 @@ public class DocuSealSigningFlow extends FlowDefinition<SigningFlowEntity> {
                 Duration.ofHours(48));
     }
 
-    @Step(order = 5)
+    @Step(order = 6)
     public void sendConfirmation(SigningFlowEntity flow) {
         log.info("[{}] Sending completion confirmation to both parties", flow.getId());
 

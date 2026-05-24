@@ -21,6 +21,8 @@ spring.cloud.openfeign:
 orchestrator:
   kafka:
     command-topic: dis.test.commands
+  search:
+    api-enabled: true
   retry:
     initial-interval-ms: 1000
     multiplier: 1.5

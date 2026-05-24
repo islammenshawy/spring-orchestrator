@@ -1,6 +1,7 @@
 package com.dis.instrument.flow;
 
 import com.dis.instrument.model.*;
+import com.orchestrator.starter.annotation.SearchAttribute;
 import com.orchestrator.starter.domain.AbstractFlow;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -28,6 +29,7 @@ public class EnigioInstrumentEntity extends AbstractFlow {
 
     // ===== Input — from downstream request =====
 
+    @SearchAttribute
     @NotBlank(message = "reference is required")
     private String reference;
 
@@ -36,6 +38,7 @@ public class EnigioInstrumentEntity extends AbstractFlow {
 
     private String content; // document body / terms text
 
+    @SearchAttribute
     @NotNull(message = "instrumentType is required")
     private InstrumentType instrumentType;
 

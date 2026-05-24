@@ -84,6 +84,10 @@ public interface OrchestratorFlow {
     default Instant getExpiresAt() { return null; }
     default void setExpiresAt(Instant expiresAt) {}
 
+    /** Target wake time for durable sleep. Set by sleep()/sleepUntil(). */
+    default Instant getSleepUntil() { return null; }
+    default void setSleepUntil(Instant sleepUntil) {}
+
     /**
      * Tracks which steps have completed successfully.
      * Managed by the library — users don't interact with this.

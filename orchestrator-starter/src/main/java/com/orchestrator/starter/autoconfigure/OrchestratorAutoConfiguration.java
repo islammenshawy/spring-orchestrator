@@ -89,8 +89,10 @@ public class OrchestratorAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     @org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass("io.mongock.runner.springboot.EnableMongock")
-    public IndexInitializer orchestratorIndexInitializer(MongoTemplate mongoTemplate, OrchestratorProperties props) {
-        return new IndexInitializer(mongoTemplate, props);
+    public IndexInitializer orchestratorIndexInitializer(MongoTemplate mongoTemplate, OrchestratorProperties props,
+                                                          @Autowired(required = false)
+                                                          com.orchestrator.starter.flow.FlowTypeRegistry flowTypeRegistry) {
+        return new IndexInitializer(mongoTemplate, props, flowTypeRegistry);
     }
 
     @Bean

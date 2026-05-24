@@ -230,7 +230,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         try {
             executeWithTimeout(handler, flow, stepName);
         } catch (WaitingStepException e) {
-            StepOutcome outcome = e.isParked() ? StepOutcome.PARKED : StepOutcome.WAITING;
+            StepOutcome outcome = (e.isParked() || e.getWaitMode() == WaitingStepException.WaitMode.SLEEPING)
+                    ? StepOutcome.PARKED : StepOutcome.WAITING;
             metrics.stepExecution(flowType, stepName, outcome.name(),
                     Duration.between(startedAt, Instant.now()));
             logStep(flowId, stepName, outcome.name(), flow.getRetryCount(),
@@ -282,6 +283,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setRecoveryCount(0);
         flow.setWaitingSince(null);
         flow.setExpiresAt(null);
+        flow.setSleepUntil(null);
         flow.setUpdatedAt(Instant.now());
 
         // Save flow with version conflict retry.
@@ -690,7 +692,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      */
     private void handleWaitingStep(F flow, WaitingStepException e) {
         String errorMsg = e.getMessage() != null ? e.getMessage() : "waiting for external event";
-        FlowStatus targetStatus = e.isParked() ? FlowStatus.PARKED : FlowStatus.WAITING_RETRY;
+        boolean isSleeping = e.getWaitMode() == WaitingStepException.WaitMode.SLEEPING;
+        // SLEEPING uses PARKED status but with nextRetryAt (scheduler wakes it)
+        FlowStatus targetStatus = (e.isParked() || isSleeping) ? FlowStatus.PARKED : FlowStatus.WAITING_RETRY;
         Instant now = Instant.now();
 
         if (mongoTemplate != null && entityClass != null) {
@@ -701,11 +705,16 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             // Set waitingSince and expiresAt only on first entry — don't reset on re-activation
             if (flow.getWaitingSince() == null) {
                 fields.put("waitingSince", now);
-                fields.put("expiresAt", now.plus(e.getExpiry()));
+                // SLEEPING has no expiry — the sleep IS the intended wait
+                if (!isSleeping) {
+                    fields.put("expiresAt", now.plus(e.getExpiry()));
+                }
             }
-            // Polling mode: set nextRetryAt so scheduler knows when to re-deliver
-            if (!e.isParked() && e.getPollInterval() != null) {
+            // Polling and sleeping: set nextRetryAt so scheduler re-delivers
+            if (e.getWaitMode() == WaitingStepException.WaitMode.POLLING && e.getPollInterval() != null) {
                 fields.put("nextRetryAt", now.plus(e.getPollInterval()));
+            } else if (isSleeping) {
+                fields.put("nextRetryAt", now.plus(e.getExpiry()));
             }
             updateFlowPartial(flow.getId(), fields);
         } else {
@@ -714,10 +723,14 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             flow.setUpdatedAt(now);
             if (flow.getWaitingSince() == null) {
                 flow.setWaitingSince(now);
-                flow.setExpiresAt(now.plus(e.getExpiry()));
+                if (!isSleeping) {
+                    flow.setExpiresAt(now.plus(e.getExpiry()));
+                }
             }
-            if (!e.isParked() && e.getPollInterval() != null) {
+            if (e.getWaitMode() == WaitingStepException.WaitMode.POLLING && e.getPollInterval() != null) {
                 flow.setNextRetryAt(now.plus(e.getPollInterval()));
+            } else if (isSleeping) {
+                flow.setNextRetryAt(now.plus(e.getExpiry()));
             }
             saveFlow(flow);
         }
@@ -932,6 +945,25 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      */
     private void saveFlow(F flow) {
         flowRepository.save(flow);
+    }
+
+    /**
+     * Search flows by @SearchAttribute fields.
+     * Builds a MongoDB query from the provided key-value pairs.
+     */
+    public List<F> findFlows(java.util.Map<String, Object> searchAttributes) {
+        if (mongoTemplate == null || entityClass == null || searchAttributes == null || searchAttributes.isEmpty()) {
+            return List.of();
+        }
+        var criteria = new org.springframework.data.mongodb.core.query.Criteria();
+        var criteriaList = new java.util.ArrayList<org.springframework.data.mongodb.core.query.Criteria>();
+        searchAttributes.forEach((k, v) ->
+                criteriaList.add(org.springframework.data.mongodb.core.query.Criteria.where(k).is(v)));
+        var query = org.springframework.data.mongodb.core.query.Query.query(
+                new org.springframework.data.mongodb.core.query.Criteria().andOperator(
+                        criteriaList.toArray(new org.springframework.data.mongodb.core.query.Criteria[0])));
+        query.limit(100);
+        return mongoTemplate.find(query, entityClass);
     }
 
     private String serialize(F flow) {

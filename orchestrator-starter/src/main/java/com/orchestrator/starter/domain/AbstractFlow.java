@@ -74,6 +74,9 @@ public abstract class AbstractFlow implements OrchestratorFlow {
     /** Absolute deadline for the current waiting step. Set by waitUntil()/pollUntil() on first park. */
     private Instant expiresAt;
 
+    /** Target wake time for durable sleep. Set by sleep()/sleepUntil(), cleared on step success. */
+    private Instant sleepUntil;
+
     /** Pod ID that claimed this flow for recovery processing. Null = unclaimed. */
     private String claimedBy;
 

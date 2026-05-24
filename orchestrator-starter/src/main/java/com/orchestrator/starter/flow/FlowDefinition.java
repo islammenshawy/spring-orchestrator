@@ -6,6 +6,7 @@ import com.orchestrator.starter.exception.WaitingStepException;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -92,5 +93,39 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
             throw new WaitingStepException("Waiting for condition",
                     WaitingStepException.WaitMode.POLLING, pollInterval, expiry);
         }
+    }
+
+    /**
+     * Durable sleep — parks the flow for the given duration, then continues.
+     * Survives container restarts. The scheduler wakes the flow when the
+     * time elapses.
+     *
+     * <pre>
+     * sleep(flow, Duration.ofHours(1));
+     * // code here runs after 1 hour
+     * </pre>
+     */
+    protected void sleep(F flow, Duration duration) {
+        sleepUntil(flow, Instant.now().plus(duration));
+    }
+
+    /**
+     * Durable sleep — parks the flow until the given instant, then continues.
+     *
+     * <pre>
+     * sleepUntil(flow, Instant.parse("2026-06-01T00:00:00Z"));
+     * </pre>
+     */
+    protected void sleepUntil(F flow, Instant wakeAt) {
+        // On re-delivery after timer fires: sleep is done, continue
+        if (flow.getSleepUntil() != null && !Instant.now().isBefore(flow.getSleepUntil())) {
+            return;
+        }
+        // First call or timer hasn't fired yet: park
+        flow.setSleepUntil(wakeAt);
+        checkpoint(flow);
+        Duration expiry = Duration.between(Instant.now(), wakeAt);
+        throw new WaitingStepException("Sleeping until " + wakeAt,
+                WaitingStepException.WaitMode.SLEEPING, null, expiry);
     }
 }
