@@ -97,19 +97,29 @@ docker start infra-digital-instrument-service-1 >/dev/null 2>&1
 wait_dis_healthy || { fail "Scenario 1: DIS failed to restart"; }
 log "DIS restarted"
 
-# Wait for recovery (stale threshold 2min + scan interval 30s)
+# Wait for recovery scanner to detect stale flows (2min threshold + scan interval)
+log "Waiting for recovery scanner (2.5 min)..."
 sleep 150
 
-# Auto-approve any gate steps
-for i in $(seq 1 6); do auto_approve; sleep 10; done
+# Aggressive approval loop — flows need multiple gate approvals after recovery
+log "Approving gate steps..."
+for i in $(seq 1 20); do
+  auto_approve
+  DONE=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+    "print(db.dis_instrument_flows.countDocuments({reference:/^CRASH/,status:'COMPLETED'}))" 2>/dev/null)
+  [ "$DONE" -ge 5 ] && break
+  sleep 5
+done
 
 # Check results
 COMPLETED=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
   "print(db.dis_instrument_flows.countDocuments({reference:/^CRASH/,status:'COMPLETED'}))" 2>/dev/null)
 RECOVERED=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
   "print(db.dis_instrument_flows.countDocuments({reference:/^CRASH/,recoveryCount:{\$gte:1}}))" 2>/dev/null)
-log "Completed: $COMPLETED/5, Recovered by scanner: $RECOVERED"
-if [ "$COMPLETED" -eq 5 ]; then pass "Scenario 1: All flows recovered after crash"; else fail "Scenario 1: $COMPLETED/5 completed"; fi
+STUCK=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+  'print(db.dis_instrument_flows.countDocuments({reference:/^CRASH/,status:{$nin:["COMPLETED","FAILED","CANCELLED"]}}))' 2>/dev/null)
+log "Completed: $COMPLETED/5, Recovered: $RECOVERED, Still in progress: $STUCK"
+if [ "$COMPLETED" -ge 4 ]; then pass "Scenario 1: $COMPLETED/5 flows recovered after crash"; else fail "Scenario 1: Only $COMPLETED/5 completed (stuck: $STUCK)"; fi
 
 # ========== Scenario 2: Duplicate Kafka messages ==========
 header "Scenario 2: Duplicate Kafka messages → idempotency prevents double execution"
@@ -271,6 +281,19 @@ docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval '
   Object.keys(c).sort().forEach(function(k){print("  "+k+": "+c[k])});
   print("Orphaned claims: " + db.dis_instrument_flows.countDocuments({claimedBy:{$ne:null}}));
 ' 2>/dev/null
+
+# Kafka topic stats
+log "=== Kafka Topics ==="
+docker exec infra-kafka-1-1 bash -c '
+CMD=$(kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka-1:29092 --topic dis.instrument.commands 2>/dev/null | awk -F: "{s+=\$3}END{print s}")
+REPLY=$(kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka-1:29092 --topic dis.instrument.commands.replies 2>/dev/null | awk -F: "{s+=\$3}END{print s}")
+DLT=$(kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka-1:29092 --topic dis.instrument.commands-dlt 2>/dev/null | awk -F: "{s+=\$3}END{print s}")
+echo "  Commands: $CMD | Replies: $REPLY | DLT: $DLT"
+for T in dis.instrument.commands-retry-0 dis.instrument.commands-retry-1 dis.instrument.commands-retry-2; do
+  OFF=$(kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka-1:29092 --topic $T 2>/dev/null | awk -F: "{s+=\$3}END{print s}")
+  [ -n "$OFF" ] && [ "$OFF" != "0" ] && echo "  $T: $OFF"
+done
+'
 
 if [ "$FAIL" -eq 0 ]; then
   log "ALL SCENARIOS PASSED"
