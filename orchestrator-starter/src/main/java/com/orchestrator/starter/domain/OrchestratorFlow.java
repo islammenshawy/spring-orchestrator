@@ -92,6 +92,22 @@ public interface OrchestratorFlow {
     default java.util.List<PendingSignal> getPendingSignals() { return null; }
     default void setPendingSignals(java.util.List<PendingSignal> signals) {}
 
+    /** Child flow IDs started from this flow. */
+    default java.util.List<String> getChildFlowIds() { return null; }
+    default void setChildFlowIds(java.util.List<String> ids) {}
+
+    /** Parent flow ID (set on child flows). */
+    default String getParentFlowId() { return null; }
+    default void setParentFlowId(String id) {}
+
+    /** Parent flow type (for routing). */
+    default String getParentFlowType() { return null; }
+    default void setParentFlowType(String type) {}
+
+    /** Parent step name (which step to re-activate). */
+    default String getParentStepName() { return null; }
+    default void setParentStepName(String step) {}
+
     /**
      * Tracks which steps have completed successfully.
      * Managed by the library — users don't interact with this.

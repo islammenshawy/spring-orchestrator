@@ -573,6 +573,72 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
     }
 
+    // ========== Child Workflow Lifecycle ==========
+
+    /**
+     * Re-activate parent flow when a child completes, fails, or is cancelled.
+     * No-op if the flow has no parent.
+     */
+    @SuppressWarnings("unchecked")
+    private void notifyParentOnCompletion(F flow) {
+        String parentId = flow.getParentFlowId();
+        String parentType = flow.getParentFlowType();
+        String parentStep = flow.getParentStepName();
+        if (parentId == null || parentType == null || parentStep == null) return;
+
+        try {
+            FlowTypeDescriptor parentDesc = flowTypeRegistry.get(parentType);
+            if (parentDesc == null) {
+                log.warn("[Child] Parent flow type '{}' not found — cannot notify", parentType);
+                return;
+            }
+            String partitionKey = parentId;
+            com.orchestrator.starter.kafka.StepCommandMessage cmd =
+                    com.orchestrator.starter.kafka.StepCommandMessage.builder()
+                            .eventId(java.util.UUID.randomUUID().toString())
+                            .flowId(parentId)
+                            .stepName(parentStep)
+                            .flowType(parentType)
+                            .build();
+            kafkaTemplate.send(parentDesc.getCommandTopic(), partitionKey,
+                    objectMapper.writeValueAsString(cmd)).get();
+            log.info("[Child] Notified parent {} at step {} (child {} {})",
+                    parentId, parentStep, flow.getId(), flow.getStatus());
+        } catch (Exception e) {
+            log.error("[Child] Failed to notify parent {}: {}", parentId, e.getMessage());
+        }
+    }
+
+    private FlowTypeRegistry flowTypeRegistry;
+
+    public void setFlowTypeRegistry(FlowTypeRegistry registry) {
+        this.flowTypeRegistry = registry;
+    }
+
+    /**
+     * Cancel all child flows when parent is cancelled.
+     * No-op if the flow has no children.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void cancelChildFlows(F flow) {
+        var childIds = flow.getChildFlowIds();
+        if (childIds == null || childIds.isEmpty()) return;
+
+        log.info("[Child] Cascading cancellation to {} children of flow {}", childIds.size(), flow.getId());
+        for (String childId : childIds) {
+            for (FlowTypeDescriptor desc : flowTypeRegistry.getAll()) {
+                var repo = desc.getRepository();
+                if (repo == null) continue;
+                var childOpt = repo.findById(childId);
+                if (childOpt.isPresent()) {
+                    FlowOrchestrator childOrch = (FlowOrchestrator) desc.getOrchestrator();
+                    childOrch.cancelFlow(childId, "Parent cancelled");
+                    break;
+                }
+            }
+        }
+    }
+
     // ========== Cancellation ==========
 
     /**
@@ -646,6 +712,10 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setUpdatedAt(Instant.now());
         saveFlow(flow);
         log.info("[Saga] Flow {} cancelled", flow.getId());
+        notifyParentOnCompletion(flow);
+
+        // Cascade cancellation to children
+        cancelChildFlows(flow);
     }
 
     // ========== Compensation (what makes this a Saga) ==========
@@ -740,6 +810,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
             metrics.flowCompleted(flowType);
             log.info("[Saga] Flow {} completed", flow.getId());
+            notifyParentOnCompletion(flow);
             return;
         }
 

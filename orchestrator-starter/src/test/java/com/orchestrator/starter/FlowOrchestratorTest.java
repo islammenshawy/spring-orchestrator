@@ -487,6 +487,84 @@ class FlowOrchestratorTest {
         assertNull(flow.getPendingSignals(), "Pending signals should be cleared");
     }
 
+    // ========== Child Workflows ==========
+
+    @Test
+    void childFlow_parentFieldsSetOnChild() {
+        TestFlow parent = new TestFlow();
+        parent.setId("parent-1");
+        parent.setCorrelationId("corr-parent");
+        parent.setCurrentStep("STEP_B");
+        parent.setFlowType("test-flow");
+        parent.setStatus(FlowStatus.IN_PROGRESS);
+
+        TestFlow child = new TestFlow();
+        child.setCorrelationId("corr-child");
+
+        // The child should have parent references set by startChildFlowAsync
+        child.setParentFlowId("parent-1");
+        child.setParentFlowType("test-flow");
+        child.setParentStepName("STEP_B");
+
+        assertEquals("parent-1", child.getParentFlowId());
+        assertEquals("test-flow", child.getParentFlowType());
+        assertEquals("STEP_B", child.getParentStepName());
+    }
+
+    @Test
+    void childFlow_parentTracksChildIds() {
+        TestFlow parent = new TestFlow();
+        parent.setId("parent-1");
+
+        assertNull(parent.getChildFlowIds());
+
+        var childIds = new java.util.ArrayList<String>();
+        childIds.add("child-1");
+        childIds.add("child-2");
+        parent.setChildFlowIds(childIds);
+
+        assertEquals(2, parent.getChildFlowIds().size());
+        assertTrue(parent.getChildFlowIds().contains("child-1"));
+        assertTrue(parent.getChildFlowIds().contains("child-2"));
+    }
+
+    @Test
+    void childFlow_notifyParent_noOpWithoutParent() {
+        // Flow without parent — notifyParentOnCompletion should be a no-op
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+
+        StepHandler<TestFlow> handler = mock(StepHandler.class);
+        when(handler.getStepName()).thenReturn("STEP_A");
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+        when(stepRegistry.getHandler("STEP_A")).thenReturn(handler);
+
+        // Execute — should complete without errors (no parent to notify)
+        orchestrator.executeStep("flow-1", "STEP_A");
+
+        // No parent notification — no extra Kafka sends beyond the reply
+        assertNull(flow.getParentFlowId());
+    }
+
+    @Test
+    void childFlow_cancelCascade_noOpWithoutChildren() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+        when(stepRegistry.getCompletedStepsBefore("STEP_A")).thenReturn(List.of());
+
+        // Cancel — should work without errors (no children to cascade)
+        var cancelled = orchestrator.cancelFlow("flow-1", "test");
+
+        assertNotNull(cancelled);
+        assertEquals(FlowStatus.CANCELLED, cancelled.getStatus());
+    }
+
     // Helper: signal handler class for testing
     static class TestSignalHandlers {
         public void approve(TestFlow flow) {

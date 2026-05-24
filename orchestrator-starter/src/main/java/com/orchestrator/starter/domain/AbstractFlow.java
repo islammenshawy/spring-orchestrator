@@ -80,6 +80,18 @@ public abstract class AbstractFlow implements OrchestratorFlow {
     /** Queued signals waiting to execute between steps. Null/empty = none pending. */
     private java.util.List<PendingSignal> pendingSignals;
 
+    /** IDs of child flows started from this flow. */
+    private java.util.List<String> childFlowIds;
+
+    /** Parent flow ID — set on child flows. Null for top-level flows. */
+    private String parentFlowId;
+
+    /** Parent flow type — for routing re-activation to correct orchestrator. */
+    private String parentFlowType;
+
+    /** Parent step name — which step to re-publish when child completes. */
+    private String parentStepName;
+
     /** Pod ID that claimed this flow for recovery processing. Null = unclaimed. */
     private String claimedBy;
 

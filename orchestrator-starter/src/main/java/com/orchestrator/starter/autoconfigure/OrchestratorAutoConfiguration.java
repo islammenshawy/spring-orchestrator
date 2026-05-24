@@ -162,14 +162,15 @@ public class OrchestratorAutoConfiguration {
 
         FlowTypeRegistry registry = new FlowTypeRegistry(descriptors);
 
-        // Wire validator into all orchestrators for startFlow() validation
-        if (validator != null) {
-            registry.getAll().forEach(d -> {
-                if (d.getOrchestrator() != null) {
+        // Wire registry + validator into all orchestrators
+        registry.getAll().forEach(d -> {
+            if (d.getOrchestrator() != null) {
+                ((FlowOrchestrator) d.getOrchestrator()).setFlowTypeRegistry(registry);
+                if (validator != null) {
                     ((FlowOrchestrator) d.getOrchestrator()).setValidator(validator);
                 }
-            });
-        }
+            }
+        });
 
         log.info("Multi-flow registry: {} flow type(s): {}",
                 registry.size(), registry.getFlowTypeNames());

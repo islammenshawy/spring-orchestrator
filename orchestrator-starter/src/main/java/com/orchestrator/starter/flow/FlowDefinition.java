@@ -1,5 +1,6 @@
 package com.orchestrator.starter.flow;
 
+import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.exception.WaitingStepException;
@@ -7,6 +8,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -46,6 +49,10 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
     @Autowired(required = false)
     @SuppressWarnings("unchecked")
     private OrchestratorFlowRepository rawRepository;
+
+    @org.springframework.context.annotation.Lazy
+    @Autowired(required = false)
+    private FlowTypeRegistry flowTypeRegistry;
 
     /**
      * Saves the flow's current state to MongoDB immediately.
@@ -127,5 +134,117 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
         Duration expiry = Duration.between(Instant.now(), wakeAt);
         throw new WaitingStepException("Sleeping until " + wakeAt,
                 WaitingStepException.WaitMode.SLEEPING, null, expiry);
+    }
+
+    // ========== Child Workflows ==========
+
+    /**
+     * Blocking — starts a child flow and parks until it completes.
+     *
+     * <pre>
+     * startChildFlow(flow, child, Duration.ofHours(24));
+     * // code here runs after child completes
+     * </pre>
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    protected String startChildFlow(F flow, OrchestratorFlow child, Duration expiry) {
+        String childId = startChildFlowAsync(flow, child, expiry);
+        awaitChildren(flow, expiry);
+        return childId;
+    }
+
+    /**
+     * Async — starts a child flow without parking. Must call
+     * {@link #awaitChildren(OrchestratorFlow, Duration)} later.
+     *
+     * <pre>
+     * startChildFlowAsync(flow, child1, Duration.ofHours(24));
+     * startChildFlowAsync(flow, child2, Duration.ofHours(24));
+     * awaitChildren(flow, Duration.ofHours(24));
+     * </pre>
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    protected String startChildFlowAsync(F flow, OrchestratorFlow child, Duration expiry) {
+        if (flowTypeRegistry == null) {
+            throw new IllegalStateException("FlowTypeRegistry not available — cannot start child flows");
+        }
+
+        // Idempotency: check if this child was already started (re-delivery)
+        List<String> childIds = flow.getChildFlowIds();
+        if (childIds == null) {
+            childIds = new ArrayList<>();
+            flow.setChildFlowIds(childIds);
+        }
+
+        // Find existing child by correlationId match
+        String childCorrelation = child.getCorrelationId();
+        if (childCorrelation != null) {
+            for (String existingId : childIds) {
+                // Child already started — skip
+                return existingId;
+            }
+        }
+
+        // Set parent references on child
+        child.setParentFlowId(flow.getId());
+        child.setParentFlowType(flow.getFlowType());
+        child.setParentStepName(flow.getCurrentStep());
+
+        // Resolve child's orchestrator by entity class
+        FlowTypeDescriptor childDesc = flowTypeRegistry.getByEntityClass(child.getClass());
+        if (childDesc == null) {
+            throw new IllegalArgumentException("No flow type registered for entity " + child.getClass().getSimpleName());
+        }
+
+        // Start child flow
+        FlowOrchestrator childOrch = (FlowOrchestrator) childDesc.getOrchestrator();
+        OrchestratorFlow started = childOrch.startFlow(child);
+
+        // Track child ID on parent
+        childIds.add(started.getId());
+        flow.setChildFlowIds(childIds);
+        checkpoint(flow);
+
+        return started.getId();
+    }
+
+    /**
+     * Parks until ALL child flows have completed or failed.
+     * Call after one or more {@link #startChildFlowAsync} calls.
+     *
+     * <pre>
+     * startChildFlowAsync(flow, child1, expiry);
+     * startChildFlowAsync(flow, child2, expiry);
+     * awaitChildren(flow, Duration.ofHours(24));
+     * // all children done
+     * </pre>
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    protected void awaitChildren(F flow, Duration expiry) {
+        List<String> childIds = flow.getChildFlowIds();
+        if (childIds == null || childIds.isEmpty()) return;
+
+        // Check all children's status
+        for (String childId : childIds) {
+            // Try to find via any registered flow type
+            for (FlowTypeDescriptor desc : flowTypeRegistry.getAll()) {
+                var repo = desc.getRepository();
+                if (repo == null) continue;
+                var childOpt = repo.findById(childId);
+                if (childOpt.isPresent()) {
+                    OrchestratorFlow child = (OrchestratorFlow) childOpt.get();
+                    FlowStatus childStatus = child.getStatus();
+                    if (childStatus != FlowStatus.COMPLETED && childStatus != FlowStatus.FAILED
+                            && childStatus != FlowStatus.CANCELLED) {
+                        // At least one child still running — park
+                        throw new WaitingStepException(
+                                "Waiting for child " + childId + " (status: " + childStatus + ")",
+                                WaitingStepException.WaitMode.PARKED, null, expiry);
+                    }
+                    break;
+                }
+            }
+        }
+        // All children completed/failed — continue
     }
 }
