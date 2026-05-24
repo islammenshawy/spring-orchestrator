@@ -1,0 +1,42 @@
+server:
+  port: 8089
+
+spring:
+  application:
+    name: docuseal-signing-service
+  mongodb:
+    uri: mongodb://localhost:27117/docuseal_signing
+
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.starttls.enable: true
+
+docuseal:
+  api-key: ${DOCUSEAL_API_KEY:k6udyskk8vdeu3pYJRWTnqFzY1KRRnJQUcJ1SuFACqi}
+  base-url: https://api.docuseal.com
+  template-id: 3797104
+  poll-interval-seconds: 30
+  expiry-hours: 72
+
+signing:
+  party-a-email: prog.islam@gmail.com
+  party-b-email: islam_menshawy@yahoo.com
+
+# Orchestrator config
+orchestrator:
+  kafka:
+    command-topic: docuseal.signing.commands
+    reply-topic: docuseal.signing.commands.replies
+  recovery:
+    scan-interval-ms: 30000
+    stale-threshold-minutes: 2
+
+spring.kafka:
+  bootstrap-servers: localhost:9092
+  consumer:
+    auto-offset-reset: earliest
