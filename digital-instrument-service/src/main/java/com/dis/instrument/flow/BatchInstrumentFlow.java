@@ -63,7 +63,7 @@ public class BatchInstrumentFlow extends FlowDefinition<BatchInstrumentEntity> {
             recipient.setEmail("recipient@batch.com");
             child.setRecipient(recipient);
 
-            startChildFlowAsync(batch, "enigio-instrument", child, Duration.ofHours(24));
+            startChildFlowAsync(batch, EnigioInstrumentFlow.class, child, Duration.ofHours(24));
         }
 
         log.info("[{}] Started {} children, awaiting completion", batch.getId(), batch.getChildFlowIds().size());

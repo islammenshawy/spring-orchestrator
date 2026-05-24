@@ -14,10 +14,12 @@ public class FlowTypeRegistry {
 
     private final Map<String, FlowTypeDescriptor> byFlowType;
     private final Map<Class<?>, FlowTypeDescriptor> byEntityClass;
+    private final Map<Class<?>, FlowTypeDescriptor> byFlowDefClass;
 
     public FlowTypeRegistry(Collection<FlowTypeDescriptor> descriptors) {
         this.byFlowType = new LinkedHashMap<>();
         this.byEntityClass = new LinkedHashMap<>();
+        this.byFlowDefClass = new LinkedHashMap<>();
         for (FlowTypeDescriptor d : descriptors) {
             if (byFlowType.containsKey(d.getFlowType())) {
                 throw new IllegalStateException(
@@ -27,6 +29,9 @@ public class FlowTypeRegistry {
             }
             byFlowType.put(d.getFlowType(), d);
             byEntityClass.put(d.getEntityClass(), d);
+            if (d.getFlowDefinitionClass() != null) {
+                byFlowDefClass.put(d.getFlowDefinitionClass(), d);
+            }
         }
     }
 
@@ -38,6 +43,11 @@ public class FlowTypeRegistry {
     /** Lookup by entity class. Returns null if not found. */
     public FlowTypeDescriptor getByEntityClass(Class<?> entityClass) {
         return byEntityClass.get(entityClass);
+    }
+
+    /** Lookup by @Flow definition class. Returns null if not found. */
+    public FlowTypeDescriptor getByFlowDefinitionClass(Class<? extends FlowDefinition> flowDefClass) {
+        return byFlowDefClass.get(flowDefClass);
     }
 
     /** All registered flow types. */

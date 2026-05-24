@@ -142,19 +142,20 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
      * Blocking — starts a child flow and parks until it completes.
      *
      * <pre>
-     * startChildFlow(flow, "enigio-instrument", child, Duration.ofHours(24));
+     * startChildFlow(flow, EnigioInstrumentFlow.class, child, Duration.ofHours(24));
      * // code here runs after child completes
      * </pre>
      *
-     * @param flow       parent flow entity
-     * @param childFlowType  flow type name the child runs through (e.g. "enigio-instrument")
-     * @param child      child flow entity — set business fields only, library handles the rest
-     * @param expiry     max time to wait for child completion
+     * @param flow           parent flow entity
+     * @param childFlowClass the @Flow class the child runs through (compile-time validated)
+     * @param child          child flow entity — set business fields only, library handles the rest
+     * @param expiry         max time to wait for child completion
      * @return child flow ID
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    protected String startChildFlow(F flow, String childFlowType, OrchestratorFlow child, Duration expiry) {
-        String childId = startChildFlowAsync(flow, childFlowType, child, expiry);
+    protected String startChildFlow(F flow, Class<? extends FlowDefinition> childFlowClass,
+                                     OrchestratorFlow child, Duration expiry) {
+        String childId = startChildFlowAsync(flow, childFlowClass, child, expiry);
         awaitChildren(flow, expiry);
         return childId;
     }
@@ -164,8 +165,8 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
      * {@link #awaitChildren} later.
      *
      * <pre>
-     * startChildFlowAsync(flow, "enigio-instrument", child1, Duration.ofHours(24));
-     * startChildFlowAsync(flow, "enigio-instrument", child2, Duration.ofHours(24));
+     * startChildFlowAsync(flow, EnigioInstrumentFlow.class, child1, Duration.ofHours(24));
+     * startChildFlowAsync(flow, EnigioInstrumentFlow.class, child2, Duration.ofHours(24));
      * awaitChildren(flow, Duration.ofHours(24));
      * </pre>
      *
@@ -173,7 +174,8 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
      * User only sets business fields on the child entity.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    protected String startChildFlowAsync(F flow, String childFlowType, OrchestratorFlow child, Duration expiry) {
+    protected String startChildFlowAsync(F flow, Class<? extends FlowDefinition> childFlowClass,
+                                          OrchestratorFlow child, Duration expiry) {
         if (flowTypeRegistry == null) {
             throw new IllegalStateException("FlowTypeRegistry not available — cannot start child flows");
         }
@@ -194,8 +196,13 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
             child.setCorrelationId(flow.getId() + ":child:" + child.getCorrelationId());
         }
 
-        // Check if child with this correlationId already exists (re-delivery idempotency)
-        FlowTypeDescriptor childDesc = flowTypeRegistry.resolve(childFlowType);
+        // Resolve child flow type from class reference
+        FlowTypeDescriptor childDesc = flowTypeRegistry.getByFlowDefinitionClass(childFlowClass);
+        if (childDesc == null) {
+            throw new IllegalArgumentException("No flow type registered for " + childFlowClass.getSimpleName());
+        }
+        String childFlowType = childDesc.getFlowType();
+
         var existingChild = childDesc.getRepository().findByCorrelationId(child.getCorrelationId());
         if (existingChild.isPresent()) {
             String existingId = ((OrchestratorFlow) existingChild.get()).getId();
