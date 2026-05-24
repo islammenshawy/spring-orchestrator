@@ -41,6 +41,7 @@ public class BatchInstrumentFlow extends FlowDefinition<BatchInstrumentEntity> {
 
         for (String ref : batch.getReferences()) {
             EnigioInstrumentEntity child = new EnigioInstrumentEntity();
+            child.setCorrelationId(ref); // deterministic — survives crash mid-loop
             child.setReference(ref);
             child.setTitle(batch.getTitle());
             child.setInstrumentType(batch.getInstrumentType() != null

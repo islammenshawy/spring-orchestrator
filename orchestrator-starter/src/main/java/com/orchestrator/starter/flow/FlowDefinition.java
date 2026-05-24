@@ -185,10 +185,13 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
             flow.setChildFlowIds(childIds);
         }
 
-        // Auto-generate deterministic correlation ID for the child
-        String childCorrelation = flow.getId() + ":child:" + childFlowType + ":" + childIds.size();
+        // Auto-generate deterministic correlation ID for the child.
+        // If user set a correlationId (business key), prefix with parent context.
+        // If not set, use index — but user SHOULD set it for crash-safe idempotency.
         if (child.getCorrelationId() == null) {
-            child.setCorrelationId(childCorrelation);
+            child.setCorrelationId(flow.getId() + ":child:" + childFlowType + ":" + childIds.size());
+        } else if (!child.getCorrelationId().startsWith(flow.getId())) {
+            child.setCorrelationId(flow.getId() + ":child:" + child.getCorrelationId());
         }
 
         // Check if child with this correlationId already exists (re-delivery idempotency)
