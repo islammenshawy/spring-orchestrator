@@ -92,6 +92,29 @@ auto_approve() {
 
 # ========== Chaos functions ==========
 
+SIGNAL_COUNT=0
+SIGNAL_INTERVAL=${SIGNAL_INTERVAL:-3}  # Send signals every N waves
+
+# Send updatePriority signal to random in-flight flows
+send_signals() {
+  local ids
+  ids=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval 'db.dis_instrument_flows.find({status:{$in:["IN_PROGRESS","PARKED","WAITING_RETRY"]}},{_id:1}).limit(3).forEach(function(f){print(String(f._id))})' 2>/dev/null)
+
+  local count=0
+  local priorities=("LOW" "NORMAL" "HIGH" "URGENT")
+  for id in $ids; do
+    local prio=${priorities[$((RANDOM % ${#priorities[@]}))]}
+    curl -sf -X POST "$DIS_URL/flows/enigio-instrument/$id/signal" \
+      -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+      -d "{\"signalName\":\"updatePriority\",\"payload\":{\"priority\":\"$prio\",\"reason\":\"soak-test\"}}" >/dev/null 2>&1 &
+    count=$((count + 1))
+  done
+  wait 2>/dev/null
+  if [ $count -gt 0 ]; then
+    SIGNAL_COUNT=$((SIGNAL_COUNT + count))
+  fi
+}
+
 CHAOS_DEDUP_COUNT=0
 CHAOS_POD_KILLED=0
 CHAOS_STUCK_COUNT=0
@@ -238,6 +261,11 @@ while [ $SECONDS -lt $END ]; do
   # Auto-approve gate steps between waves
   auto_approve
 
+  # Send signals to random in-flight flows every N waves
+  if [ $((WAVE % SIGNAL_INTERVAL)) -eq 0 ]; then
+    send_signals
+  fi
+
   # Chaos: inject duplicate messages every N waves
   if [ "$CHAOS" -eq 1 ] && [ $((WAVE % DEDUP_INTERVAL)) -eq 0 ]; then
     chaos_inject_duplicates
@@ -296,6 +324,12 @@ log "=== Webhook Registrations ==="
 docker logs infra-mock-vendor-1 2>&1 | grep "Webhook registered" | tail -3
 WEBHOOK_FIRED=$(docker logs infra-mock-vendor-1 2>&1 | grep -c "Webhook fired")
 log "Total webhooks fired: $WEBHOOK_FIRED"
+
+log "=== Signals ==="
+log "Signals sent: $SIGNAL_COUNT"
+SIGNALED_FLOWS=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+  "print(db.dis_instrument_flows.countDocuments({priority:{\$ne:null}}))" 2>/dev/null)
+log "Flows with priority set: $SIGNALED_FLOWS"
 
 chaos_report
 

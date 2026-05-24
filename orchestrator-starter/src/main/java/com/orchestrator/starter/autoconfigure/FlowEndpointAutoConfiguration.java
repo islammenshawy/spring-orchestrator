@@ -235,8 +235,10 @@ public class FlowEndpointAutoConfiguration {
                         "flowId", id,
                         "signal", signalName,
                         "message", "Signal delivered"));
-            } catch (IllegalArgumentException e) {
+            } catch (IllegalArgumentException | IllegalStateException e) {
                 return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            } catch (RuntimeException e) {
+                return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
             }
         }
 

@@ -554,4 +554,12 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
                 flow.getId(), data.getPriority(), data.getReason());
         flow.setPriority(data.getPriority().name());
     }
+
+    @Signal
+    public void requestCancellation(EnigioInstrumentEntity flow) {
+        if (SigningStatus.SIGNED.name().equals(flow.getSigningStatus())) {
+            throw new IllegalStateException("Cannot cancel — document already signed");
+        }
+        log.info("[{}] Cancellation requested via signal", flow.getId());
+    }
 }

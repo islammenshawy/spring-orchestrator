@@ -773,6 +773,65 @@ class InstrumentFlowIntegrationTest {
 
     @Test
     @Order(32)
+    @DisplayName("Signal — requestCancellation succeeds when not signed")
+    void signal_requestCancellation_succeeds() throws Exception {
+        var result = startInstrumentFlow("SIGNAL-CANCEL-OK", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+        Thread.sleep(2000);
+
+        // Flow is not signed yet — cancellation should succeed
+        @SuppressWarnings("unchecked")
+        var signalResult = rest.post()
+                .uri("/flows/enigio-instrument/" + flowId + "/signal")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("signalName", "requestCancellation"))
+                .retrieve()
+                .body(Map.class);
+
+        assertNotNull(signalResult);
+        assertEquals("Signal delivered", signalResult.get("message"));
+    }
+
+    @Test
+    @Order(33)
+    @DisplayName("Signal — requestCancellation fails when signed")
+    void signal_requestCancellation_failsWhenSigned() throws Exception {
+        var result = startInstrumentFlow("SIGNAL-CANCEL-FAIL", InstrumentType.BILL_OF_LADING);
+        String flowId = (String) result.get("id");
+
+        // Wait for flow to reach a PARKED state
+        long deadline = System.currentTimeMillis() + Duration.ofMinutes(2).toMillis();
+        while (System.currentTimeMillis() < deadline) {
+            EnigioInstrumentEntity f = mongoTemplate.findById(
+                    flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+            if (f != null && f.getStatus() == com.orchestrator.starter.domain.FlowStatus.PARKED) break;
+            Thread.sleep(500);
+        }
+
+        // Set signingStatus to SIGNED while flow is PARKED (no race)
+        mongoTemplate.updateFirst(
+                Query.query(Criteria.where("_id").is(flowId)),
+                new org.springframework.data.mongodb.core.query.Update()
+                        .set("signingStatus", "SIGNED"),
+                EnigioInstrumentEntity.class);
+
+        // Cancellation should fail — document is signed
+        try {
+            rest.post()
+                    .uri("/flows/enigio-instrument/" + flowId + "/signal")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("signalName", "requestCancellation"))
+                    .retrieve()
+                    .body(Map.class);
+            fail("Should have thrown — document is signed");
+        } catch (Exception e) {
+            // RestClient throws on 4xx/5xx — any error response means the signal was rejected
+            assertNotNull(e, "Signal should be rejected for signed document");
+        }
+    }
+
+    @Test
+    @Order(34)
     @DisplayName("Signal — unknown signal returns error")
     void signal_unknownSignal_returnsError() {
         var result = startInstrumentFlow("SIGNAL-UNKNOWN-001", InstrumentType.PROMISSORY_NOTE);
