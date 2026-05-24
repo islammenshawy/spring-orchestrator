@@ -274,5 +274,104 @@ public class FlowEndpointAutoConfiguration {
                 return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
             }
         }
+        // ========== Replay ==========
+
+        /**
+         * Replay a single flow.
+         * POST /flows/{flowType}/{id}/replay
+         * Body (optional): { "fromStep": "STEP_NAME", "allowCompleted": true }
+         */
+        @PostMapping("/{flowType}/{id}/replay")
+        public ResponseEntity<?> replayFlow(
+                @PathVariable String flowType,
+                @PathVariable String id,
+                @RequestBody(required = false) Map<String, Object> body) {
+            try {
+                FlowTypeDescriptor desc = registry.resolve(flowType);
+                FlowOrchestrator orch = (FlowOrchestrator) desc.getOrchestrator();
+
+                var options = com.orchestrator.starter.flow.ReplayOptions.builder();
+                if (body != null) {
+                    if (body.containsKey("fromStep")) options.fromStep((String) body.get("fromStep"));
+                    if (Boolean.TRUE.equals(body.get("allowCompleted"))) options.allowCompleted(true);
+                }
+
+                OrchestratorFlow replayed = orch.replayFlow(id, options.build());
+                return ResponseEntity.ok(Map.of(
+                        "flowId", replayed.getId(),
+                        "status", replayed.getStatus().name(),
+                        "currentStep", replayed.getCurrentStep(),
+                        "message", "Flow replayed"));
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            }
+        }
+
+        /**
+         * Batch replay multiple flows.
+         * POST /flows/{flowType}/replay
+         * Body: { "flowIds": ["id1", "id2"], "fromStep": "STEP_A", "allowCompleted": false }
+         */
+        @PostMapping("/{flowType}/replay")
+        public ResponseEntity<?> replayFlows(
+                @PathVariable String flowType,
+                @RequestBody Map<String, Object> body) {
+            try {
+                FlowTypeDescriptor desc = registry.resolve(flowType);
+                FlowOrchestrator orch = (FlowOrchestrator) desc.getOrchestrator();
+
+                @SuppressWarnings("unchecked")
+                java.util.List<String> flowIds = (java.util.List<String>) body.get("flowIds");
+                if (flowIds == null || flowIds.isEmpty()) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "flowIds is required"));
+                }
+
+                var options = com.orchestrator.starter.flow.ReplayOptions.builder();
+                if (body.containsKey("fromStep")) options.fromStep((String) body.get("fromStep"));
+                if (Boolean.TRUE.equals(body.get("allowCompleted"))) options.allowCompleted(true);
+
+                var results = orch.replayFlows(flowIds, options.build());
+                long succeeded = results.stream().filter(r -> "replayed".equals(r.get("status"))).count();
+                return ResponseEntity.ok(Map.of(
+                        "total", flowIds.size(),
+                        "succeeded", succeeded,
+                        "failed", flowIds.size() - succeeded,
+                        "results", results));
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            }
+        }
+
+        /**
+         * Batch cancel multiple flows.
+         * POST /flows/{flowType}/cancel
+         * Body: { "flowIds": ["id1", "id2"], "reason": "bulk cleanup" }
+         */
+        @PostMapping("/{flowType}/cancel")
+        public ResponseEntity<?> cancelFlows(
+                @PathVariable String flowType,
+                @RequestBody Map<String, Object> body) {
+            try {
+                FlowTypeDescriptor desc = registry.resolve(flowType);
+                FlowOrchestrator orch = (FlowOrchestrator) desc.getOrchestrator();
+
+                @SuppressWarnings("unchecked")
+                java.util.List<String> flowIds = (java.util.List<String>) body.get("flowIds");
+                if (flowIds == null || flowIds.isEmpty()) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "flowIds is required"));
+                }
+                String reason = (String) body.getOrDefault("reason", "batch cancel");
+
+                var results = orch.cancelFlows(flowIds, reason);
+                long succeeded = results.stream().filter(r -> "cancelled".equals(r.get("status"))).count();
+                return ResponseEntity.ok(Map.of(
+                        "total", flowIds.size(),
+                        "succeeded", succeeded,
+                        "failed", flowIds.size() - succeeded,
+                        "results", results));
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            }
+        }
     }
 }

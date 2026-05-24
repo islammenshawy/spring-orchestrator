@@ -110,4 +110,11 @@ public class StepRegistry<F extends OrchestratorFlow> {
         if (idx <= 0) return List.of();
         return orderedStepNames.subList(0, idx);
     }
+
+    /** Returns all step names from the given step (inclusive) to the end. Used by replay. */
+    public List<String> getStepsFromInclusive(String fromStep) {
+        int idx = orderedStepNames.indexOf(fromStep);
+        if (idx < 0) return List.of();
+        return orderedStepNames.subList(idx, orderedStepNames.size());
+    }
 }

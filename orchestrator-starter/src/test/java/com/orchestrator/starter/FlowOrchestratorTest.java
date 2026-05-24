@@ -11,6 +11,7 @@ import com.orchestrator.starter.exception.NonRetryableStepException;
 import com.orchestrator.starter.exception.RetryableStepException;
 import com.orchestrator.starter.exception.WaitingStepException;
 import com.orchestrator.starter.flow.FlowOrchestrator;
+import com.orchestrator.starter.flow.ReplayOptions;
 import com.orchestrator.starter.flow.SignalHandler;
 import com.orchestrator.starter.flow.SignalRegistry;
 import com.orchestrator.starter.flow.StepHandler;
@@ -563,6 +564,92 @@ class FlowOrchestratorTest {
 
         assertNotNull(cancelled);
         assertEquals(FlowStatus.CANCELLED, cancelled.getStatus());
+    }
+
+    // ========== Replay ==========
+
+    @Test
+    void replayFlow_failedFlow_resetsAndRepublishes() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setCorrelationId("corr-1");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.FAILED);
+        flow.setRetryCount(5);
+        flow.setErrorMessage("vendor timeout");
+        flow.getCompletedSteps().add("STEP_PREV");
+
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+
+        var replayed = orchestrator.replayFlow("flow-1");
+
+        assertEquals(FlowStatus.IN_PROGRESS, replayed.getStatus());
+        assertEquals(0, replayed.getRetryCount());
+        assertNull(replayed.getErrorMessage());
+        assertEquals("STEP_A", replayed.getCurrentStep());
+        assertTrue(replayed.getCompletedSteps().contains("STEP_PREV")); // preserved
+        verify(flowRepo).save(flow);
+        verify(kafkaTemplate).send(eq("test.commands"), anyString(), anyString());
+    }
+
+    @Test
+    void replayFlow_fromSpecificStep_clearsSubsequentSteps() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setCurrentStep("STEP_C");
+        flow.setStatus(FlowStatus.FAILED);
+        flow.getCompletedSteps().add("STEP_A");
+        flow.getCompletedSteps().add("STEP_B");
+        flow.getCompletedSteps().add("STEP_C");
+
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+        when(stepRegistry.getHandler("STEP_B")).thenReturn(mock(StepHandler.class));
+        when(stepRegistry.getStepsFromInclusive("STEP_B")).thenReturn(List.of("STEP_B", "STEP_C"));
+
+        orchestrator.replayFlow("flow-1", "STEP_B");
+
+        assertEquals("STEP_B", flow.getCurrentStep());
+        assertTrue(flow.getCompletedSteps().contains("STEP_A")); // before STEP_B — kept
+        assertFalse(flow.getCompletedSteps().contains("STEP_B")); // removed
+        assertFalse(flow.getCompletedSteps().contains("STEP_C")); // removed
+    }
+
+    @Test
+    void replayFlow_completedWithoutFlag_throws() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setStatus(FlowStatus.COMPLETED);
+
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+
+        assertThrows(IllegalStateException.class, () -> orchestrator.replayFlow("flow-1"));
+    }
+
+    @Test
+    void replayFlow_completedWithFlag_succeeds() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setCorrelationId("corr-1");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.COMPLETED);
+
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+
+        var replayed = orchestrator.replayFlow("flow-1",
+                ReplayOptions.builder().allowCompleted(true).build());
+
+        assertEquals(FlowStatus.IN_PROGRESS, replayed.getStatus());
+    }
+
+    @Test
+    void replayFlow_inProgress_throws() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+
+        assertThrows(IllegalStateException.class, () -> orchestrator.replayFlow("flow-1"));
     }
 
     // Helper: signal handler class for testing

@@ -136,6 +136,33 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
                 WaitingStepException.WaitMode.SLEEPING, null, expiry);
     }
 
+    // ========== Flow Lifecycle Helpers ==========
+
+    /**
+     * Cancel the current flow from within a signal handler.
+     * Triggers compensation/cancellation handlers in reverse order.
+     *
+     * <pre>
+     * @Signal
+     * public void requestCancellation(MyFlow flow, CancelRequest data) {
+     *     if (flow.isSigned()) throw new IllegalStateException("Already signed");
+     *     cancelFlow(flow, data.getReason());
+     * }
+     * </pre>
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    protected void cancelFlow(F flow, String reason) {
+        if (flowTypeRegistry == null) {
+            throw new IllegalStateException("FlowTypeRegistry not available");
+        }
+        FlowTypeDescriptor desc = flowTypeRegistry.getByEntityClass(flow.getClass());
+        if (desc == null) {
+            throw new IllegalStateException("No flow type for " + flow.getClass().getSimpleName());
+        }
+        FlowOrchestrator orch = (FlowOrchestrator) desc.getOrchestrator();
+        orch.cancelFlow(flow.getId(), reason);
+    }
+
     // ========== Child Workflows ==========
 
     /**
@@ -180,6 +207,13 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
             throw new IllegalStateException("FlowTypeRegistry not available — cannot start child flows");
         }
 
+        // Resolve child flow type from class reference
+        FlowTypeDescriptor childDesc = flowTypeRegistry.getByFlowDefinitionClass(childFlowClass);
+        if (childDesc == null) {
+            throw new IllegalArgumentException("No flow type registered for " + childFlowClass.getSimpleName());
+        }
+        String childFlowType = childDesc.getFlowType();
+
         // Idempotency: check if this child was already started (re-delivery)
         List<String> childIds = flow.getChildFlowIds();
         if (childIds == null) {
@@ -188,20 +222,11 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
         }
 
         // Auto-generate deterministic correlation ID for the child.
-        // If user set a correlationId (business key), prefix with parent context.
-        // If not set, use index — but user SHOULD set it for crash-safe idempotency.
         if (child.getCorrelationId() == null) {
             child.setCorrelationId(flow.getId() + ":child:" + childFlowType + ":" + childIds.size());
         } else if (!child.getCorrelationId().startsWith(flow.getId())) {
             child.setCorrelationId(flow.getId() + ":child:" + child.getCorrelationId());
         }
-
-        // Resolve child flow type from class reference
-        FlowTypeDescriptor childDesc = flowTypeRegistry.getByFlowDefinitionClass(childFlowClass);
-        if (childDesc == null) {
-            throw new IllegalArgumentException("No flow type registered for " + childFlowClass.getSimpleName());
-        }
-        String childFlowType = childDesc.getFlowType();
 
         var existingChild = childDesc.getRepository().findByCorrelationId(child.getCorrelationId());
         if (existingChild.isPresent()) {

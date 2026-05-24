@@ -786,6 +786,118 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         runCompensation(flow);
     }
 
+    // ========== Replay ==========
+
+    /** Replay a flow — resume from its current (failed) step. */
+    public F replayFlow(String flowId) {
+        return replayFlow(flowId, ReplayOptions.builder().build());
+    }
+
+    /** Replay a flow from a specific step. */
+    public F replayFlow(String flowId, String fromStep) {
+        return replayFlow(flowId, ReplayOptions.builder().fromStep(fromStep).build());
+    }
+
+    /** Replay a flow with options. */
+    @SuppressWarnings("unchecked")
+    public F replayFlow(String flowId, ReplayOptions options) {
+        F flow = flowRepository.findById(flowId).orElse(null);
+        if (flow == null) {
+            throw new IllegalArgumentException("Flow not found: " + flowId);
+        }
+
+        FlowStatus status = flow.getStatus();
+
+        // COMPLETED requires explicit opt-in
+        if (status == FlowStatus.COMPLETED && !options.isAllowCompleted()) {
+            throw new IllegalStateException(
+                    "Flow " + flowId + " is COMPLETED. Use allowCompleted=true to replay.");
+        }
+
+        // Only terminal states can be replayed
+        if (status != FlowStatus.FAILED && status != FlowStatus.CANCELLED
+                && status != FlowStatus.COMPENSATION_FAILED && status != FlowStatus.COMPLETED) {
+            throw new IllegalStateException(
+                    "Cannot replay flow " + flowId + " — status is " + status +
+                    ". Only FAILED, CANCELLED, COMPENSATION_FAILED, or COMPLETED flows can be replayed.");
+        }
+
+        // If fromStep specified, reset completedSteps
+        if (options.getFromStep() != null) {
+            String fromStep = options.getFromStep();
+            // Validate step exists
+            if (stepRegistry.getHandler(fromStep) == null) {
+                throw new IllegalArgumentException("Unknown step '" + fromStep +
+                        "'. Available: " + stepRegistry.getStepNames());
+            }
+            flow.setCurrentStep(fromStep);
+            // Remove fromStep and all subsequent steps from completedSteps
+            List<String> stepsToRemove = stepRegistry.getStepsFromInclusive(fromStep);
+            flow.getCompletedSteps().removeAll(stepsToRemove);
+        }
+
+        // Reset orchestration state
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setRetryCount(0);
+        flow.setBackoffSeconds(0);
+        flow.setNextRetryAt(null);
+        flow.setErrorMessage(null);
+        flow.setRecoveryCount(0);
+        flow.setWaitingSince(null);
+        flow.setExpiresAt(null);
+        flow.setSleepUntil(null);
+        flow.setCompensationError(null);
+        flow.setUpdatedAt(Instant.now());
+        saveFlow(flow);
+
+        // Publish step command to Kafka for immediate execution
+        try {
+            String partitionKey = flow.getCorrelationId() != null
+                    ? flow.getCorrelationId() : flow.getId();
+            publishStepDirect(flow, flow.getCurrentStep(), partitionKey);
+        } catch (Exception e) {
+            log.warn("[Replay] Kafka publish failed for flow {} — recovery scanner will pick it up",
+                    flowId, e);
+        }
+
+        log.info("[Replay] Flow {} replayed from step {} (was {})",
+                flowId, flow.getCurrentStep(), status);
+        return flow;
+    }
+
+    /** Batch replay — returns per-flow results. */
+    public List<java.util.Map<String, String>> replayFlows(List<String> flowIds, ReplayOptions options) {
+        List<java.util.Map<String, String>> results = new java.util.ArrayList<>();
+        for (String flowId : flowIds) {
+            try {
+                replayFlow(flowId, options);
+                results.add(java.util.Map.of("flowId", flowId, "status", "replayed"));
+            } catch (Exception e) {
+                results.add(java.util.Map.of("flowId", flowId, "status", "error", "error", e.getMessage()));
+            }
+        }
+        return results;
+    }
+
+    /** Batch cancel — returns per-flow results. */
+    public List<java.util.Map<String, String>> cancelFlows(List<String> flowIds, String reason) {
+        List<java.util.Map<String, String>> results = new java.util.ArrayList<>();
+        for (String flowId : flowIds) {
+            try {
+                F cancelled = cancelFlow(flowId, reason);
+                if (cancelled != null) {
+                    results.add(java.util.Map.of("flowId", flowId, "status", "cancelled"));
+                } else {
+                    results.add(java.util.Map.of("flowId", flowId, "status", "error",
+                            "error", "Flow not in cancellable state"));
+                }
+            } catch (Exception e) {
+                results.add(java.util.Map.of("flowId", flowId, "status", "error", "error", e.getMessage()));
+            }
+        }
+        return results;
+    }
+
     // ========== Internal ==========
 
     private void advanceToNextStep(F flow) {
