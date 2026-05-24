@@ -178,12 +178,20 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             MDC.remove("flowId");
             MDC.remove("flowType");
             MDC.remove("stepName");
+            MDC.remove("parentFlowId");
+            MDC.remove("parentFlowType");
         }
     }
 
     private void doExecuteStepInner(String flowId, String stepName) {
         F flow = flowRepository.findById(flowId)
                 .orElseThrow(() -> new NonRetryableStepException("Flow not found: " + flowId));
+
+        // Add parent context to MDC for Splunk tracing
+        if (flow.getParentFlowId() != null) {
+            MDC.put("parentFlowId", flow.getParentFlowId());
+            MDC.put("parentFlowType", flow.getParentFlowType());
+        }
 
         if (flow.getStatus() == FlowStatus.COMPLETED) return;
         if (flow.getStatus() == FlowStatus.CANCELLED || flow.getStatus() == FlowStatus.CANCELLING) {
@@ -1074,6 +1082,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             stepLogRepository.save(StepExecutionLog.builder()
                     .id(UUID.randomUUID().toString())
                     .flowId(flowId)
+                    .parentFlowId(MDC.get("parentFlowId"))
                     .stepName(stepName)
                     .status(status)
                     .attemptNumber(attempt)

@@ -30,6 +30,7 @@ public class StepExecutionLog {
     private String id;
 
     private String flowId;
+    private String parentFlowId;
     private String stepName;
     private String status;      // EXECUTING, COMPLETED, FAILED, RECOVERED, COMPENSATED
     private int attemptNumber;

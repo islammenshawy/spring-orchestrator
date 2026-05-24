@@ -142,29 +142,38 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
      * Blocking — starts a child flow and parks until it completes.
      *
      * <pre>
-     * startChildFlow(flow, child, Duration.ofHours(24));
+     * startChildFlow(flow, "enigio-instrument", child, Duration.ofHours(24));
      * // code here runs after child completes
      * </pre>
+     *
+     * @param flow       parent flow entity
+     * @param childFlowType  flow type name the child runs through (e.g. "enigio-instrument")
+     * @param child      child flow entity — set business fields only, library handles the rest
+     * @param expiry     max time to wait for child completion
+     * @return child flow ID
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    protected String startChildFlow(F flow, OrchestratorFlow child, Duration expiry) {
-        String childId = startChildFlowAsync(flow, child, expiry);
+    protected String startChildFlow(F flow, String childFlowType, OrchestratorFlow child, Duration expiry) {
+        String childId = startChildFlowAsync(flow, childFlowType, child, expiry);
         awaitChildren(flow, expiry);
         return childId;
     }
 
     /**
      * Async — starts a child flow without parking. Must call
-     * {@link #awaitChildren(OrchestratorFlow, Duration)} later.
+     * {@link #awaitChildren} later.
      *
      * <pre>
-     * startChildFlowAsync(flow, child1, Duration.ofHours(24));
-     * startChildFlowAsync(flow, child2, Duration.ofHours(24));
+     * startChildFlowAsync(flow, "enigio-instrument", child1, Duration.ofHours(24));
+     * startChildFlowAsync(flow, "enigio-instrument", child2, Duration.ofHours(24));
      * awaitChildren(flow, Duration.ofHours(24));
      * </pre>
+     *
+     * Library auto-sets: correlationId, parentFlowId, parentFlowType, parentStepName.
+     * User only sets business fields on the child entity.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    protected String startChildFlowAsync(F flow, OrchestratorFlow child, Duration expiry) {
+    protected String startChildFlowAsync(F flow, String childFlowType, OrchestratorFlow child, Duration expiry) {
         if (flowTypeRegistry == null) {
             throw new IllegalStateException("FlowTypeRegistry not available — cannot start child flows");
         }
@@ -176,25 +185,28 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
             flow.setChildFlowIds(childIds);
         }
 
-        // Find existing child by correlationId match
-        String childCorrelation = child.getCorrelationId();
-        if (childCorrelation != null) {
-            for (String existingId : childIds) {
-                // Child already started — skip
-                return existingId;
-            }
+        // Auto-generate deterministic correlation ID for the child
+        String childCorrelation = flow.getId() + ":child:" + childFlowType + ":" + childIds.size();
+        if (child.getCorrelationId() == null) {
+            child.setCorrelationId(childCorrelation);
         }
 
-        // Set parent references on child
+        // Check if child with this correlationId already exists (re-delivery idempotency)
+        FlowTypeDescriptor childDesc = flowTypeRegistry.resolve(childFlowType);
+        var existingChild = childDesc.getRepository().findByCorrelationId(child.getCorrelationId());
+        if (existingChild.isPresent()) {
+            String existingId = ((OrchestratorFlow) existingChild.get()).getId();
+            if (!childIds.contains(existingId)) {
+                childIds.add(existingId);
+                flow.setChildFlowIds(childIds);
+            }
+            return existingId;
+        }
+
+        // Set parent references on child (library plumbing — user doesn't touch these)
         child.setParentFlowId(flow.getId());
         child.setParentFlowType(flow.getFlowType());
         child.setParentStepName(flow.getCurrentStep());
-
-        // Resolve child's orchestrator by entity class
-        FlowTypeDescriptor childDesc = flowTypeRegistry.getByEntityClass(child.getClass());
-        if (childDesc == null) {
-            throw new IllegalArgumentException("No flow type registered for entity " + child.getClass().getSimpleName());
-        }
 
         // Start child flow
         FlowOrchestrator childOrch = (FlowOrchestrator) childDesc.getOrchestrator();
@@ -211,22 +223,13 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
     /**
      * Parks until ALL child flows have completed or failed.
      * Call after one or more {@link #startChildFlowAsync} calls.
-     *
-     * <pre>
-     * startChildFlowAsync(flow, child1, expiry);
-     * startChildFlowAsync(flow, child2, expiry);
-     * awaitChildren(flow, Duration.ofHours(24));
-     * // all children done
-     * </pre>
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     protected void awaitChildren(F flow, Duration expiry) {
         List<String> childIds = flow.getChildFlowIds();
         if (childIds == null || childIds.isEmpty()) return;
 
-        // Check all children's status
         for (String childId : childIds) {
-            // Try to find via any registered flow type
             for (FlowTypeDescriptor desc : flowTypeRegistry.getAll()) {
                 var repo = desc.getRepository();
                 if (repo == null) continue;
@@ -236,7 +239,6 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
                     FlowStatus childStatus = child.getStatus();
                     if (childStatus != FlowStatus.COMPLETED && childStatus != FlowStatus.FAILED
                             && childStatus != FlowStatus.CANCELLED) {
-                        // At least one child still running — park
                         throw new WaitingStepException(
                                 "Waiting for child " + childId + " (status: " + childStatus + ")",
                                 WaitingStepException.WaitMode.PARKED, null, expiry);
@@ -245,6 +247,5 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
                 }
             }
         }
-        // All children completed/failed — continue
     }
 }
