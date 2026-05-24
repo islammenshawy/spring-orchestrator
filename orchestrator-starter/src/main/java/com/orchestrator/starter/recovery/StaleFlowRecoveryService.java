@@ -22,19 +22,15 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Recovers flows stuck in IN_PROGRESS after a container crash.
- * Re-publishes the current step command to Kafka.
+ * Recovers and re-delivers flows across all waiting states:
+ *
+ * 1. IN_PROGRESS (stale) — container crash recovery. Re-publishes current step.
+ * 2. WAITING_RETRY (polling) — re-delivers when nextRetryAt elapses. Used by pollUntil().
+ * 3. PARKED (safety net) — re-delivers gate steps not touched in a long time (missed webhooks).
+ * 4. Expiry — fails flows past their expiresAt deadline (set by waitUntil/pollUntil).
  *
  * Uses atomic batch claiming via MongoDB updateMulti + claimedBy/claimedAt
  * to ensure each flow is processed by exactly one pod in a multi-pod deployment.
- *
- * Pattern: claim batch → find claimed → process → release
- *
- * Guards against false positives:
- * - Skips flows with pending outbox events (pipeline is just busy)
- * - Uses configurable stale threshold (default 15 min, must exceed retry budget)
- * - Caps recovery at maxRecoveryAttempts to prevent infinite recovery loops
- * - Orphan cleanup releases claims from crashed pods (claimTtl)
  */
 @Slf4j
 public class StaleFlowRecoveryService {
@@ -89,6 +85,10 @@ public class StaleFlowRecoveryService {
 
             recoverFlowType(descriptor.getFlowType(), descriptor.getEntityClass(),
                     commandTopic, descriptor.getStepRegistry());
+
+            redeliverPollingFlows(descriptor.getFlowType(), descriptor.getEntityClass(), commandTopic);
+
+            redeliverParkedSafetyNet(descriptor.getFlowType(), descriptor.getEntityClass(), commandTopic);
 
             expireWaitingFlows(descriptor.getFlowType(), descriptor.getEntityClass());
         }
@@ -214,6 +214,106 @@ public class StaleFlowRecoveryService {
                 releaseClaim(flow.getId(), entityClass);
                 log.error("[Recovery] Failed to recover flow {} (type: {}): {}",
                         flow.getId(), flowType, e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Re-deliver polling steps (WAITING_RETRY) whose nextRetryAt has elapsed.
+     * These are steps using pollUntil() that need periodic re-execution.
+     */
+    @SuppressWarnings("unchecked")
+    private void redeliverPollingFlows(String flowType, Class<?> entityClass, String commandTopic) {
+        Instant now = Instant.now();
+
+        Query candidateQuery = Query.query(Criteria.where("status").is(FlowStatus.WAITING_RETRY.name())
+                .and("nextRetryAt").lt(now)
+                .and("claimedBy").is(null))
+                .limit(batchSize);
+        candidateQuery.fields().include("_id");
+        List<?> candidates = mongoTemplate.find(candidateQuery, entityClass);
+        if (candidates.isEmpty()) return;
+
+        republishBatch(candidates, entityClass, commandTopic, flowType,
+                FlowStatus.WAITING_RETRY, "polling");
+    }
+
+    /**
+     * Safety net for PARKED gate steps — re-delivers flows not touched in a long time.
+     * Catches missed webhooks or failed API re-activation calls.
+     * Uses staleThresholdMinutes as the staleness window.
+     */
+    @SuppressWarnings("unchecked")
+    private void redeliverParkedSafetyNet(String flowType, Class<?> entityClass, String commandTopic) {
+        Instant staleThreshold = Instant.now().minus(staleThresholdMinutes, ChronoUnit.MINUTES);
+
+        Query candidateQuery = Query.query(Criteria.where("status").is(FlowStatus.PARKED.name())
+                .and("updatedAt").lt(staleThreshold)
+                .and("claimedBy").is(null))
+                .limit(batchSize);
+        candidateQuery.fields().include("_id");
+        List<?> candidates = mongoTemplate.find(candidateQuery, entityClass);
+        if (candidates.isEmpty()) return;
+
+        republishBatch(candidates, entityClass, commandTopic, flowType,
+                FlowStatus.PARKED, "parked-safety-net");
+    }
+
+    /** Claim a batch of candidate flows, re-publish to Kafka, release claims. */
+    @SuppressWarnings("unchecked")
+    private void republishBatch(List<?> candidates, Class<?> entityClass,
+                                 String commandTopic, String flowType,
+                                 FlowStatus expectedStatus, String label) {
+        List<String> candidateIds = candidates.stream()
+                .map(c -> ((OrchestratorFlow) c).getId())
+                .toList();
+
+        long claimed = mongoTemplate.updateMulti(
+                Query.query(Criteria.where("_id").in(candidateIds)
+                        .and("claimedBy").is(null)),
+                new Update()
+                        .set("claimedBy", podId)
+                        .set("claimedAt", Instant.now()),
+                entityClass).getModifiedCount();
+
+        if (claimed == 0) return;
+
+        List<?> batch = mongoTemplate.find(
+                Query.query(Criteria.where("claimedBy").is(podId)
+                        .and("status").is(expectedStatus.name())),
+                entityClass);
+
+        log.info("[Recovery] Claimed {} {} flows for type '{}' (pod: {})",
+                batch.size(), label, flowType, podId);
+
+        for (Object obj : batch) {
+            OrchestratorFlow flow = (OrchestratorFlow) obj;
+            try {
+                StepCommandMessage cmd = StepCommandMessage.builder()
+                        .eventId(UUID.randomUUID().toString())
+                        .flowId(flow.getId())
+                        .correlationId(flow.getCorrelationId())
+                        .stepName(flow.getCurrentStep())
+                        .flowType(flowType)
+                        .build();
+                String partitionKey = flow.getCorrelationId() != null
+                        ? flow.getCorrelationId() : flow.getId();
+                kafkaTemplate.send(commandTopic, partitionKey,
+                        objectMapper.writeValueAsString(cmd)).get();
+
+                mongoTemplate.updateFirst(
+                        Query.query(Criteria.where("_id").is(flow.getId())),
+                        new Update()
+                                .set("updatedAt", Instant.now())
+                                .set("claimedBy", null)
+                                .set("claimedAt", null),
+                        entityClass);
+                log.info("[Recovery] Re-published {} for flow {} [{}]",
+                        flow.getCurrentStep(), flow.getId(), label);
+            } catch (Exception e) {
+                releaseClaim(flow.getId(), entityClass);
+                log.error("[Recovery] Failed to re-publish flow {} [{}]: {}",
+                        flow.getId(), label, e.getMessage());
             }
         }
     }

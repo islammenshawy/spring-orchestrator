@@ -60,11 +60,13 @@ class StaleFlowRecoveryTest {
                 .thenReturn(CompletableFuture.completedFuture(null));
         when(outboxRepo.countByFlowIdAndPublishedFalse(anyString())).thenReturn(0L);
 
-        // Default: orphan cleanup updates nothing
+        // Default: orphan cleanup updates nothing, find returns empty
         when(mongoTemplate.updateMulti(any(Query.class), any(Update.class), any(Class.class)))
                 .thenReturn(UpdateResult.acknowledged(0, 0L, null));
         when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), any(Class.class)))
                 .thenReturn(UpdateResult.acknowledged(1, 1L, null));
+        when(mongoTemplate.find(any(Query.class), any(Class.class)))
+                .thenReturn(List.of());
     }
 
     private StaleFlowRecoveryService createService(FlowTypeRegistry registry) {
@@ -84,14 +86,15 @@ class StaleFlowRecoveryTest {
                 .build();
     }
 
-    /** Setup the two-step find-then-claim mock pattern */
+    /** Setup the two-step find-then-claim mock pattern for IN_PROGRESS recovery */
+    @SuppressWarnings("unchecked")
     private void setupClaimPattern(Class<?> entityClass, List<?> candidates, long claimedCount) {
-        AtomicInteger findCallCount = new AtomicInteger();
+        // Return candidates only for IN_PROGRESS queries, empty for everything else
         when(mongoTemplate.find(any(Query.class), eq(entityClass)))
                 .thenAnswer(inv -> {
-                    int call = findCallCount.incrementAndGet();
-                    // First find = candidate IDs, second find = claimed batch
-                    return candidates;
+                    Query q = inv.getArgument(0);
+                    if (q.toString().contains("IN_PROGRESS")) return candidates;
+                    return List.of();
                 });
         // updateMulti for claim returns claimedCount
         when(mongoTemplate.updateMulti(argThat(q -> q.toString().contains("$in")),
@@ -174,15 +177,21 @@ class StaleFlowRecoveryTest {
         staleB.setCurrentStep("CHARGE");
         staleB.setStatus(FlowStatus.IN_PROGRESS);
 
-        // FlowA mocks
+        // FlowA mocks — only return staleA for IN_PROGRESS queries
         when(mongoTemplate.find(any(Query.class), eq(FlowA.class)))
-                .thenReturn(List.of(staleA));
+                .thenAnswer(inv -> {
+                    if (inv.getArgument(0).toString().contains("IN_PROGRESS")) return List.of(staleA);
+                    return List.of();
+                });
         when(mongoTemplate.updateMulti(any(Query.class), any(Update.class), eq(FlowA.class)))
                 .thenReturn(UpdateResult.acknowledged(1, 1L, null));
 
         // FlowB mocks
         when(mongoTemplate.find(any(Query.class), eq(FlowB.class)))
-                .thenReturn(List.of(staleB));
+                .thenAnswer(inv -> {
+                    if (inv.getArgument(0).toString().contains("IN_PROGRESS")) return List.of(staleB);
+                    return List.of();
+                });
         when(mongoTemplate.updateMulti(any(Query.class), any(Update.class), eq(FlowB.class)))
                 .thenReturn(UpdateResult.acknowledged(1, 1L, null));
 
