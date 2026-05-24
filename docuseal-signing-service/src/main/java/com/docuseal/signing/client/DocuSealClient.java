@@ -52,8 +52,9 @@ public class DocuSealClient {
                                 "role", "Party B",
                                 "email", partyBEmail,
                                 "name", partyBName,
-                                "order", 1,
-                                "send_email", false  // We'll notify Party B ourselves after Party A signs
+                                "order", 1
+                                // send_email inherited from submission level — DocuSeal sends
+                                // when Party A completes (preserved order)
                         )
                 )
         );
