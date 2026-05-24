@@ -68,8 +68,11 @@ public abstract class AbstractFlow implements OrchestratorFlow {
     /** Error message from a failed compensation handler (when status=COMPENSATION_FAILED). */
     private String compensationError;
 
-    /** When the current step first entered WAITING_RETRY. Set by library, reset on advancement. */
+    /** When the current step first entered WAITING_RETRY/PARKED. Set by library, reset on advancement. */
     private Instant waitingSince;
+
+    /** Absolute deadline for the current waiting step. Set by waitUntil()/pollUntil() on first park. */
+    private Instant expiresAt;
 
     /** Pod ID that claimed this flow for recovery processing. Null = unclaimed. */
     private String claimedBy;

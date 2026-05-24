@@ -229,9 +229,9 @@ class ResilienceIntegrationTest {
                 "Recovery should bump updatedAt");
         assertTrue(recovered.getRecoveryCount() >= 1,
                 "Recovery count should be incremented");
-        // Flow should be back at WAITING_RETRY (gate step re-evaluated)
-        assertEquals(FlowStatus.WAITING_RETRY, recovered.getStatus(),
-                "Flow should return to WAITING_RETRY after recovery re-publishes gate step");
+        // Flow should be back at PARKED (gate step re-evaluated via waitUntil)
+        assertEquals(FlowStatus.PARKED, recovered.getStatus(),
+                "Flow should return to PARKED after recovery re-publishes gate step");
         assertNull(recovered.getClaimedBy(),
                 "Claim should be released after processing");
     }

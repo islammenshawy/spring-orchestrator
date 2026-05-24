@@ -441,12 +441,13 @@ class InstrumentFlowIntegrationTest {
         var result = startInstrumentFlow("PN-CANCEL-RETRY", InstrumentType.PROMISSORY_NOTE);
         String flowId = (String) result.get("id");
 
-        // Wait for WAITING_RETRY status (message in retry topic)
+        // Wait for PARKED status (gate step parks flow via waitUntil)
         long deadline = System.currentTimeMillis() + Duration.ofMinutes(2).toMillis();
         while (System.currentTimeMillis() < deadline) {
             EnigioInstrumentEntity flow = mongoTemplate.findById(
                     flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
-            if (flow != null && flow.getStatus() == FlowStatus.WAITING_RETRY) break;
+            if (flow != null && (flow.getStatus() == FlowStatus.PARKED
+                    || flow.getStatus() == FlowStatus.WAITING_RETRY)) break;
             try { Thread.sleep(500); } catch (InterruptedException e) { break; }
         }
 

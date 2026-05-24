@@ -81,9 +81,11 @@ public class WaitingFlowScheduler {
     }
 
     /**
-     * Scan for parked flows and re-publish their current step.
-     * Runs every 5 min (default). Acts as safety net for missed webhooks/approvals
-     * and triggers expiry checks on re-execution.
+     * Scan for flows that need re-delivery:
+     *
+     * 1. WAITING_RETRY (polling steps) — re-publish when nextRetryAt has elapsed.
+     * 2. PARKED (gate steps) — safety-net re-publish for missed webhooks.
+     *    Uses a longer threshold (pollIntervalMinutes) to avoid churn.
      *
      * Uses batch claiming: updateMulti → find → process → release.
      */
@@ -92,10 +94,34 @@ public class WaitingFlowScheduler {
         // Release orphaned claims from crashed pods
         releaseOrphanedClaims();
 
+        // 1. Polling steps: WAITING_RETRY with nextRetryAt elapsed
+        pollByNextRetryAt();
+
+        // 2. Safety net for parked gate steps: missed webhooks
+        pollParkedSafetyNet();
+    }
+
+    /** Re-deliver polling steps whose nextRetryAt has elapsed. */
+    private void pollByNextRetryAt() {
+        Instant now = Instant.now();
+
+        Query candidateQuery = Query.query(Criteria.where("status").is(FlowStatus.WAITING_RETRY.name())
+                .and("currentStep").in(WAIT_STEPS)
+                .and("nextRetryAt").lt(now)
+                .and("claimedBy").is(null))
+                .limit(batchSize);
+        candidateQuery.fields().include("_id");
+        List<EnigioInstrumentEntity> candidates = mongoTemplate.find(candidateQuery, EnigioInstrumentEntity.class);
+        if (candidates.isEmpty()) return;
+
+        republishBatch(candidates, FlowStatus.WAITING_RETRY, "polling");
+    }
+
+    /** Safety net: re-publish PARKED flows not touched in a long time (missed webhooks). */
+    private void pollParkedSafetyNet() {
         Instant staleThreshold = Instant.now().minus(pollIntervalMinutes, ChronoUnit.MINUTES);
 
-        // Step 1: Find candidate IDs (limited to batchSize)
-        Query candidateQuery = Query.query(Criteria.where("status").is(FlowStatus.WAITING_RETRY.name())
+        Query candidateQuery = Query.query(Criteria.where("status").is(FlowStatus.PARKED.name())
                 .and("currentStep").in(WAIT_STEPS)
                 .and("updatedAt").lt(staleThreshold)
                 .and("claimedBy").is(null))
@@ -104,11 +130,15 @@ public class WaitingFlowScheduler {
         List<EnigioInstrumentEntity> candidates = mongoTemplate.find(candidateQuery, EnigioInstrumentEntity.class);
         if (candidates.isEmpty()) return;
 
+        republishBatch(candidates, FlowStatus.PARKED, "parked-safety-net");
+    }
+
+    /** Claim a batch of candidates, re-publish to Kafka, release claims. */
+    private void republishBatch(List<EnigioInstrumentEntity> candidates, FlowStatus status, String label) {
         List<String> candidateIds = candidates.stream()
                 .map(EnigioInstrumentEntity::getId)
                 .toList();
 
-        // Step 2: Claim those IDs atomically via updateMulti with $in
         long claimed = mongoTemplate.updateMulti(
                 Query.query(Criteria.where("_id").in(candidateIds)
                         .and("claimedBy").is(null)),
@@ -119,16 +149,14 @@ public class WaitingFlowScheduler {
 
         if (claimed == 0) return;
 
-        // Step 3: Find the claimed batch
         List<EnigioInstrumentEntity> batch = mongoTemplate.find(
                 Query.query(Criteria.where("claimedBy").is(podId)
-                        .and("status").is(FlowStatus.WAITING_RETRY.name())
+                        .and("status").is(status.name())
                         .and("currentStep").in(WAIT_STEPS)),
                 EnigioInstrumentEntity.class);
 
-        log.info("[WaitScheduler] Claimed {} flows in wait states (pod: {})", batch.size(), podId);
+        log.info("[WaitScheduler] Claimed {} {} flows (pod: {})", batch.size(), label, podId);
 
-        // Step 3: Process each flow
         for (EnigioInstrumentEntity flow : batch) {
             try {
                 StepCommandMessage cmd = StepCommandMessage.builder()
@@ -144,7 +172,6 @@ public class WaitingFlowScheduler {
                         ? flow.getCorrelationId() : flow.getId();
                 kafkaTemplate.send(commandTopic, partitionKey, json).get();
 
-                // Step 4: Release claim + bump updatedAt
                 mongoTemplate.updateFirst(
                         Query.query(Criteria.where("_id").is(flow.getId())),
                         new Update()
@@ -153,13 +180,12 @@ public class WaitingFlowScheduler {
                                 .set("claimedAt", null),
                         EnigioInstrumentEntity.class);
 
-                log.info("[WaitScheduler] Re-published {} for flow {} (waiting since {})",
-                        flow.getCurrentStep(), flow.getId(),
+                log.info("[WaitScheduler] Re-published {} for flow {} [{}] (waiting since {})",
+                        flow.getCurrentStep(), flow.getId(), label,
                         Duration.between(
                                 flow.getSigningStartedAt() != null ? flow.getSigningStartedAt() : flow.getUpdatedAt(),
                                 Instant.now()).toMinutes() + "m ago");
             } catch (Exception e) {
-                // Release claim on failure so next cycle can retry
                 releaseClaim(flow.getId());
                 log.error("[WaitScheduler] Failed to re-publish flow {}: {}", flow.getId(), e.getMessage());
             }
@@ -172,7 +198,7 @@ public class WaitingFlowScheduler {
         long released = mongoTemplate.updateMulti(
                 Query.query(Criteria.where("claimedBy").ne(null)
                         .and("claimedAt").lt(orphanThreshold)
-                        .and("status").is(FlowStatus.WAITING_RETRY.name())),
+                        .and("status").in(FlowStatus.WAITING_RETRY.name(), FlowStatus.PARKED.name())),
                 new Update().set("claimedBy", null).set("claimedAt", null),
                 EnigioInstrumentEntity.class).getModifiedCount();
 

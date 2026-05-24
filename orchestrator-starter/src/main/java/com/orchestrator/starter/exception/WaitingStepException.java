@@ -1,51 +1,47 @@
 package com.orchestrator.starter.exception;
 
 import java.time.Duration;
-import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * Throw from a gate/polling step to signal "waiting for an external event."
+ * Thrown internally by {@code waitUntil()} to signal that a step is waiting.
  *
- * Unlike {@link RetryableStepException} (vendor errors → exponential backoff),
- * this uses a <b>fixed short interval with jitter</b> for fast re-polling.
- * The orchestrator re-publishes to the main command topic directly,
- * bypassing Spring Kafka's exponential retry topics.
+ * Two modes:
+ * <ul>
+ *   <li><b>PARKED</b> — gate step waiting for an external trigger (webhook, API).
+ *       Flow sleeps in MongoDB until explicitly re-activated. No Kafka cycling.</li>
+ *   <li><b>POLLING</b> — step actively polls for a condition on a configured interval.
+ *       Flow is re-delivered via scheduler when {@code nextRetryAt} elapses.</li>
+ * </ul>
  *
- * Use cases:
- * - Waiting for downstream approval (gate steps)
- * - Polling for signing completion
- * - Waiting for webhook-driven state changes
- *
- * Default: 5s base + 50% jitter = 2.5-5s actual delay.
+ * Users should not throw this directly — use {@code waitUntil()} overloads
+ * on {@link com.orchestrator.starter.flow.FlowDefinition}.
  */
 public class WaitingStepException extends RuntimeException {
 
-    private final long delayMs;
+    /** Determines how the orchestrator handles a waiting step. */
+    public enum WaitMode { PARKED, POLLING }
 
-    /** Default: 5s base + 50% jitter. */
-    public WaitingStepException(String message) {
-        this(message, 5000, 0.5);
-    }
+    private final WaitMode waitMode;
+    private final Duration pollInterval;
+    private final Duration expiry;
 
-    /** Custom base delay + jitter. */
-    public WaitingStepException(String message, long baseDelayMs, double jitterFactor) {
+    /**
+     * Full constructor used by {@code FlowDefinition.waitUntil()} and {@code pollUntil()}.
+     *
+     * @param message       descriptive message for logs
+     * @param waitMode      PARKED (gate) or POLLING (active re-check)
+     * @param pollInterval  re-check interval (required for POLLING, null for PARKED)
+     * @param expiry        max time to wait before failing the flow
+     */
+    public WaitingStepException(String message, WaitMode waitMode, Duration pollInterval, Duration expiry) {
         super(message);
-        this.delayMs = applyJitter(baseDelayMs, jitterFactor);
+        this.waitMode = waitMode;
+        this.pollInterval = pollInterval;
+        this.expiry = expiry;
     }
 
-    /** The computed delay (with jitter already applied). */
-    public long getDelayMs() {
-        return delayMs;
-    }
-
-    public Duration getDelay() {
-        return Duration.ofMillis(delayMs);
-    }
-
-    private static long applyJitter(long base, double jitterFactor) {
-        long jitterRange = (long) (base * jitterFactor);
-        long fixed = base - jitterRange;
-        long jitter = jitterRange > 0 ? ThreadLocalRandom.current().nextLong(0, jitterRange + 1) : 0;
-        return fixed + jitter;
-    }
+    public WaitMode getWaitMode() { return waitMode; }
+    public Duration getPollInterval() { return pollInterval; }
+    public Duration getExpiry() { return expiry; }
+    public boolean isParked() { return waitMode == WaitMode.PARKED; }
 }

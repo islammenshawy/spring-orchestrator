@@ -76,9 +76,13 @@ public interface OrchestratorFlow {
     default String getCompensationError() { return null; }
     default void setCompensationError(String error) {}
 
-    /** When this step first entered WAITING_RETRY. Set by library, reset on advancement. */
+    /** When this step first entered WAITING_RETRY/PARKED. Set by library, reset on advancement. */
     default Instant getWaitingSince() { return null; }
     default void setWaitingSince(Instant waitingSince) {}
+
+    /** Absolute deadline for the current waiting step. Set by waitUntil()/pollUntil(). */
+    default Instant getExpiresAt() { return null; }
+    default void setExpiresAt(Instant expiresAt) {}
 
     /**
      * Tracks which steps have completed successfully.

@@ -7,6 +7,7 @@ import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.exception.NonRetryableStepException;
 import com.orchestrator.starter.exception.RetryableStepException;
+import com.orchestrator.starter.exception.WaitingStepException;
 import com.orchestrator.starter.flow.FlowOrchestrator;
 import com.orchestrator.starter.flow.StepHandler;
 import com.orchestrator.starter.flow.StepRegistry;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.kafka.core.KafkaTemplate;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -237,6 +239,65 @@ class FlowOrchestratorTest {
 
         // Step log still created for audit
         verify(stepLogRepo).save(any(StepExecutionLog.class));
+    }
+
+    // ========== WaitingStepException — PARKED vs POLLING ==========
+
+    @Test
+    void executeStep_waitingParked_setsParkedStatus() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+
+        StepHandler<TestFlow> handler = mock(StepHandler.class);
+        when(handler.getStepName()).thenReturn("STEP_A");
+
+        // Gate step — PARKED mode with 48h expiry
+        doThrow(new WaitingStepException("waiting for approval",
+                WaitingStepException.WaitMode.PARKED, null, Duration.ofHours(48)))
+                .when(handler).execute(flow);
+
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+        when(stepRegistry.getHandler("STEP_A")).thenReturn(handler);
+
+        // Does NOT throw — handled internally
+        orchestrator.executeStep("flow-1", "STEP_A");
+
+        assertEquals(FlowStatus.PARKED, flow.getStatus());
+        assertEquals(0, flow.getRetryCount()); // Not incremented for waiting steps
+        assertNotNull(flow.getWaitingSince());
+        assertNull(flow.getNextRetryAt()); // PARKED has no nextRetryAt
+        assertNotNull(flow.getExpiresAt()); // expiry is set
+        verify(flowRepo).save(flow);
+    }
+
+    @Test
+    void executeStep_waitingPolling_setsWaitingRetryWithNextRetryAt() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+
+        StepHandler<TestFlow> handler = mock(StepHandler.class);
+        when(handler.getStepName()).thenReturn("STEP_A");
+
+        // Polling step — POLLING mode with 30s interval, 72h expiry
+        doThrow(new WaitingStepException("polling signing status",
+                WaitingStepException.WaitMode.POLLING, Duration.ofSeconds(30), Duration.ofHours(72)))
+                .when(handler).execute(flow);
+
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+        when(stepRegistry.getHandler("STEP_A")).thenReturn(handler);
+
+        orchestrator.executeStep("flow-1", "STEP_A");
+
+        assertEquals(FlowStatus.WAITING_RETRY, flow.getStatus());
+        assertEquals(0, flow.getRetryCount());
+        assertNotNull(flow.getWaitingSince());
+        assertNotNull(flow.getNextRetryAt()); // POLLING sets nextRetryAt
+        assertNotNull(flow.getExpiresAt()); // expiry is set
+        verify(flowRepo).save(flow);
     }
 
     // ========== Reply mode vs inline ==========

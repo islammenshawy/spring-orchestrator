@@ -230,9 +230,10 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         try {
             executeWithTimeout(handler, flow, stepName);
         } catch (WaitingStepException e) {
-            metrics.stepExecution(flowType, stepName, StepOutcome.WAITING.name(),
+            StepOutcome outcome = e.isParked() ? StepOutcome.PARKED : StepOutcome.WAITING;
+            metrics.stepExecution(flowType, stepName, outcome.name(),
                     Duration.between(startedAt, Instant.now()));
-            logStep(flowId, stepName, StepOutcome.WAITING.name(), flow.getRetryCount(),
+            logStep(flowId, stepName, outcome.name(), flow.getRetryCount(),
                     flowBefore, null, e.getMessage(), startedAt);
             handleWaitingStep(flow, e);
             return;
@@ -280,6 +281,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setErrorMessage(null);
         flow.setRecoveryCount(0);
         flow.setWaitingSince(null);
+        flow.setExpiresAt(null);
         flow.setUpdatedAt(Instant.now());
 
         // Save flow with version conflict retry.
@@ -423,7 +425,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      * Cancel a running flow. Runs @OnCancel handlers (or @Compensate fallback)
      * for all completed steps in reverse order, then marks as CANCELLED.
      *
-     * Can only cancel flows in IN_PROGRESS, WAITING_RETRY, or PENDING status.
+     * Can only cancel flows in IN_PROGRESS, WAITING_RETRY, PARKED, or PENDING status.
      * Returns the cancelled flow, or null if cancellation not allowed.
      */
     public F cancelFlow(String flowId, String reason) {
@@ -432,7 +434,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
         FlowStatus status = flow.getStatus();
         if (status != FlowStatus.IN_PROGRESS && status != FlowStatus.WAITING_RETRY
-                && status != FlowStatus.PENDING) {
+                && status != FlowStatus.PARKED && status != FlowStatus.PENDING) {
             log.warn("[Saga] Cannot cancel flow {} — status is {}", flowId, status);
             return null;
         }
@@ -679,30 +681,43 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     }
 
     /**
-     * Gate/polling step — marks flow as WAITING_RETRY without incrementing retryCount.
-     * This is not an error, just waiting for an external event (approval, signing).
-     * The exception is then re-thrown as RetryableStepException so Spring Kafka's
-     * retry topics handle the re-delivery with standard backoff + jitter.
+     * Gate/polling step — parks flow without incrementing retryCount.
+     *
+     * PARKED: flow sleeps in MongoDB (status=PARKED). No Kafka re-delivery.
+     *         Woken by external trigger (webhook/API re-publishes step command).
+     * POLLING: flow waits for nextRetryAt (status=WAITING_RETRY). Scheduler
+     *          re-delivers when the poll interval elapses.
      */
     private void handleWaitingStep(F flow, WaitingStepException e) {
         String errorMsg = e.getMessage() != null ? e.getMessage() : "waiting for external event";
+        FlowStatus targetStatus = e.isParked() ? FlowStatus.PARKED : FlowStatus.WAITING_RETRY;
+        Instant now = Instant.now();
 
         if (mongoTemplate != null && entityClass != null) {
             var fields = new java.util.LinkedHashMap<String, Object>();
-            fields.put("status", FlowStatus.WAITING_RETRY.name());
+            fields.put("status", targetStatus.name());
             fields.put("errorMessage", errorMsg);
-            fields.put("updatedAt", Instant.now());
-            // Set waitingSince only on first entry — don't reset on re-activation
+            fields.put("updatedAt", now);
+            // Set waitingSince and expiresAt only on first entry — don't reset on re-activation
             if (flow.getWaitingSince() == null) {
-                fields.put("waitingSince", Instant.now());
+                fields.put("waitingSince", now);
+                fields.put("expiresAt", now.plus(e.getExpiry()));
+            }
+            // Polling mode: set nextRetryAt so scheduler knows when to re-deliver
+            if (!e.isParked() && e.getPollInterval() != null) {
+                fields.put("nextRetryAt", now.plus(e.getPollInterval()));
             }
             updateFlowPartial(flow.getId(), fields);
         } else {
-            flow.setStatus(FlowStatus.WAITING_RETRY);
+            flow.setStatus(targetStatus);
             flow.setErrorMessage(errorMsg);
-            flow.setUpdatedAt(Instant.now());
+            flow.setUpdatedAt(now);
             if (flow.getWaitingSince() == null) {
-                flow.setWaitingSince(Instant.now());
+                flow.setWaitingSince(now);
+                flow.setExpiresAt(now.plus(e.getExpiry()));
+            }
+            if (!e.isParked() && e.getPollInterval() != null) {
+                flow.setNextRetryAt(now.plus(e.getPollInterval()));
             }
             saveFlow(flow);
         }

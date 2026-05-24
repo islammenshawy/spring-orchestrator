@@ -236,14 +236,11 @@ class StaleFlowRecoveryTest {
         FlowA waitingFlow = new FlowA();
         waitingFlow.setId("a-1");
         waitingFlow.setCurrentStep("AWAIT_APPROVAL");
-        waitingFlow.setStatus(FlowStatus.WAITING_RETRY);
+        waitingFlow.setStatus(FlowStatus.PARKED);
         waitingFlow.setWaitingSince(Instant.now().minus(96, ChronoUnit.HOURS));
+        waitingFlow.setExpiresAt(Instant.now().minus(48, ChronoUnit.HOURS)); // expired 48h ago
 
-        StepHandler handler = mock(StepHandler.class);
-        when(handler.getExpiresAfter()).thenReturn(Duration.ofHours(48));
         StepRegistry stepRegistry = mock(StepRegistry.class);
-        when(stepRegistry.getStepNames()).thenReturn(List.of("AWAIT_APPROVAL"));
-        when(stepRegistry.getHandler("AWAIT_APPROVAL")).thenReturn(handler);
 
         // find candidates returns the expired flow, find claimed returns same
         when(mongoTemplate.find(any(Query.class), eq(FlowA.class)))

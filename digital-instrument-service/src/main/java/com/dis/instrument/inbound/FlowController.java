@@ -240,7 +240,7 @@ public class FlowController {
                             content = @Content(mediaType = "application/json",
                                     examples = @ExampleObject(value = """
                                             {
-                                              "error": "Cannot cancel — flow not in cancellable state (must be IN_PROGRESS, WAITING_RETRY, or PENDING)",
+                                              "error": "Cannot cancel — flow not in cancellable state (must be IN_PROGRESS, WAITING_RETRY, PARKED, or PENDING)",
                                               "instrumentId": "682b3f1a0000000000000001"
                                             }"""))),
                     @ApiResponse(responseCode = "500", description = "Compensation handler failed")
@@ -265,7 +265,7 @@ public class FlowController {
 
             if (cancelled == null) {
                 return ResponseEntity.badRequest().body(new ErrorResponse(
-                        "Cannot cancel — flow not in cancellable state (must be IN_PROGRESS, WAITING_RETRY, or PENDING)", id));
+                        "Cannot cancel — flow not in cancellable state (must be IN_PROGRESS, WAITING_RETRY, PARKED, or PENDING)", id));
             }
 
             return ResponseEntity.ok(new CancelResponse(

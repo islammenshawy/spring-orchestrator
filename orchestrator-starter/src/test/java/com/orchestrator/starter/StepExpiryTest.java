@@ -32,9 +32,8 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Tests for @Step(expiresAfter) feature:
- * - Duration parsing
- * - Library-level expiry enforcement via StaleFlowRecoveryService
+ * Tests for flow expiry via expiresAt field (set by waitUntil/pollUntil).
+ * StaleFlowRecoveryService expires flows where expiresAt < now.
  */
 @SuppressWarnings({"unchecked", "rawtypes"})
 class StepExpiryTest {
@@ -72,58 +71,20 @@ class StepExpiryTest {
                 15, 10, 100, 5, outboxRepo, OrchestratorMetrics.noop());
     }
 
-    // ========== Duration parsing ==========
-
-    @Test
-    void parseExpiresAfter_hours() {
-        assertEquals(Duration.ofHours(48), MethodStepAdapter.parseExpiresAfter("48h"));
-        assertEquals(Duration.ofHours(1), MethodStepAdapter.parseExpiresAfter("1h"));
-        assertEquals(Duration.ofHours(720), MethodStepAdapter.parseExpiresAfter("720h"));
-    }
-
-    @Test
-    void parseExpiresAfter_days() {
-        assertEquals(Duration.ofDays(7), MethodStepAdapter.parseExpiresAfter("7d"));
-        assertEquals(Duration.ofDays(1), MethodStepAdapter.parseExpiresAfter("1d"));
-        assertEquals(Duration.ofDays(30), MethodStepAdapter.parseExpiresAfter("30d"));
-    }
-
-    @Test
-    void parseExpiresAfter_empty_returnsNull() {
-        assertNull(MethodStepAdapter.parseExpiresAfter(""));
-        assertNull(MethodStepAdapter.parseExpiresAfter(null));
-    }
-
-    @Test
-    void parseExpiresAfter_invalid_throws() {
-        assertThrows(IllegalArgumentException.class, () -> MethodStepAdapter.parseExpiresAfter("abc"));
-        assertThrows(IllegalArgumentException.class, () -> MethodStepAdapter.parseExpiresAfter("48m"));
-        assertThrows(IllegalArgumentException.class, () -> MethodStepAdapter.parseExpiresAfter("48"));
-    }
-
     // ========== Expiry enforcement ==========
 
     @Test
-    void expireWaitingFlows_expired_setsFailedStatus() {
-        // Flow waiting for 50 hours at a step with 48h expiry
+    void expireWaitingFlows_expiredParkedFlow_setsFailedStatus() {
+        // PARKED flow with expiresAt in the past
         TestFlow flow = new TestFlow();
         flow.setId("flow-1");
         flow.setCurrentStep("AWAIT_APPROVAL");
-        flow.setStatus(FlowStatus.WAITING_RETRY);
+        flow.setStatus(FlowStatus.PARKED);
         flow.setWaitingSince(Instant.now().minus(50, ChronoUnit.HOURS));
+        flow.setExpiresAt(Instant.now().minus(2, ChronoUnit.HOURS)); // expired 2h ago
 
-        StepHandler handler = mock(StepHandler.class);
-        when(handler.getStepName()).thenReturn("AWAIT_APPROVAL");
-        when(handler.getExpiresAfter()).thenReturn(Duration.ofHours(48));
-
-        StepRegistry stepRegistry = mock(StepRegistry.class);
-        when(stepRegistry.getStepNames()).thenReturn(List.of("AWAIT_APPROVAL"));
-        when(stepRegistry.getHandler("AWAIT_APPROVAL")).thenReturn(handler);
-
-        // find candidates + find claimed batch both return the flow
         when(mongoTemplate.find(any(Query.class), eq(TestFlow.class)))
                 .thenReturn(List.of(flow));
-        // updateMulti for claim returns 1
         when(mongoTemplate.updateMulti(argThat(q -> q.toString().contains("$in")),
                 any(Update.class), eq(TestFlow.class)))
                 .thenReturn(UpdateResult.acknowledged(1, 1L, null));
@@ -132,14 +93,48 @@ class StepExpiryTest {
                 .flowType("test").entityClass(TestFlow.class)
                 .commandTopic("test.commands").replyTopic("test.commands.replies")
                 .replyEnabled(true).repository(null)
-                .stepRegistry(stepRegistry)
+                .stepRegistry(mock(StepRegistry.class))
                 .orchestrator(mock(FlowOrchestrator.class))
                 .build();
         FlowTypeRegistry registry = new FlowTypeRegistry(List.of(desc));
 
         createService(registry).recoverStaleFlows();
 
-        // Verify FAILED status set via updateFirst
+        ArgumentCaptor<Update> updateCaptor = ArgumentCaptor.forClass(Update.class);
+        verify(mongoTemplate, atLeastOnce()).updateFirst(any(Query.class), updateCaptor.capture(), eq(TestFlow.class));
+        String updateStr = updateCaptor.getAllValues().stream()
+                .map(Object::toString).reduce("", String::concat);
+        assertThat(updateStr).contains("FAILED");
+        assertThat(updateStr).contains("expired");
+    }
+
+    @Test
+    void expireWaitingFlows_expiredWaitingRetryFlow_setsFailedStatus() {
+        // WAITING_RETRY flow with expiresAt in the past
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-2");
+        flow.setCurrentStep("POLL_STATUS");
+        flow.setStatus(FlowStatus.WAITING_RETRY);
+        flow.setWaitingSince(Instant.now().minus(73, ChronoUnit.HOURS));
+        flow.setExpiresAt(Instant.now().minus(1, ChronoUnit.HOURS));
+
+        when(mongoTemplate.find(any(Query.class), eq(TestFlow.class)))
+                .thenReturn(List.of(flow));
+        when(mongoTemplate.updateMulti(argThat(q -> q.toString().contains("$in")),
+                any(Update.class), eq(TestFlow.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1L, null));
+
+        FlowTypeDescriptor desc = FlowTypeDescriptor.builder()
+                .flowType("test").entityClass(TestFlow.class)
+                .commandTopic("test.commands").replyTopic("test.commands.replies")
+                .replyEnabled(true).repository(null)
+                .stepRegistry(mock(StepRegistry.class))
+                .orchestrator(mock(FlowOrchestrator.class))
+                .build();
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(desc));
+
+        createService(registry).recoverStaleFlows();
+
         ArgumentCaptor<Update> updateCaptor = ArgumentCaptor.forClass(Update.class);
         verify(mongoTemplate, atLeastOnce()).updateFirst(any(Query.class), updateCaptor.capture(), eq(TestFlow.class));
         String updateStr = updateCaptor.getAllValues().stream()
@@ -150,16 +145,7 @@ class StepExpiryTest {
 
     @Test
     void expireWaitingFlows_notExpired_notFailed() {
-        // Flow waiting for only 10 hours at a step with 48h expiry — NOT expired
-        StepHandler handler = mock(StepHandler.class);
-        when(handler.getStepName()).thenReturn("AWAIT_APPROVAL");
-        when(handler.getExpiresAfter()).thenReturn(Duration.ofHours(48));
-
-        StepRegistry stepRegistry = mock(StepRegistry.class);
-        when(stepRegistry.getStepNames()).thenReturn(List.of("AWAIT_APPROVAL"));
-        when(stepRegistry.getHandler("AWAIT_APPROVAL")).thenReturn(handler);
-
-        // find returns empty — nothing expired (10h < 48h, query won't match)
+        // No expired flows — find returns empty
         when(mongoTemplate.find(any(Query.class), eq(TestFlow.class)))
                 .thenReturn(List.of());
 
@@ -167,41 +153,16 @@ class StepExpiryTest {
                 .flowType("test").entityClass(TestFlow.class)
                 .commandTopic("test.commands").replyTopic("test.commands.replies")
                 .replyEnabled(true).repository(null)
-                .stepRegistry(stepRegistry)
+                .stepRegistry(mock(StepRegistry.class))
                 .orchestrator(mock(FlowOrchestrator.class))
                 .build();
         FlowTypeRegistry registry = new FlowTypeRegistry(List.of(desc));
 
         createService(registry).recoverStaleFlows();
 
-        // No updateMulti for claim (candidates empty)
+        // No claim attempted
         verify(mongoTemplate, never()).updateMulti(argThat(q -> q.toString().contains("$in")),
                 any(Update.class), eq(TestFlow.class));
-    }
-
-    @Test
-    void expireWaitingFlows_noExpiry_ignored() {
-        StepHandler handler = mock(StepHandler.class);
-        when(handler.getStepName()).thenReturn("SOME_STEP");
-        when(handler.getExpiresAfter()).thenReturn(null); // no expiry
-
-        StepRegistry stepRegistry = mock(StepRegistry.class);
-        when(stepRegistry.getStepNames()).thenReturn(List.of("SOME_STEP"));
-        when(stepRegistry.getHandler("SOME_STEP")).thenReturn(handler);
-
-        FlowTypeDescriptor desc = FlowTypeDescriptor.builder()
-                .flowType("test").entityClass(TestFlow.class)
-                .commandTopic("test.commands").replyTopic("test.commands.replies")
-                .replyEnabled(true).repository(null)
-                .stepRegistry(stepRegistry)
-                .orchestrator(mock(FlowOrchestrator.class))
-                .build();
-        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(desc));
-
-        createService(registry).recoverStaleFlows();
-
-        // No claim attempted for steps without expiry
-        verify(mongoTemplate, never()).find(argThat(q -> q.toString().contains("SOME_STEP")), eq(TestFlow.class));
     }
 
     // ========== Child flow chaining ==========

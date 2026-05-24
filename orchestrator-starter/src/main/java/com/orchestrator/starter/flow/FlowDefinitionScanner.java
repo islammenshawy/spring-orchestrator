@@ -195,18 +195,6 @@ public class FlowDefinitionScanner {
                     throw new IllegalStateException(
                             "@Flow " + clazz.getSimpleName() + ": duplicate step name '" + resolvedName + "'");
                 }
-                // Validate expiresAfter format at startup
-                if (!stepAnnotation.expiresAfter().isEmpty()) {
-                    try {
-                        MethodStepAdapter.parseExpiresAfter(stepAnnotation.expiresAfter());
-                    } catch (Exception e) {
-                        throw new IllegalStateException(
-                                "Invalid @Step(expiresAfter=\"" + stepAnnotation.expiresAfter() +
-                                        "\") on " + clazz.getSimpleName() + "." + method.getName() +
-                                        " — use format like '48h' or '7d'");
-                    }
-                }
-
                 stepMethodNames.add(method.getName());
                 handlers.add(new MethodStepAdapter(flowDef, method, stepAnnotation));
             }

@@ -5,6 +5,6 @@ package com.orchestrator.starter.domain;
  * and metrics instead of string literals.
  */
 public enum StepOutcome {
-    COMPLETED, WAITING, RETRYING, FAILED, RECOVERED,
+    COMPLETED, WAITING, PARKED, RETRYING, FAILED, RECOVERED,
     COMPENSATED, COMPENSATION_FAILED, CANCELLED, CANCEL_FAILED, DEAD_LETTERED
 }

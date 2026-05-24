@@ -166,6 +166,7 @@
                     <button class="btn btn-outline btn-sm filter-btn" data-filter="all" onclick="filterFlows('all')">All</button>
                     <button class="btn btn-outline btn-sm filter-btn active" data-filter="active" onclick="filterFlows('active')">Active</button>
                     <button class="btn btn-outline btn-sm filter-btn" data-filter="WAITING_RETRY" onclick="filterFlows('WAITING_RETRY')">Retrying</button>
+                    <button class="btn btn-outline btn-sm filter-btn" data-filter="PARKED" onclick="filterFlows('PARKED')">Parked</button>
                     <button class="btn btn-outline btn-sm filter-btn" data-filter="FAILED" onclick="filterFlows('FAILED')">Failed</button>
                     <button class="btn btn-outline btn-sm filter-btn" data-filter="COMPLETED" onclick="filterFlows('COMPLETED')">Done</button>
                 </div>
@@ -706,11 +707,11 @@ async function refreshFlows(){try{allFlows=await api('/api/dashboard/flows');ren
 function refreshAll(){refreshFlows();loadLadder();loadCollections()}
 
 function updateStats(){
-    let c={PENDING:0,IN_PROGRESS:0,WAITING_RETRY:0,COMPLETED:0,FAILED:0};
+    let c={PENDING:0,IN_PROGRESS:0,WAITING_RETRY:0,PARKED:0,COMPLETED:0,FAILED:0};
     allFlows.forEach(f=>c[f.status]=(c[f.status]||0)+1);
     document.getElementById('s-total').textContent=allFlows.length;
     document.getElementById('s-progress').textContent=(c.IN_PROGRESS||0)+(c.PENDING||0);
-    document.getElementById('s-waiting').textContent=c.WAITING_RETRY||0;
+    document.getElementById('s-waiting').textContent=(c.WAITING_RETRY||0)+(c.PARKED||0);
     document.getElementById('s-completed').textContent=c.COMPLETED||0;
     document.getElementById('s-failed').textContent=c.FAILED||0;
 }
@@ -728,7 +729,7 @@ function renderProgress(f){
     return h+'</div>';
 }
 
-function badge(s){const m={PENDING:'pending',IN_PROGRESS:'progress',WAITING_RETRY:'waiting',COMPLETED:'completed',FAILED:'failed',COMPENSATING:'compensating'};return`<span class="badge b-${m[s]||'pending'}">${s}</span>`}
+function badge(s){const m={PENDING:'pending',IN_PROGRESS:'progress',WAITING_RETRY:'waiting',PARKED:'parked',COMPLETED:'completed',FAILED:'failed',COMPENSATING:'compensating'};return`<span class="badge b-${m[s]||'pending'}">${s}</span>`}
 
 function detectLib(f){
     const cls=f._class||'';
@@ -743,7 +744,7 @@ function renderFlows(){
     const tb=document.getElementById('flow-tbody');
     let flows;
     if(curFilter==='all')flows=allFlows;
-    else if(curFilter==='active')flows=allFlows.filter(f=>f.status==='IN_PROGRESS'||f.status==='PENDING'||f.status==='WAITING_RETRY');
+    else if(curFilter==='active')flows=allFlows.filter(f=>f.status==='IN_PROGRESS'||f.status==='PENDING'||f.status==='WAITING_RETRY'||f.status==='PARKED');
     else flows=allFlows.filter(f=>f.status===curFilter);
     if(!flows.length){tb.innerHTML='<tr><td colspan="9" class="empty">No flows</td></tr>';document.getElementById('pg-info').textContent='0 of 0';document.getElementById('pg-prev').disabled=true;document.getElementById('pg-next').disabled=true;return}
     const totalPages=Math.ceil(flows.length/pageSize);
@@ -1224,7 +1225,7 @@ function updateDisStats(){
     let c={IN_PROGRESS:0,COMPLETED:0,FAILED:0};
     disFlows.forEach(f=>c[f.status]=(c[f.status]||0)+1);
     document.getElementById('dis-s-total').textContent=disFlows.length;
-    document.getElementById('dis-s-progress').textContent=(c.IN_PROGRESS||0)+(c.WAITING_RETRY||0);
+    document.getElementById('dis-s-progress').textContent=(c.IN_PROGRESS||0)+(c.WAITING_RETRY||0)+(c.PARKED||0);
     document.getElementById('dis-s-done').textContent=c.COMPLETED||0;
     document.getElementById('dis-s-failed').textContent=c.FAILED||0;
     const total=disFlows.length;
@@ -1252,7 +1253,7 @@ function setDisFilter(f,btn){
 
 function renderDisFlows(){
     let filtered=disFlows;
-    if(disFilter==='active')filtered=disFlows.filter(f=>f.status==='IN_PROGRESS'||f.status==='WAITING_RETRY');
+    if(disFilter==='active')filtered=disFlows.filter(f=>f.status==='IN_PROGRESS'||f.status==='WAITING_RETRY'||f.status==='PARKED');
     else if(disFilter==='done')filtered=disFlows.filter(f=>f.status==='COMPLETED');
     else if(disFilter==='failed')filtered=disFlows.filter(f=>f.status==='FAILED');
 

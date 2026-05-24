@@ -128,7 +128,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
 
     // ===== Gate 1: Notify downstream, await approval for signing =====
 
-    @Step(order = 4, expiresAfter = "72h")
+    @Step(order = 4)
     public void awaitPreparationApproval(EnigioInstrumentEntity flow) {
         if (!flow.isPreparationNotified()) {
             log.info("[{}] Document preparation complete. Publishing notification.", flow.getId());
@@ -150,7 +150,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             }
         }
 
-        waitUntil(() -> flow.isSigningApproved());
+        waitUntil(() -> flow.isSigningApproved(), Duration.ofHours(72));
 
         log.info("[{}] Signing phase approved by downstream", flow.getId());
     }
@@ -211,7 +211,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
      * Each PARTIALLY_SIGNED webhook increments signaturesReceived and notifies downstream.
      * Flow advances only when signingStatus == SigningStatus.SIGNED.name().
      */
-    @Step(order = 7, expiresAfter = "48h")
+    @Step(order = 7)
     public void awaitSignatures(EnigioInstrumentEntity flow) {
         // 1. Check if webhook already set the status (fast path)
         if (SigningStatus.SIGNED.name().equals(flow.getSigningStatus())) {
@@ -277,12 +277,12 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
 
         // Still pending — park and wait for webhook or next poll
         flow.setSigningStatus(status);
-        waitUntil(() -> SigningStatus.SIGNED.name().equals(flow.getSigningStatus()));
+        waitUntil(() -> SigningStatus.SIGNED.name().equals(flow.getSigningStatus()), Duration.ofHours(48));
     }
 
     // ===== Gate 2: Notify downstream, await approval for delivery =====
 
-    @Step(order = 8, expiresAfter = "72h")
+    @Step(order = 8)
     public void awaitDeliveryApproval(EnigioInstrumentEntity flow) {
         if (!flow.isSigningNotified()) {
             log.info("[{}] Signing ceremony complete. Publishing notification.", flow.getId());
@@ -304,7 +304,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             }
         }
 
-        waitUntil(() -> flow.isDeliveryApproved());
+        waitUntil(() -> flow.isDeliveryApproved(), Duration.ofHours(72));
 
         log.info("[{}] Delivery phase approved by downstream", flow.getId());
     }
@@ -379,7 +379,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         checkpoint(flow);
     }
 
-    @Step(order = 11, expiresAfter = "72h")
+    @Step(order = 11)
     public void transferDocument(EnigioInstrumentEntity flow) {
         // Phase 1: Initiate transfer (if not already done)
         if (flow.getTransferId() == null) {
@@ -430,7 +430,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         }
 
         // Still waiting — park in DB, TRANSFER/TRANSFER_REJECTED webhook will re-activate
-        waitUntil(() -> flow.isTransferAccepted());
+        waitUntil(() -> flow.isTransferAccepted(), Duration.ofHours(72));
     }
 
     // ===== Cancellation Handlers =====

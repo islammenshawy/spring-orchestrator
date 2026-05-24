@@ -5,7 +5,6 @@ import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.flow.FlowTypeDescriptor;
 import com.orchestrator.starter.flow.FlowTypeRegistry;
-import com.orchestrator.starter.flow.StepHandler;
 import com.orchestrator.starter.flow.StepRegistry;
 import com.orchestrator.starter.kafka.StepCommandMessage;
 import tools.jackson.databind.ObjectMapper;
@@ -91,8 +90,7 @@ public class StaleFlowRecoveryService {
             recoverFlowType(descriptor.getFlowType(), descriptor.getEntityClass(),
                     commandTopic, descriptor.getStepRegistry());
 
-            expireWaitingFlows(descriptor.getFlowType(), descriptor.getEntityClass(),
-                    descriptor.getStepRegistry());
+            expireWaitingFlows(descriptor.getFlowType(), descriptor.getEntityClass());
         }
     }
 
@@ -221,78 +219,61 @@ public class StaleFlowRecoveryService {
     }
 
     /**
-     * Expire WAITING_RETRY flows that exceeded step-level expiresAfter.
+     * Expire PARKED/WAITING_RETRY flows past their expiresAt deadline.
+     * The deadline is set by waitUntil()/pollUntil() on first park.
      * Uses batch claiming to prevent duplicate expiry across pods.
      */
     @SuppressWarnings("unchecked")
-    private void expireWaitingFlows(String flowType, Class<?> entityClass,
-                                     StepRegistry<?> stepRegistry) {
-        if (stepRegistry == null) return;
+    private void expireWaitingFlows(String flowType, Class<?> entityClass) {
+        Instant now = Instant.now();
 
-        // Find all step handlers with expiresAfter configured
-        for (String stepName : stepRegistry.getStepNames()) {
-            StepHandler<?> handler = stepRegistry.getHandler(stepName);
-            if (handler == null) continue;
+        // Single query: any flow with expiresAt in the past
+        Query expiryCandidateQuery = Query.query(Criteria.where("status")
+                .in(FlowStatus.WAITING_RETRY.name(), FlowStatus.PARKED.name())
+                .and("expiresAt").lt(now)
+                .and("claimedBy").is(null))
+                .limit(batchSize);
+        expiryCandidateQuery.fields().include("_id");
+        List<?> expiryCandidates = mongoTemplate.find(expiryCandidateQuery, entityClass);
+        if (expiryCandidates.isEmpty()) return;
 
-            java.time.Duration expiresAfter = handler.getExpiresAfter();
-            if (expiresAfter == null) continue;
+        List<String> expiryIds = expiryCandidates.stream()
+                .map(c -> ((OrchestratorFlow) c).getId())
+                .toList();
 
-            Instant expiryThreshold = Instant.now().minus(expiresAfter);
+        long claimed = mongoTemplate.updateMulti(
+                Query.query(Criteria.where("_id").in(expiryIds)
+                        .and("claimedBy").is(null)),
+                new Update()
+                        .set("claimedBy", podId)
+                        .set("claimedAt", now),
+                entityClass).getModifiedCount();
 
-            // Find candidate IDs (limited to batchSize)
-            Query expiryCandidateQuery = Query.query(Criteria.where("status").is(FlowStatus.WAITING_RETRY.name())
-                    .and("currentStep").is(stepName)
-                    .and("waitingSince").lt(expiryThreshold)
-                    .and("claimedBy").is(null))
-                    .limit(batchSize);
-            expiryCandidateQuery.fields().include("_id");
-            List<?> expiryCandidates = mongoTemplate.find(expiryCandidateQuery, entityClass);
-            if (expiryCandidates.isEmpty()) continue;
+        if (claimed == 0) return;
 
-            List<String> expiryIds = expiryCandidates.stream()
-                    .map(c -> ((OrchestratorFlow) c).getId())
-                    .toList();
+        List<?> batch = mongoTemplate.find(
+                Query.query(Criteria.where("claimedBy").is(podId)
+                        .and("status").in(FlowStatus.WAITING_RETRY.name(), FlowStatus.PARKED.name())
+                        .and("expiresAt").lt(now)),
+                entityClass);
 
-            // Claim those IDs atomically
-            long claimed = mongoTemplate.updateMulti(
-                    Query.query(Criteria.where("_id").in(expiryIds)
-                            .and("claimedBy").is(null)),
+        for (Object obj : batch) {
+            OrchestratorFlow flow = (OrchestratorFlow) obj;
+            long waitedHours = flow.getWaitingSince() != null
+                    ? java.time.Duration.between(flow.getWaitingSince(), now).toHours() : 0;
+            mongoTemplate.updateFirst(
+                    Query.query(Criteria.where("_id").is(flow.getId())),
                     new Update()
-                            .set("claimedBy", podId)
-                            .set("claimedAt", Instant.now()),
-                    entityClass).getModifiedCount();
-
-            if (claimed == 0) continue;
-
-            List<?> batch = mongoTemplate.find(
-                    Query.query(Criteria.where("claimedBy").is(podId)
-                            .and("status").is(FlowStatus.WAITING_RETRY.name())
-                            .and("currentStep").is(stepName)),
+                            .set("status", FlowStatus.FAILED.name())
+                            .set("errorMessage", "Step " + flow.getCurrentStep() +
+                                    " expired after " + waitedHours + "h")
+                            .set("updatedAt", now)
+                            .set("claimedBy", null)
+                            .set("claimedAt", null),
                     entityClass);
-
-            for (Object obj : batch) {
-                OrchestratorFlow flow = (OrchestratorFlow) obj;
-                Instant waitingSince = flow.getWaitingSince();
-                if (waitingSince == null) {
-                    releaseClaim(flow.getId(), entityClass);
-                    continue;
-                }
-
-                long waitedHours = java.time.Duration.between(waitingSince, Instant.now()).toHours();
-                mongoTemplate.updateFirst(
-                        Query.query(Criteria.where("_id").is(flow.getId())),
-                        new Update()
-                                .set("status", FlowStatus.FAILED.name())
-                                .set("errorMessage", "Step " + stepName + " expired after " + waitedHours +
-                                        "h (limit: " + expiresAfter.toHours() + "h)")
-                                .set("updatedAt", Instant.now())
-                                .set("claimedBy", null)
-                                .set("claimedAt", null),
-                        entityClass);
-                metrics.flowFailed(flowType);
-                log.info("[Recovery] Expired flow {} at step {} (waited {}h, limit {}h)",
-                        flow.getId(), stepName, waitedHours, expiresAfter.toHours());
-            }
+            metrics.flowFailed(flowType);
+            log.info("[Recovery] Expired flow {} at step {} (waited {}h)",
+                    flow.getId(), flow.getCurrentStep(), waitedHours);
         }
     }
 

@@ -81,7 +81,7 @@ count_total() {
 # Auto-approve all flows waiting at gate steps
 auto_approve() {
   local ids
-  ids=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval 'db.dis_instrument_flows.find({status:"WAITING_RETRY",currentStep:{$in:["AWAIT_PREPARATION_APPROVAL","AWAIT_DELIVERY_APPROVAL"]}},{_id:1}).forEach(function(f){print(String(f._id))})' 2>/dev/null)
+  ids=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval 'db.dis_instrument_flows.find({status:{$in:["WAITING_RETRY","PARKED"]},currentStep:{$in:["AWAIT_PREPARATION_APPROVAL","AWAIT_DELIVERY_APPROVAL"]}},{_id:1}).forEach(function(f){print(String(f._id))})' 2>/dev/null)
 
   for id in $ids; do
     curl -sf -X POST "$DIS_URL/flows/enigio-instrument/$id/approve" \
@@ -103,7 +103,7 @@ chaos_inject_duplicates() {
   local flows
   flows=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval '
     db.dis_instrument_flows.find(
-      {status:"WAITING_RETRY", completedSteps:{$exists:true,$ne:[]}},
+      {status:{$in:["WAITING_RETRY","PARKED"]}, completedSteps:{$exists:true,$ne:[]}},
       {_id:1, correlationId:1, currentStep:1, flowType:1, completedSteps:1}
     ).limit(3).forEach(function(f){
       var step = f.completedSteps[0];

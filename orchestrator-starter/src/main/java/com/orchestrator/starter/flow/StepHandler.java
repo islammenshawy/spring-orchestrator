@@ -68,6 +68,4 @@ public interface StepHandler<F extends OrchestratorFlow> {
      */
     void execute(F flow);
 
-    /** Step expiry duration. Null = no expiry. */
-    default java.time.Duration getExpiresAfter() { return null; }
 }

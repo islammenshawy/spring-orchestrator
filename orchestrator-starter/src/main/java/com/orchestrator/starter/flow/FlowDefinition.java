@@ -5,6 +5,7 @@ import com.orchestrator.starter.domain.OrchestratorFlowRepository;
 import com.orchestrator.starter.exception.WaitingStepException;
 import org.springframework.beans.factory.annotation.Autowired;
 
+import java.time.Duration;
 import java.util.function.BooleanSupplier;
 
 /**
@@ -60,20 +61,36 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
     }
 
     /**
-     * Gate step helper — parks the flow until the condition is true.
-     * Hides the WaitingStepException from users.
+     * Gate step — parks the flow until an external trigger wakes it.
+     * No Kafka cycling; the flow sleeps in MongoDB until a webhook or
+     * API call re-publishes the step command. Fails the flow if the
+     * condition is not met within {@code expiry}.
      *
      * <pre>
-     * waitUntil(() -> flow.isSigningApproved());
+     * waitUntil(() -> flow.isApproved(), Duration.ofHours(48));
      * </pre>
-     *
-     * If the condition is false, throws WaitingStepException internally,
-     * which parks the flow in WAITING_RETRY. On the next Kafka retry
-     * (or webhook re-activation), the condition is checked again.
      */
-    protected void waitUntil(BooleanSupplier condition) {
+    protected void waitUntil(BooleanSupplier condition, Duration expiry) {
         if (!condition.getAsBoolean()) {
-            throw new WaitingStepException("Waiting for condition");
+            throw new WaitingStepException("Waiting for condition",
+                    WaitingStepException.WaitMode.PARKED, null, expiry);
+        }
+    }
+
+    /**
+     * Polling step — re-checks the condition on a configurable interval.
+     * The scheduler re-delivers the step when {@code pollInterval} elapses.
+     * Fails the flow if the condition is not met within {@code expiry}.
+     *
+     * <pre>
+     * pollUntil(() -> "COMPLETED".equals(flow.getSigningStatus()),
+     *           Duration.ofSeconds(30), Duration.ofHours(72));
+     * </pre>
+     */
+    protected void pollUntil(BooleanSupplier condition, Duration pollInterval, Duration expiry) {
+        if (!condition.getAsBoolean()) {
+            throw new WaitingStepException("Waiting for condition",
+                    WaitingStepException.WaitMode.POLLING, pollInterval, expiry);
         }
     }
 }
