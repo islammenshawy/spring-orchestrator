@@ -213,6 +213,35 @@ public class FlowEndpointAutoConfiguration {
         }
 
         /**
+         * Send a signal to a running flow.
+         * POST /flows/{flowType}/{id}/signal
+         * Body: { "signalName": "approve", "payload": { ... } }
+         */
+        @PostMapping("/{flowType}/{id}/signal")
+        public ResponseEntity<?> signalFlow(
+                @PathVariable String flowType,
+                @PathVariable String id,
+                @RequestBody Map<String, Object> body) {
+            try {
+                FlowTypeDescriptor desc = registry.resolve(flowType);
+                FlowOrchestrator orch = (FlowOrchestrator) desc.getOrchestrator();
+                String signalName = (String) body.get("signalName");
+                if (signalName == null || signalName.isBlank()) {
+                    return ResponseEntity.badRequest().body(Map.of("error", "signalName is required"));
+                }
+                @SuppressWarnings("unchecked")
+                Map<String, Object> payload = (Map<String, Object>) body.getOrDefault("payload", Map.of());
+                orch.signal(id, signalName, payload);
+                return ResponseEntity.ok(Map.of(
+                        "flowId", id,
+                        "signal", signalName,
+                        "message", "Signal delivered"));
+            } catch (IllegalArgumentException e) {
+                return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+            }
+        }
+
+        /**
          * Retry compensation for a flow stuck in COMPENSATION_FAILED status.
          * POST /flows/{flowType}/{id}/retry-compensation
          */

@@ -77,6 +77,9 @@ public abstract class AbstractFlow implements OrchestratorFlow {
     /** Target wake time for durable sleep. Set by sleep()/sleepUntil(), cleared on step success. */
     private Instant sleepUntil;
 
+    /** Queued signals waiting to execute between steps. Null/empty = none pending. */
+    private java.util.List<PendingSignal> pendingSignals;
+
     /** Pod ID that claimed this flow for recovery processing. Null = unclaimed. */
     private String claimedBy;
 

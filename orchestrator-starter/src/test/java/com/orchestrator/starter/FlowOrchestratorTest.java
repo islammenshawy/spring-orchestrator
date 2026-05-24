@@ -6,10 +6,13 @@ import com.orchestrator.starter.annotation.SearchAttribute;
 import com.orchestrator.starter.domain.AbstractFlow;
 import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.domain.OrchestratorFlowRepository;
+import com.orchestrator.starter.domain.PendingSignal;
 import com.orchestrator.starter.exception.NonRetryableStepException;
 import com.orchestrator.starter.exception.RetryableStepException;
 import com.orchestrator.starter.exception.WaitingStepException;
 import com.orchestrator.starter.flow.FlowOrchestrator;
+import com.orchestrator.starter.flow.SignalHandler;
+import com.orchestrator.starter.flow.SignalRegistry;
 import com.orchestrator.starter.flow.StepHandler;
 import com.orchestrator.starter.flow.StepRegistry;
 import com.orchestrator.starter.outbox.OutboxEventRepository;
@@ -47,6 +50,8 @@ class FlowOrchestratorTest {
         private String result;
         @SearchAttribute
         private String customerId;
+        private boolean approved;
+        private String approvedBy;
     }
 
     @BeforeEach
@@ -382,5 +387,118 @@ class FlowOrchestratorTest {
         // Orchestrator without mongoTemplate/entityClass → returns empty
         var results = orchestrator.findFlows(java.util.Map.of("customerId", "cust-1"));
         assertTrue(results.isEmpty());
+    }
+
+    // ========== Signals ==========
+
+    @Test
+    void signal_parkedFlow_executesImmediatelyAndReactivates() throws Exception {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setCorrelationId("corr-1");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.PARKED);
+        flow.setApproved(false);
+
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+
+        // Create a real signal handler via reflection
+        var method = TestSignalHandlers.class.getDeclaredMethod("approve", TestFlow.class);
+        SignalHandler<TestFlow> handler = new SignalHandler<>(new TestSignalHandlers(), method, "approve");
+        SignalRegistry<TestFlow> registry = new SignalRegistry<>();
+        registry.register("approve", handler);
+        orchestrator.setSignalRegistry(registry);
+
+        orchestrator.signal("flow-1", "approve", java.util.Map.of());
+
+        assertTrue(flow.isApproved(), "Signal handler should set approved=true");
+        verify(flowRepo).save(flow);
+        // Should re-publish step command to Kafka
+        verify(kafkaTemplate).send(eq("test.commands"), anyString(), anyString());
+    }
+
+    @Test
+    void signal_inProgressFlow_queuesAsPendingSignal() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+
+        var method = getApproveMethod();
+        SignalHandler<TestFlow> handler = new SignalHandler<>(new TestSignalHandlers(), method, "approve");
+        SignalRegistry<TestFlow> registry = new SignalRegistry<>();
+        registry.register("approve", handler);
+        orchestrator.setSignalRegistry(registry);
+
+        orchestrator.signal("flow-1", "approve", java.util.Map.of("note", "urgent"));
+
+        // Should NOT execute handler (flow is IN_PROGRESS)
+        assertFalse(flow.isApproved());
+        // Should queue via save (no mongoTemplate in test orchestrator)
+        var pending = flow.getPendingSignals();
+        assertNotNull(pending);
+        assertEquals(1, pending.size());
+        assertEquals("approve", pending.get(0).getSignalName());
+    }
+
+    @Test
+    void signal_unknownSignal_throws() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setStatus(FlowStatus.PARKED);
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+
+        SignalRegistry<TestFlow> registry = new SignalRegistry<>();
+        orchestrator.setSignalRegistry(registry);
+
+        assertThrows(IllegalArgumentException.class, () ->
+                orchestrator.signal("flow-1", "nonexistent", java.util.Map.of()));
+    }
+
+    @Test
+    void drainPendingSignals_executesQueuedSignals() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-1");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setApproved(false);
+
+        // Pre-queue a pending signal
+        var pending = new java.util.ArrayList<PendingSignal>();
+        pending.add(new PendingSignal("approve", java.util.Map.of(), java.time.Instant.now()));
+        flow.setPendingSignals(pending);
+
+        var method = getApproveMethod();
+        SignalHandler<TestFlow> handler = new SignalHandler<>(new TestSignalHandlers(), method, "approve");
+        SignalRegistry<TestFlow> registry = new SignalRegistry<>();
+        registry.register("approve", handler);
+        orchestrator.setSignalRegistry(registry);
+
+        when(flowRepo.findById("flow-1")).thenReturn(Optional.of(flow));
+        when(stepRegistry.getHandler("STEP_A")).thenReturn(mock(StepHandler.class));
+        when(stepRegistry.getNextStep("STEP_A")).thenReturn(null); // last step
+
+        // Execute step — should drain pending signals after completion
+        orchestrator.executeStep("flow-1", "STEP_A");
+
+        assertTrue(flow.isApproved(), "Pending signal should have been drained");
+        assertNull(flow.getPendingSignals(), "Pending signals should be cleared");
+    }
+
+    // Helper: signal handler class for testing
+    static class TestSignalHandlers {
+        public void approve(TestFlow flow) {
+            flow.setApproved(true);
+        }
+    }
+
+    private static java.lang.reflect.Method getApproveMethod() {
+        try {
+            return TestSignalHandlers.class.getDeclaredMethod("approve", TestFlow.class);
+        } catch (NoSuchMethodException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

@@ -544,4 +544,13 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
                     flow.getId(), phase, status, e.getMessage());
         }
     }
+
+    // ========== Signals ==========
+
+    @Signal
+    public void updatePriority(EnigioInstrumentEntity flow, java.util.Map<String, Object> data) {
+        String priority = (String) data.get("priority");
+        log.info("[{}] Priority updated to '{}' via signal", flow.getId(), priority);
+        flow.setPriority(priority);
+    }
 }

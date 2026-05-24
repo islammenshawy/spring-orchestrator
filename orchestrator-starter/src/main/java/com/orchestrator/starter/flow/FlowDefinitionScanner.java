@@ -4,6 +4,7 @@ import com.orchestrator.starter.annotation.Compensate;
 import com.orchestrator.starter.annotation.Flow;
 import com.orchestrator.starter.annotation.JoinOn;
 import com.orchestrator.starter.annotation.Parallel;
+import com.orchestrator.starter.annotation.Signal;
 import com.orchestrator.starter.annotation.Step;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import lombok.extern.slf4j.Slf4j;
@@ -234,12 +235,31 @@ public class FlowDefinitionScanner {
 
             handlers.sort(Comparator.comparingInt(StepHandler::getOrder));
 
-            log.info("Discovered @Flow '{}' ({}) with {} steps: {}",
+            // Discover @Signal methods
+            SignalRegistry signalRegistry = new SignalRegistry();
+            for (Method method : clazz.getDeclaredMethods()) {
+                Signal signalAnn = method.getAnnotation(Signal.class);
+                if (signalAnn == null) continue;
+
+                // Validate: first param must be OrchestratorFlow, max 2 params
+                if (method.getParameterCount() < 1 || method.getParameterCount() > 2
+                        || !OrchestratorFlow.class.isAssignableFrom(method.getParameterTypes()[0])) {
+                    throw new IllegalStateException(
+                            "@Signal method " + clazz.getSimpleName() + "." + method.getName() +
+                                    " must accept (Flow) or (Flow, PayloadType)");
+                }
+
+                String signalName = signalAnn.name().isEmpty() ? method.getName() : signalAnn.name();
+                signalRegistry.register(signalName, new SignalHandler(flowDef, method, signalName));
+            }
+
+            log.info("Discovered @Flow '{}' ({}) with {} steps: {}{}",
                     flowType, clazz.getSimpleName(), handlers.size(),
-                    handlers.stream().map(StepHandler::getStepName).collect(Collectors.toList()));
+                    handlers.stream().map(StepHandler::getStepName).collect(Collectors.toList()),
+                    signalRegistry.isEmpty() ? "" : ", signals: " + signalRegistry.getSignalNames());
 
             result.put(flowType, new FlowTypeInfo(flowType, clazz, entityClass,
-                    flowAnn.topic(), handlers));
+                    flowAnn.topic(), handlers, signalRegistry));
         }
 
         return result;
@@ -275,6 +295,7 @@ public class FlowDefinitionScanner {
             Class<?> flowDefinitionClass,
             Class<?> entityClass,
             String annotatedTopic,
-            List<StepHandler> handlers
+            List<StepHandler> handlers,
+            SignalRegistry signalRegistry
     ) {}
 }

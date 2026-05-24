@@ -152,6 +152,11 @@ public class OrchestratorAutoConfiguration {
                     info.annotatedTopic(), info.handlers(),
                     props, mongoTemplate, outboxRepository, stepLogRepository,
                     objectMapper, kafkaTemplate, transactionTemplate, metrics);
+            // Wire signal registry
+            desc.setSignalRegistry(info.signalRegistry());
+            if (desc.getOrchestrator() != null) {
+                ((FlowOrchestrator) desc.getOrchestrator()).setSignalRegistry(info.signalRegistry());
+            }
             descriptors.add(desc);
         }
 

@@ -88,6 +88,10 @@ public interface OrchestratorFlow {
     default Instant getSleepUntil() { return null; }
     default void setSleepUntil(Instant sleepUntil) {}
 
+    /** Queued signals waiting to execute between steps. */
+    default java.util.List<PendingSignal> getPendingSignals() { return null; }
+    default void setPendingSignals(java.util.List<PendingSignal> signals) {}
+
     /**
      * Tracks which steps have completed successfully.
      * Managed by the library — users don't interact with this.

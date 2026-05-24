@@ -305,6 +305,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
+        // Drain pending signals before advancing (Temporal-style: signals execute between steps)
+        drainPendingSignals(flow);
+
         metrics.stepExecution(flowType, stepName, StepOutcome.COMPLETED.name(),
                 Duration.between(startedAt, Instant.now()));
 
@@ -419,6 +422,125 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
         // Run compensation for all completed steps in reverse
         runCompensation(flow);
+    }
+
+    // ========== Signals ==========
+
+    private SignalRegistry<F> signalRegistry;
+
+    public void setSignalRegistry(SignalRegistry<F> signalRegistry) {
+        this.signalRegistry = signalRegistry;
+    }
+
+    /**
+     * Send a signal to a running flow. Temporal-style:
+     * - If flow is PARKED/WAITING_RETRY: execute handler immediately, re-publish step
+     * - If flow is IN_PROGRESS: queue as pendingSignal, executed after current step completes
+     */
+    @SuppressWarnings("unchecked")
+    public void signal(String flowId, String signalName, java.util.Map<String, Object> payload) {
+        if (signalRegistry == null) {
+            throw new IllegalStateException("No signals registered for flow type " + flowType);
+        }
+        SignalHandler<F> handler = signalRegistry.getHandler(signalName);
+        if (handler == null) {
+            throw new IllegalArgumentException("Unknown signal '" + signalName +
+                    "'. Available: " + signalRegistry.getSignalNames());
+        }
+
+        F flow = flowRepository.findById(flowId).orElse(null);
+        if (flow == null) {
+            throw new IllegalArgumentException("Flow not found: " + flowId);
+        }
+
+        FlowStatus status = flow.getStatus();
+
+        if (status == FlowStatus.PARKED || status == FlowStatus.WAITING_RETRY) {
+            // Safe to execute immediately — nothing else is running
+            Object typedPayload = deserializePayload(handler, payload);
+            handler.invoke(flow, typedPayload);
+            saveFlow(flow);
+            log.info("[Signal] Executed '{}' on flow {} (was {})", signalName, flowId, status);
+
+            // Re-publish current step so waitUntil/pollUntil re-evaluates
+            try {
+                String partitionKey = flow.getCorrelationId() != null
+                        ? flow.getCorrelationId() : flow.getId();
+                publishStepDirect(flow, flow.getCurrentStep(), partitionKey);
+            } catch (Exception e) {
+                log.warn("[Signal] Failed to re-publish step after signal: {}", e.getMessage());
+            }
+        } else if (status == FlowStatus.IN_PROGRESS) {
+            // Queue for execution between steps
+            var pending = new com.orchestrator.starter.domain.PendingSignal(
+                    signalName, payload, Instant.now());
+
+            if (mongoTemplate != null && entityClass != null) {
+                // Atomic $push — no version conflict with running step
+                mongoTemplate.updateFirst(
+                        org.springframework.data.mongodb.core.query.Query.query(
+                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flowId)),
+                        new org.springframework.data.mongodb.core.query.Update()
+                                .push("pendingSignals", pending),
+                        entityClass);
+                log.info("[Signal] Queued '{}' on flow {} (IN_PROGRESS)", signalName, flowId);
+            } else {
+                // Fallback: add to in-memory list
+                var signals = flow.getPendingSignals();
+                if (signals == null) {
+                    signals = new java.util.ArrayList<>();
+                    flow.setPendingSignals(signals);
+                }
+                signals.add(pending);
+                saveFlow(flow);
+                log.info("[Signal] Queued '{}' on flow {} (in-memory)", signalName, flowId);
+            }
+        } else {
+            log.warn("[Signal] Cannot signal flow {} — status is {}", flowId, status);
+        }
+    }
+
+    /**
+     * Execute all pending signals after a step completes, before advancing.
+     * Signals run in the order they were queued (FIFO).
+     */
+    private void drainPendingSignals(F flow) {
+        var pending = flow.getPendingSignals();
+        if (pending == null || pending.isEmpty() || signalRegistry == null) return;
+
+        log.info("[Signal] Draining {} pending signal(s) for flow {}", pending.size(), flow.getId());
+
+        for (var ps : pending) {
+            SignalHandler<F> handler = signalRegistry.getHandler(ps.getSignalName());
+            if (handler == null) {
+                log.warn("[Signal] Unknown pending signal '{}' — skipping", ps.getSignalName());
+                continue;
+            }
+            try {
+                Object typedPayload = deserializePayload(handler, ps.getPayload());
+                handler.invoke(flow, typedPayload);
+                log.info("[Signal] Executed pending '{}' on flow {}", ps.getSignalName(), flow.getId());
+            } catch (Exception e) {
+                log.error("[Signal] Pending '{}' failed on flow {}: {}",
+                        ps.getSignalName(), flow.getId(), e.getMessage());
+            }
+        }
+
+        flow.setPendingSignals(null);
+        saveFlow(flow);
+    }
+
+    /** Deserialize signal payload to the handler's expected type. */
+    private Object deserializePayload(SignalHandler<F> handler, java.util.Map<String, Object> payload) {
+        if (handler.getPayloadType() == null || payload == null) return null;
+        try {
+            String json = objectMapper.writeValueAsString(payload);
+            return objectMapper.readValue(json, handler.getPayloadType());
+        } catch (Exception e) {
+            log.warn("[Signal] Failed to deserialize payload to {}: {}",
+                    handler.getPayloadType().getSimpleName(), e.getMessage());
+            return payload; // fallback: pass raw map
+        }
     }
 
     // ========== Cancellation ==========

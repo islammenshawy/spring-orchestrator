@@ -698,4 +698,95 @@ class InstrumentFlowIntegrationTest {
         assertEquals(1, ((Number) searchResult.get("count")).intValue(),
                 "Should find exactly 1 flow matching both attributes");
     }
+
+    // ===== Signals =====
+
+    @Test
+    @Order(30)
+    @DisplayName("Signal — updatePriority on parked flow executes immediately")
+    void signal_parkedFlow_executesImmediately() throws Exception {
+        var result = startInstrumentFlow("SIGNAL-PARKED-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        // Wait for flow to reach a parked gate step
+        long deadline = System.currentTimeMillis() + Duration.ofMinutes(2).toMillis();
+        while (System.currentTimeMillis() < deadline) {
+            EnigioInstrumentEntity flow = mongoTemplate.findById(
+                    flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+            if (flow != null && (flow.getStatus() == com.orchestrator.starter.domain.FlowStatus.PARKED)) break;
+            Thread.sleep(500);
+        }
+
+        // Send signal to parked flow
+        @SuppressWarnings("unchecked")
+        var signalResult = rest.post()
+                .uri("/flows/enigio-instrument/" + flowId + "/signal")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("signalName", "updatePriority", "payload", Map.of("priority", "URGENT")))
+                .retrieve()
+                .body(Map.class);
+
+        assertNotNull(signalResult);
+        assertEquals("Signal delivered", signalResult.get("message"));
+
+        // Verify priority was set on the flow
+        Thread.sleep(1000);
+        EnigioInstrumentEntity flow = mongoTemplate.findById(
+                flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(flow);
+        assertEquals("URGENT", flow.getPriority());
+    }
+
+    @Test
+    @Order(31)
+    @DisplayName("Signal — updatePriority on in-progress flow queues as pending")
+    void signal_inProgressFlow_queuesPending() throws Exception {
+        var result = startInstrumentFlow("SIGNAL-PROGRESS-001", InstrumentType.BILL_OF_EXCHANGE);
+        String flowId = (String) result.get("id");
+
+        // Immediately signal while flow is likely IN_PROGRESS
+        Thread.sleep(200);
+
+        try {
+            @SuppressWarnings("unchecked")
+            var signalResult = rest.post()
+                    .uri("/flows/enigio-instrument/" + flowId + "/signal")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("signalName", "updatePriority", "payload", Map.of("priority", "HIGH")))
+                    .retrieve()
+                    .body(Map.class);
+
+            assertEquals("Signal delivered", signalResult.get("message"));
+        } catch (Exception e) {
+            // Flow may have already completed — that's OK for this test
+        }
+
+        // Wait for flow to process and drain pending signals
+        Thread.sleep(5000);
+        EnigioInstrumentEntity flow = mongoTemplate.findById(
+                flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(flow);
+        // Priority should be set (either immediately or after drain)
+        assertEquals("HIGH", flow.getPriority());
+    }
+
+    @Test
+    @Order(32)
+    @DisplayName("Signal — unknown signal returns error")
+    void signal_unknownSignal_returnsError() {
+        var result = startInstrumentFlow("SIGNAL-UNKNOWN-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        try {
+            rest.post()
+                    .uri("/flows/enigio-instrument/" + flowId + "/signal")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("signalName", "nonexistent", "payload", Map.of()))
+                    .retrieve()
+                    .body(Map.class);
+            fail("Should have thrown for unknown signal");
+        } catch (Exception e) {
+            assertTrue(e.getMessage().contains("400") || e.getMessage().contains("Unknown signal"));
+        }
+    }
 }

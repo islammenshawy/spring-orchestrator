@@ -38,6 +38,9 @@ public class FlowTypeDescriptor {
     /** Per-flow step registry. */
     private StepRegistry<?> stepRegistry;
 
+    /** Per-flow signal registry. */
+    private SignalRegistry<?> signalRegistry;
+
     /** Per-flow repository. */
     private OrchestratorFlowRepository<?> repository;
 
