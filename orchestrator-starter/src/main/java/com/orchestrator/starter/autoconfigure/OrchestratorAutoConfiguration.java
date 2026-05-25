@@ -172,20 +172,6 @@ public class OrchestratorAutoConfiguration {
             }
         });
 
-        // Register shutdown hook for executor cleanup
-        context.registerShutdownHook();
-        ((org.springframework.context.ConfigurableApplicationContext) context)
-                .addApplicationListener(event -> {
-                    if (event instanceof org.springframework.context.event.ContextClosedEvent) {
-                        registry.getAll().forEach(d -> {
-                            if (d.getOrchestrator() != null) {
-                                ((FlowOrchestrator) d.getOrchestrator()).shutdown();
-                            }
-                        });
-                        log.info("Orchestrator executors shut down");
-                    }
-                });
-
         log.info("Multi-flow registry: {} flow type(s): {}",
                 registry.size(), registry.getFlowTypeNames());
         return registry;
@@ -586,5 +572,20 @@ public class OrchestratorAutoConfiguration {
     @ConditionalOnMissingBean
     public StepRegistry<?> orchestratorStepRegistry(FlowTypeRegistry registry) {
         return registry.getAll().iterator().next().getStepRegistry();
+    }
+
+    /** Shuts down orchestrator executors on application stop. */
+    @Bean
+    @SuppressWarnings("rawtypes")
+    public org.springframework.context.ApplicationListener<org.springframework.context.event.ContextClosedEvent>
+            orchestratorShutdownHook(FlowTypeRegistry registry) {
+        return event -> {
+            registry.getAll().forEach(d -> {
+                if (d.getOrchestrator() != null) {
+                    ((FlowOrchestrator) d.getOrchestrator()).shutdown();
+                }
+            });
+            log.info("Orchestrator executors shut down");
+        };
     }
 }
