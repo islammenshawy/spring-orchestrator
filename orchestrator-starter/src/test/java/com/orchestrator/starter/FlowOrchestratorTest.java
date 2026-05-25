@@ -768,4 +768,130 @@ class FlowOrchestratorTest {
         // which reads flow.getPendingSignals() — but we verify the pattern
         verify(flowRepo, atLeast(1)).findById("flow-race");
     }
+
+    // ========== Race Condition + Failure Tests ==========
+
+    @Test
+    void signal_parkedFlow_happy_executesAndRepublishes() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-sig-hp");
+        flow.setCorrelationId("corr-sig");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.PARKED);
+        flow.setApproved(false);
+
+        when(flowRepo.findById("flow-sig-hp")).thenReturn(Optional.of(flow));
+
+        var method = getApproveMethod();
+        SignalHandler<TestFlow> handler = new SignalHandler<>(new TestSignalHandlers(), method, "approve");
+        SignalRegistry<TestFlow> registry = new SignalRegistry<>();
+        registry.register("approve", handler);
+        orchestrator.setSignalRegistry(registry);
+
+        orchestrator.signal("flow-sig-hp", "approve", null);
+
+        assertTrue(flow.isApproved());
+        verify(flowRepo).save(flow);
+        verify(kafkaTemplate).send(eq("test.commands"), anyString(), anyString());
+    }
+
+    @Test
+    void signal_completedFlow_doesNotExecute() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-sig-done");
+        flow.setStatus(FlowStatus.COMPLETED);
+
+        when(flowRepo.findById("flow-sig-done")).thenReturn(Optional.of(flow));
+
+        var method = getApproveMethod();
+        SignalRegistry<TestFlow> registry = new SignalRegistry<>();
+        registry.register("approve", new SignalHandler<>(new TestSignalHandlers(), method, "approve"));
+        orchestrator.setSignalRegistry(registry);
+
+        orchestrator.signal("flow-sig-done", "approve", null);
+        assertFalse(flow.isApproved());
+        verify(flowRepo, never()).save(any());
+    }
+
+    @Test
+    void drainPendingSignals_withSignals_executesAll() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-drain");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setApproved(false);
+
+        var pending = new java.util.ArrayList<PendingSignal>();
+        pending.add(new PendingSignal("approve", null, java.time.Instant.now()));
+        flow.setPendingSignals(pending);
+
+        StepHandler<TestFlow> handler = mock(StepHandler.class);
+        when(handler.getStepName()).thenReturn("STEP_A");
+        when(flowRepo.findById("flow-drain")).thenReturn(Optional.of(flow));
+        when(stepRegistry.getHandler("STEP_A")).thenReturn(handler);
+
+        var method = getApproveMethod();
+        SignalRegistry<TestFlow> sigRegistry = new SignalRegistry<>();
+        sigRegistry.register("approve", new SignalHandler<>(new TestSignalHandlers(), method, "approve"));
+        orchestrator.setSignalRegistry(sigRegistry);
+
+        orchestrator.executeStep("flow-drain", "STEP_A");
+
+        assertTrue(flow.isApproved(), "Pending signal should be drained and executed");
+    }
+
+    @Test
+    void replayFlow_flowNotFound_throws() {
+        when(flowRepo.findById("gone")).thenReturn(Optional.empty());
+        assertThrows(IllegalArgumentException.class, () -> orchestrator.replayFlow("gone"));
+    }
+
+    @Test
+    void replayFlow_cancelledFlow_succeeds() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-rc");
+        flow.setCorrelationId("corr-rc");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.CANCELLED);
+
+        when(flowRepo.findById("flow-rc")).thenReturn(Optional.of(flow));
+
+        var replayed = orchestrator.replayFlow("flow-rc");
+        assertEquals(FlowStatus.IN_PROGRESS, replayed.getStatus());
+        assertEquals(0, replayed.getRetryCount());
+    }
+
+    @Test
+    void concurrent_stepAndSignal_signalQueuedThenDrained() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-conc");
+        flow.setCorrelationId("corr-conc");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setApproved(false);
+
+        when(flowRepo.findById("flow-conc")).thenReturn(Optional.of(flow));
+
+        StepHandler<TestFlow> stepHandler = mock(StepHandler.class);
+        when(stepHandler.getStepName()).thenReturn("STEP_A");
+        when(stepRegistry.getHandler("STEP_A")).thenReturn(stepHandler);
+
+        var method = getApproveMethod();
+        SignalRegistry<TestFlow> sigRegistry = new SignalRegistry<>();
+        sigRegistry.register("approve", new SignalHandler<>(new TestSignalHandlers(), method, "approve"));
+        orchestrator.setSignalRegistry(sigRegistry);
+
+        // Step handler queues a signal mid-execution (simulates concurrent signal)
+        doAnswer(inv -> {
+            var pending = new java.util.ArrayList<PendingSignal>();
+            pending.add(new PendingSignal("approve", null, java.time.Instant.now()));
+            flow.setPendingSignals(pending);
+            return null;
+        }).when(stepHandler).execute(flow);
+
+        orchestrator.executeStep("flow-conc", "STEP_A");
+
+        assertTrue(flow.isApproved(), "Signal queued during step should be drained");
+        assertNull(flow.getPendingSignals(), "Pending signals cleared after drain");
+    }
 }
