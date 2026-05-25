@@ -265,22 +265,28 @@ public abstract class FlowDefinition<F extends OrchestratorFlow> {
         if (childIds == null || childIds.isEmpty()) return;
 
         for (String childId : childIds) {
-            for (FlowTypeDescriptor desc : flowTypeRegistry.getAll()) {
-                var repo = desc.getRepository();
-                if (repo == null) continue;
-                var childOpt = repo.findById(childId);
-                if (childOpt.isPresent()) {
-                    OrchestratorFlow child = (OrchestratorFlow) childOpt.get();
-                    FlowStatus childStatus = child.getStatus();
-                    if (childStatus != FlowStatus.COMPLETED && childStatus != FlowStatus.FAILED
-                            && childStatus != FlowStatus.CANCELLED) {
-                        throw new WaitingStepException(
-                                "Waiting for child " + childId + " (status: " + childStatus + ")",
-                                WaitingStepException.WaitMode.PARKED, null, expiry);
-                    }
-                    break;
+            OrchestratorFlow child = findChildFlow(childId);
+            if (child != null) {
+                FlowStatus childStatus = child.getStatus();
+                if (childStatus != FlowStatus.COMPLETED && childStatus != FlowStatus.FAILED
+                        && childStatus != FlowStatus.CANCELLED) {
+                    throw new WaitingStepException(
+                            "Waiting for child " + childId + " (status: " + childStatus + ")",
+                            WaitingStepException.WaitMode.PARKED, null, expiry);
                 }
             }
         }
+    }
+
+    /** Find a child flow by ID — tries the child's flow type first, then falls back to iteration. */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private OrchestratorFlow findChildFlow(String childId) {
+        for (FlowTypeDescriptor desc : flowTypeRegistry.getAll()) {
+            var repo = desc.getRepository();
+            if (repo == null) continue;
+            var childOpt = repo.findById(childId);
+            if (childOpt.isPresent()) return (OrchestratorFlow) childOpt.get();
+        }
+        return null;
     }
 }

@@ -314,16 +314,25 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 }
             }
         }
-        if (!saved) {
-            // Final fallback: partial $set to persist critical domain fields
-            log.error("[Saga] Version conflict persisted after 3 attempts for flow {} — using partial update", flowId);
-            if (mongoTemplate != null && entityClass != null) {
-                updateFlowPartial(flowId, java.util.Map.of(
-                        "completedSteps", flow.getCompletedSteps(),
-                        "retryCount", flow.getRetryCount(),
-                        "errorMessage", flow.getErrorMessage() != null ? flow.getErrorMessage() : "",
-                        "recoveryCount", flow.getRecoveryCount(),
-                        "updatedAt", Instant.now()));
+        if (!saved && mongoTemplate != null && entityClass != null) {
+            // Final fallback: serialize full flow to $set — preserves ALL domain fields
+            log.error("[Saga] Version conflict persisted after 3 attempts for flow {} — full partial update", flowId);
+            try {
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> flowMap = objectMapper.convertValue(flow, java.util.Map.class);
+                flowMap.remove("_id");
+                flowMap.remove("id");
+                flowMap.remove("version");
+                flowMap.put("updatedAt", Instant.now());
+                var update = new org.springframework.data.mongodb.core.query.Update();
+                flowMap.forEach(update::set);
+                update.inc("version", 1);
+                mongoTemplate.updateFirst(
+                        org.springframework.data.mongodb.core.query.Query.query(
+                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flowId)),
+                        update, entityClass);
+            } catch (Exception ex) {
+                log.error("[Saga] Full partial update also failed for flow {}: {}", flowId, ex.getMessage());
             }
         }
 

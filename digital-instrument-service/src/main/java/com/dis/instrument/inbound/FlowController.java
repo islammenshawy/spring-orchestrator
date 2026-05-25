@@ -60,6 +60,7 @@ public class FlowController {
     @SuppressWarnings("rawtypes")
     private final KafkaTemplate kafkaTemplate;
     private final ObjectMapper objectMapper;
+    private final com.orchestrator.starter.outbox.OutboxEventRepository outboxRepository;
     @Value("${orchestrator.kafka.command-topic:dis.instrument.commands}")
     private String commandTopic;
 
@@ -276,11 +277,11 @@ public class FlowController {
         }
     }
 
-    /** Re-activate a parked flow by publishing a step command to Kafka. */
+    /** Re-activate a parked flow by publishing a step command to Kafka, with outbox fallback. */
     @SuppressWarnings("unchecked")
     private void reactivateFlow(String flowId, String correlationId, String stepName) {
+        String partitionKey = correlationId != null ? correlationId : flowId;
         try {
-            String partitionKey = correlationId != null ? correlationId : flowId;
             StepCommandMessage cmd = StepCommandMessage.builder()
                     .eventId(UUID.randomUUID().toString())
                     .flowId(flowId)
@@ -291,7 +292,26 @@ public class FlowController {
             kafkaTemplate.send(commandTopic, partitionKey, objectMapper.writeValueAsString(cmd)).get();
             log.info("[{}] Re-activated flow at step {} via Kafka", flowId, stepName);
         } catch (Exception e) {
-            log.error("[{}] Failed to re-activate flow: {}", flowId, e.getMessage());
+            // Outbox fallback — outbox publisher will retry when Kafka is available
+            log.warn("[{}] Kafka re-activation failed, writing outbox fallback: {}", flowId, e.getMessage());
+            try {
+                StepCommandMessage cmd = StepCommandMessage.builder()
+                        .eventId(UUID.randomUUID().toString())
+                        .flowId(flowId)
+                        .correlationId(correlationId)
+                        .stepName(stepName)
+                        .flowType("enigio-instrument")
+                        .build();
+                outboxRepository.save(com.orchestrator.starter.outbox.OutboxEvent.builder()
+                        .id(UUID.randomUUID().toString())
+                        .flowId(flowId)
+                        .topic(commandTopic)
+                        .key(partitionKey)
+                        .payload(objectMapper.writeValueAsString(cmd))
+                        .build());
+            } catch (Exception ex) {
+                log.error("[{}] Outbox fallback also failed: {}", flowId, ex.getMessage());
+            }
         }
     }
 

@@ -127,6 +127,15 @@ public class WebhookController {
 
         switch (eventType) {
             case "PARTIALLY_SIGNED" -> {
+                // Guard: skip if already fully signed (prevents overshoot)
+                EnigioInstrumentEntity existing = mongoTemplate.findOne(query, EnigioInstrumentEntity.class);
+                if (existing != null && existing.getSignaturesRequired() > 0
+                        && existing.getSignaturesReceived() >= existing.getSignaturesRequired()) {
+                    log.info("[webhook] PARTIALLY_SIGNED ignored — already at {}/{} signatures",
+                            existing.getSignaturesReceived(), existing.getSignaturesRequired());
+                    return ResponseEntity.ok(new WebhookResponse("received", eventType));
+                }
+
                 EnigioInstrumentEntity flow = mongoTemplate.findAndModify(query,
                         new Update()
                                 .inc("signaturesReceived", 1)
