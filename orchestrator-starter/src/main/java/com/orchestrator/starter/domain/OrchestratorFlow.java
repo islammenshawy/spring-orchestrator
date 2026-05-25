@@ -34,6 +34,7 @@ public interface OrchestratorFlow {
     String getId();
 
     String getCorrelationId();
+    default void setCorrelationId(String correlationId) {}
 
     String getCurrentStep();
     void setCurrentStep(String step);

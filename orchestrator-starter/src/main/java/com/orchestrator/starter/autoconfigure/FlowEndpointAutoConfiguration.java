@@ -309,10 +309,10 @@ public class FlowEndpointAutoConfiguration {
 
         /**
          * Batch replay multiple flows.
-         * POST /flows/{flowType}/replay
+         * POST /flows/{flowType}/batch-replay
          * Body: { "flowIds": ["id1", "id2"], "fromStep": "STEP_A", "allowCompleted": false }
          */
-        @PostMapping("/{flowType}/replay")
+        @PostMapping("/{flowType}/ops/batch-replay")
         public ResponseEntity<?> replayFlows(
                 @PathVariable String flowType,
                 @RequestBody Map<String, Object> body) {
@@ -331,7 +331,7 @@ public class FlowEndpointAutoConfiguration {
                 if (Boolean.TRUE.equals(body.get("allowCompleted"))) options.allowCompleted(true);
 
                 var results = orch.replayFlows(flowIds, options.build());
-                long succeeded = results.stream().filter(r -> "replayed".equals(r.get("status"))).count();
+                long succeeded = results.stream().filter(r -> "replayed".equals(((java.util.Map<?,?>) r).get("status"))).count();
                 return ResponseEntity.ok(Map.of(
                         "total", flowIds.size(),
                         "succeeded", succeeded,
@@ -344,10 +344,10 @@ public class FlowEndpointAutoConfiguration {
 
         /**
          * Batch cancel multiple flows.
-         * POST /flows/{flowType}/cancel
+         * POST /flows/{flowType}/batch-cancel
          * Body: { "flowIds": ["id1", "id2"], "reason": "bulk cleanup" }
          */
-        @PostMapping("/{flowType}/cancel")
+        @PostMapping("/{flowType}/ops/batch-cancel")
         public ResponseEntity<?> cancelFlows(
                 @PathVariable String flowType,
                 @RequestBody Map<String, Object> body) {
@@ -363,7 +363,7 @@ public class FlowEndpointAutoConfiguration {
                 String reason = (String) body.getOrDefault("reason", "batch cancel");
 
                 var results = orch.cancelFlows(flowIds, reason);
-                long succeeded = results.stream().filter(r -> "cancelled".equals(r.get("status"))).count();
+                long succeeded = results.stream().filter(r -> "cancelled".equals(((java.util.Map<?,?>) r).get("status"))).count();
                 return ResponseEntity.ok(Map.of(
                         "total", flowIds.size(),
                         "succeeded", succeeded,

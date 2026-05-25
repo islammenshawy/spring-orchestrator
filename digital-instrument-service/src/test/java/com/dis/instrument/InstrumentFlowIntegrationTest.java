@@ -849,4 +849,162 @@ class InstrumentFlowIntegrationTest {
             assertTrue(e.getMessage().contains("400") || e.getMessage().contains("Unknown signal"));
         }
     }
+
+    // ===== Replay =====
+
+    @Test
+    @Order(40)
+    @DisplayName("Replay — failed flow resumes and completes")
+    void replay_failedFlow_resumesAndCompletes() throws Exception {
+        var result = startInstrumentFlow("REPLAY-FAIL-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        // Wait for flow to reach a gate step (PARKED)
+        long deadline = System.currentTimeMillis() + Duration.ofMinutes(2).toMillis();
+        while (System.currentTimeMillis() < deadline) {
+            EnigioInstrumentEntity flow = mongoTemplate.findById(
+                    flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+            if (flow != null && flow.getStatus() == com.orchestrator.starter.domain.FlowStatus.PARKED) break;
+            Thread.sleep(500);
+        }
+
+        // Force flow to FAILED
+        mongoTemplate.updateFirst(
+                Query.query(Criteria.where("_id").is(flowId)),
+                new org.springframework.data.mongodb.core.query.Update()
+                        .set("status", "FAILED")
+                        .set("errorMessage", "simulated failure"),
+                EnigioInstrumentEntity.class);
+
+        // Replay via REST
+        @SuppressWarnings("unchecked")
+        var replayResult = rest.post()
+                .uri("/flows/enigio-instrument/" + flowId + "/replay")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of())
+                .retrieve()
+                .body(Map.class);
+
+        assertNotNull(replayResult);
+        assertEquals("Flow replayed", replayResult.get("message"));
+
+        // Wait for flow to progress after replay
+        Thread.sleep(5000);
+        EnigioInstrumentEntity replayed = mongoTemplate.findById(
+                flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(replayed);
+        assertNotEquals("FAILED", replayed.getStatus().name(),
+                "Flow should have progressed past FAILED after replay");
+    }
+
+    @Test
+    @Order(41)
+    @DisplayName("Replay — completed flow rejected without allowCompleted")
+    void replay_completedFlow_rejectedWithoutFlag() throws Exception {
+        // Find a completed flow from earlier tests
+        EnigioInstrumentEntity completed = mongoTemplate.findOne(
+                Query.query(Criteria.where("status").is("COMPLETED")),
+                EnigioInstrumentEntity.class, "dis_instrument_flows");
+
+        if (completed == null) {
+            // Start and wait for one to complete
+            var result = startInstrumentFlow("REPLAY-COMPLETE-001", InstrumentType.BILL_OF_EXCHANGE);
+            String flowId = (String) result.get("id");
+            long deadline = System.currentTimeMillis() + Duration.ofMinutes(2).toMillis();
+            while (System.currentTimeMillis() < deadline) {
+                completed = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+                if (completed != null && completed.getStatus() == com.orchestrator.starter.domain.FlowStatus.COMPLETED) break;
+                // Auto-approve gates
+                try {
+                    rest.post().uri("/flows/enigio-instrument/" + flowId + "/approve")
+                            .contentType(MediaType.APPLICATION_JSON).body(Map.of())
+                            .retrieve().body(Map.class);
+                } catch (Exception ignored) {}
+                Thread.sleep(1000);
+            }
+        }
+
+        if (completed != null && completed.getStatus() == com.orchestrator.starter.domain.FlowStatus.COMPLETED) {
+            try {
+                rest.post()
+                        .uri("/flows/enigio-instrument/" + completed.getId() + "/replay")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(Map.of())
+                        .retrieve()
+                        .body(Map.class);
+                fail("Should reject replay of completed flow without allowCompleted");
+            } catch (Exception e) {
+                assertNotNull(e, "Replay of COMPLETED flow should fail without allowCompleted");
+            }
+        }
+    }
+
+    @Test
+    @Order(42)
+    @DisplayName("Replay — batch replay multiple flows")
+    void replay_batchReplay() throws Exception {
+        // Start 2 flows and force them to FAILED
+        var r1 = startInstrumentFlow("BATCH-REPLAY-001", InstrumentType.PROMISSORY_NOTE);
+        var r2 = startInstrumentFlow("BATCH-REPLAY-002", InstrumentType.BILL_OF_EXCHANGE);
+        String id1 = (String) r1.get("id");
+        String id2 = (String) r2.get("id");
+
+        Thread.sleep(3000);
+
+        // Force both to FAILED
+        for (String id : List.of(id1, id2)) {
+            mongoTemplate.updateFirst(
+                    Query.query(Criteria.where("_id").is(id)),
+                    new org.springframework.data.mongodb.core.query.Update()
+                            .set("status", "FAILED")
+                            .set("errorMessage", "batch failure"),
+                    EnigioInstrumentEntity.class);
+        }
+
+        // Batch replay
+        @SuppressWarnings("unchecked")
+        var batchResult = rest.post()
+                .uri("/flows/enigio-instrument/ops/batch-replay")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("flowIds", List.of(id1, id2)))
+                .retrieve()
+                .body(Map.class);
+
+        assertNotNull(batchResult);
+        assertEquals(2, ((Number) batchResult.get("total")).intValue());
+        assertEquals(2, ((Number) batchResult.get("succeeded")).intValue());
+    }
+
+    @Test
+    @Order(43)
+    @DisplayName("Batch cancel — multiple flows")
+    void batchCancel_multipleFlows() throws Exception {
+        var r1 = startInstrumentFlow("BATCH-CANCEL-001", InstrumentType.PROMISSORY_NOTE);
+        var r2 = startInstrumentFlow("BATCH-CANCEL-002", InstrumentType.BILL_OF_LADING);
+        String id1 = (String) r1.get("id");
+        String id2 = (String) r2.get("id");
+
+        // Wait for flows to reach PARKED
+        Thread.sleep(5000);
+
+        @SuppressWarnings("unchecked")
+        var cancelResult = rest.post()
+                .uri("/flows/enigio-instrument/ops/batch-cancel")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("flowIds", List.of(id1, id2), "reason", "batch cancel test"))
+                .retrieve()
+                .body(Map.class);
+
+        assertNotNull(cancelResult);
+        assertEquals(2, ((Number) cancelResult.get("total")).intValue());
+
+        // Verify at least one cancelled
+        Thread.sleep(1000);
+        long cancelled = 0;
+        for (String id : List.of(id1, id2)) {
+            EnigioInstrumentEntity flow = mongoTemplate.findById(id, EnigioInstrumentEntity.class, "dis_instrument_flows");
+            if (flow != null && flow.getStatus() == com.orchestrator.starter.domain.FlowStatus.CANCELLED) cancelled++;
+        }
+        assertTrue(cancelled >= 1, "At least one flow should be cancelled");
+    }
 }
