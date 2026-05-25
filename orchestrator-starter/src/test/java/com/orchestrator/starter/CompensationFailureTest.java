@@ -59,10 +59,17 @@ class CompensationFailureTest {
                 .thenReturn(CompletableFuture.completedFuture(null));
         when(stepLogRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        orchestrator = new FlowOrchestrator(
-                flowRepo, stepRegistry, outboxRepo, stepLogRepo,
-                new ObjectMapper(), "test.commands", "test.commands.replies", true,
-                null, false, kafkaTemplate);
+        orchestrator = FlowOrchestrator.<TestFlow>builder()
+                .flowRepository(flowRepo)
+                .stepRegistry(stepRegistry)
+                .outboxRepository(outboxRepo)
+                .stepLogRepository(stepLogRepo)
+                .objectMapper(new ObjectMapper())
+                .commandTopic("test.commands")
+                .replyTopic("test.commands.replies")
+                .replyEnabled(true)
+                .kafkaTemplate(kafkaTemplate)
+                .build();
     }
 
     @Test

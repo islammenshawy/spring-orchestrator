@@ -111,6 +111,9 @@ public class OrchestratorProperties {
         /** Max publish retries before dead-lettering an outbox event.
          *  Prevents a single poison event from freezing the entire outbox pipeline. */
         private int maxPublishRetries = 5;
+        /** Batch size for outbox publisher — how many events to send in parallel per poll cycle.
+         *  Smaller = lower blast radius on crash (fewer duplicates), larger = higher throughput. */
+        private int batchSize = 50;
     }
 
     @Data

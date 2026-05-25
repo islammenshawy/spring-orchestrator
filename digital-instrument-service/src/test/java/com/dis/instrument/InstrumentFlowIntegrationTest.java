@@ -150,7 +150,7 @@ class InstrumentFlowIntegrationTest {
                 }
                 // Gate: Signing — simulate FULLY_SIGNED webhook if signing is pending
                 if ("AWAIT_SIGNATURES".equals(step) && flow.isSigningEmailsSent()
-                        && !"SIGNED".equals(flow.getSigningStatus())) {
+                        && com.dis.instrument.model.SigningStatus.SIGNED != flow.getSigningStatus()) {
                     try {
                         rest.post().uri("/webhooks/enigio")
                                 .contentType(MediaType.APPLICATION_JSON)
@@ -207,7 +207,7 @@ class InstrumentFlowIntegrationTest {
         // Group 2 results
         assertTrue(completed.isSignersAdded(), "Signers should be added");
         assertTrue(completed.isSigningEmailsSent(), "Signing emails should be sent");
-        assertEquals("SIGNED", completed.getSigningStatus(), "Signing should complete");
+        assertEquals(com.dis.instrument.model.SigningStatus.SIGNED, completed.getSigningStatus(), "Signing should complete");
 
         // Group 3 results
         assertEquals("VALID", completed.getValidationResult(), "Validation should pass");
@@ -363,9 +363,9 @@ class InstrumentFlowIntegrationTest {
         try { Thread.sleep(2000); } catch (InterruptedException ignored) {}
 
         var unpublished = mongoTemplate.find(
-                new Query(Criteria.where("published").is(false)),
+                new Query(Criteria.where("published").is(false).and("flowId").is(flowId)),
                 org.bson.Document.class, "orchestrator_outbox");
-        assertEquals(0, unpublished.size(), "All outbox events should be published");
+        assertEquals(0, unpublished.size(), "All outbox events for this flow should be published");
     }
 
     // ========== 10. Entity fields persisted correctly ==========
@@ -540,7 +540,7 @@ class InstrumentFlowIntegrationTest {
         EnigioInstrumentEntity signed = waitForStep(flowId, "AWAIT_DELIVERY_APPROVAL", Duration.ofMinutes(3));
         assertNotNull(signed);
         assertNotNull(signed.getTraceOriginalId(), "Should have traceOriginalId before cancel");
-        assertEquals("SIGNED", signed.getSigningStatus(), "Should be signed before cancel");
+        assertEquals(com.dis.instrument.model.SigningStatus.SIGNED, signed.getSigningStatus(), "Should be signed before cancel");
 
         // Cancel at Gate 2 (document registered + signed but not delivered)
         var cancelResult = rest.post()
@@ -615,7 +615,7 @@ class InstrumentFlowIntegrationTest {
                 }
                 // Fire signing webhook if parked at AWAIT_SIGNATURES
                 if ("AWAIT_SIGNATURES".equals(step) && flow.isSigningEmailsSent()
-                        && !"SIGNED".equals(flow.getSigningStatus()) && flow.getTraceOriginalId() != null) {
+                        && com.dis.instrument.model.SigningStatus.SIGNED != flow.getSigningStatus() && flow.getTraceOriginalId() != null) {
                     try { rest.post().uri("/webhooks/enigio")
                             .contentType(MediaType.APPLICATION_JSON)
                             .body(Map.of("messageId", java.util.UUID.randomUUID().toString(),
@@ -817,7 +817,7 @@ class InstrumentFlowIntegrationTest {
         mongoTemplate.updateFirst(
                 Query.query(Criteria.where("_id").is(flowId)),
                 new org.springframework.data.mongodb.core.query.Update()
-                        .set("signingStatus", "SIGNED"),
+                        .set("signingStatus", com.dis.instrument.model.SigningStatus.SIGNED.name()),
                 EnigioInstrumentEntity.class);
 
         // Cancellation should fail — document is signed

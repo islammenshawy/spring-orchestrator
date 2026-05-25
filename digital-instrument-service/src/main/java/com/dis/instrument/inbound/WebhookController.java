@@ -1,34 +1,22 @@
 package com.dis.instrument.inbound;
 
 import com.dis.instrument.inbound.response.*;
-
-import com.dis.instrument.model.FlowStep;
-import com.dis.instrument.model.SigningStatus;
-import com.dis.instrument.model.FlowPhase;
+import com.dis.instrument.inbound.webhook.WebhookEventHandler;
 import com.dis.instrument.model.WebhookEvent;
 
-import com.dis.instrument.flow.EnigioInstrumentEntity;
-import com.dis.instrument.service.NotificationService;
-import com.orchestrator.starter.kafka.StepCommandMessage;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.mongodb.core.FindAndModifyOptions;
-import org.springframework.kafka.core.KafkaTemplate;
-import tools.jackson.databind.ObjectMapper;
-import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Receives webhook callbacks from Enigio trace:original API.
@@ -40,7 +28,6 @@ import java.util.Map;
 @Slf4j
 @RestController
 @RequestMapping("/webhooks/enigio")
-@RequiredArgsConstructor
 @Tag(name = "Enigio Webhooks",
         description = """
                 Callback endpoint for Enigio trace:original signing events.
@@ -57,13 +44,15 @@ import java.util.Map;
                 can track real-time signing status without polling.""")
 public class WebhookController {
 
-    private final MongoTemplate mongoTemplate;
-    private final NotificationService notificationPublisher;
-    @SuppressWarnings("rawtypes")
-    private final KafkaTemplate kafkaTemplate;
-    private final ObjectMapper objectMapper;
-    @Value("${orchestrator.kafka.command-topic:dis.instrument.commands}")
-    private String commandTopic;
+    private final Map<String, WebhookEventHandler> handlerMap;
+
+    public WebhookController(List<WebhookEventHandler> handlers) {
+        this.handlerMap = handlers.stream()
+                .flatMap(h -> h.getSupportedEvents().stream()
+                        .map(event -> Map.entry(event.name(), h)))
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+        log.info("[webhook] Registered handlers for events: {}", handlerMap.keySet());
+    }
 
     @Operation(
             summary = "Handle Enigio signing webhook",
@@ -123,170 +112,13 @@ public class WebhookController {
             return ResponseEntity.badRequest().body(new ErrorResponse("Missing traceOriginalId or eventType"));
         }
 
-        Query query = Query.query(Criteria.where("traceOriginalId").is(traceOriginalId));
-
-        switch (eventType) {
-            case "PARTIALLY_SIGNED" -> {
-                // Atomic guard + increment: only increment if below required count
-                // Prevents double-increment race when concurrent webhooks arrive
-                EnigioInstrumentEntity flow = mongoTemplate.findAndModify(
-                        Query.query(Criteria.where("traceOriginalId").is(traceOriginalId)
-                                .and("$expr").is(new org.bson.Document("$lt",
-                                        java.util.List.of("$signaturesReceived", "$signaturesRequired")))),
-                        new Update()
-                                .inc("signaturesReceived", 1)
-                                .set("signingStatus", SigningStatus.PARTIALLY_SIGNED.name()),
-                        FindAndModifyOptions.options().returnNew(true),
-                        EnigioInstrumentEntity.class);
-
-                if (flow == null) {
-                    // Either document not found or already at/above required
-                    log.info("[webhook] PARTIALLY_SIGNED ignored — already fully signed or unknown doc");
-                    return ResponseEntity.ok(new WebhookResponse("received", eventType));
-                }
-
-                if (flow != null) {
-                    log.info("[webhook] Signature {}/{} received for instrument {}",
-                            flow.getSignaturesReceived(), flow.getSignaturesRequired(), flow.getId());
-
-                    notificationPublisher.notifyPhaseComplete(flow,
-                            FlowPhase.SIGNATURE_RECEIVED.name(),
-                            flow.getSignaturesReceived() + "/" + flow.getSignaturesRequired() + " signed");
-
-                    if (flow.getSignaturesRequired() > 0
-                            && flow.getSignaturesReceived() >= flow.getSignaturesRequired()) {
-                        mongoTemplate.updateFirst(query,
-                                new Update().set("signingStatus", SigningStatus.SIGNED.name()),
-                                EnigioInstrumentEntity.class);
-                        log.info("[webhook] All {} signatures received — marking SIGNED", flow.getSignaturesRequired());
-
-                        notificationPublisher.notifyPhaseComplete(flow,
-                                FlowPhase.ALL_SIGNATURES_COMPLETE.name(), "SIGNED");
-
-                        // Re-activate: signing gate is parked in DB, push to Kafka
-                        reactivateFlow(flow.getId(), FlowStep.AWAIT_SIGNATURES.name());
-                    }
-                }
-            }
-
-            case "FULLY_SIGNED" -> {
-                EnigioInstrumentEntity flow = mongoTemplate.findAndModify(
-                        Query.query(Criteria.where("traceOriginalId").is(traceOriginalId)
-                                .and("signingStatus").ne(SigningStatus.SIGNED.name())),
-                        new Update().set("signingStatus", SigningStatus.SIGNED.name()),
-                        FindAndModifyOptions.options().returnNew(true),
-                        EnigioInstrumentEntity.class);
-
-                if (flow != null) {
-                    log.info("[webhook] FULLY_SIGNED for instrument {}", flow.getId());
-                    notificationPublisher.notifyPhaseComplete(flow,
-                            FlowPhase.ALL_SIGNATURES_COMPLETE.name(), "SIGNED");
-                    reactivateFlow(flow.getId(), FlowStep.AWAIT_SIGNATURES.name());
-                } else {
-                    log.info("[webhook] FULLY_SIGNED received but already SIGNED (duplicate)");
-                }
-            }
-
-            case "SIGNATURE_REJECTED" -> {
-                mongoTemplate.updateFirst(query,
-                        new Update().set("signingStatus", SigningStatus.REJECTED.name()),
-                        EnigioInstrumentEntity.class);
-
-                EnigioInstrumentEntity flow = mongoTemplate.findOne(query, EnigioInstrumentEntity.class);
-                if (flow != null) {
-                    log.info("[webhook] Signature REJECTED for instrument {}", flow.getId());
-                    notificationPublisher.notifyPhaseComplete(flow,
-                            "SIGNATURE_REJECTED", "REJECTED");
-                }
-            }
-
-            // ===== Transfer events (Tier 1 — flow correctness) =====
-
-            case "TRANSFER" -> {
-                // Recipient accepted the envelope transfer — flow can complete
-                Query envelopeQuery = Query.query(Criteria.where("envelopeTraceId").is(traceOriginalId));
-                EnigioInstrumentEntity flow = mongoTemplate.findAndModify(envelopeQuery,
-                        new Update().set("transferAccepted", true),
-                        FindAndModifyOptions.options().returnNew(true),
-                        EnigioInstrumentEntity.class);
-
-                if (flow != null) {
-                    log.info("[webhook] TRANSFER accepted for instrument {} (envelope={})",
-                            flow.getId(), traceOriginalId);
-                    reactivateFlow(flow.getId(), FlowStep.TRANSFER_DOCUMENT.name());
-                } else {
-                    log.info("[webhook] TRANSFER for unknown envelope {}", traceOriginalId);
-                }
-            }
-
-            case "TRANSFER_REJECTED" -> {
-                // Recipient rejected the envelope — flow will fail
-                Query envelopeQuery = Query.query(Criteria.where("envelopeTraceId").is(traceOriginalId));
-                EnigioInstrumentEntity flow = mongoTemplate.findAndModify(envelopeQuery,
-                        new Update().set("transferRejected", true),
-                        FindAndModifyOptions.options().returnNew(true),
-                        EnigioInstrumentEntity.class);
-
-                if (flow != null) {
-                    log.error("[webhook] TRANSFER_REJECTED for instrument {} (envelope={})",
-                            flow.getId(), traceOriginalId);
-                    notificationPublisher.notifyPhaseComplete(flow,
-                            "TRANSFER_REJECTED", "REJECTED");
-                    reactivateFlow(flow.getId(), FlowStep.TRANSFER_DOCUMENT.name());
-                } else {
-                    log.warn("[webhook] TRANSFER_REJECTED for unknown envelope {}", traceOriginalId);
-                }
-            }
-
-            // ===== Audit events (Tier 2 — confirmation only) =====
-
-            case "CREATE" -> {
-                mongoTemplate.updateFirst(query,
-                        new Update().set("vendorCreateConfirmed", true),
-                        EnigioInstrumentEntity.class);
-                log.info("[webhook] CREATE confirmed for traceOriginalId={}", traceOriginalId);
-            }
-
-            case "AMENDMENT" -> {
-                mongoTemplate.updateFirst(query,
-                        new Update().set("vendorAmendConfirmed", true),
-                        EnigioInstrumentEntity.class);
-                log.info("[webhook] AMENDMENT confirmed for traceOriginalId={}", traceOriginalId);
-            }
-
-            case "INVALIDATE" -> {
-                log.info("[webhook] INVALIDATE confirmed for traceOriginalId={}", traceOriginalId);
-            }
-
-            case "TRANSFER_CANCELLED" -> {
-                log.info("[webhook] TRANSFER_CANCELLED confirmed for traceOriginalId={}", traceOriginalId);
-            }
-
-            default -> log.info("[webhook] Ignoring event type: {} for {}", eventType, traceOriginalId);
+        WebhookEventHandler handler = handlerMap.get(eventType);
+        if (handler != null) {
+            handler.handle(traceOriginalId, payload);
+        } else {
+            log.info("[webhook] Ignoring unknown event type: {} for {}", eventType, traceOriginalId);
         }
 
         return ResponseEntity.ok(new WebhookResponse("received", eventType));
-    }
-
-    /** Re-activate a parked flow by publishing a step command to Kafka. */
-    @SuppressWarnings("unchecked")
-    private void reactivateFlow(String flowId, String stepName) {
-        // Look up correlationId for uniform partition distribution
-        EnigioInstrumentEntity entity = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class);
-        String partitionKey = (entity != null && entity.getCorrelationId() != null)
-                ? entity.getCorrelationId() : flowId;
-        try {
-            StepCommandMessage cmd = StepCommandMessage.builder()
-                    .eventId(java.util.UUID.randomUUID().toString())
-                    .flowId(flowId)
-                    .correlationId(partitionKey)
-                    .stepName(stepName)
-                    .flowType("enigio-instrument")
-                    .build();
-            kafkaTemplate.send(commandTopic, partitionKey, objectMapper.writeValueAsString(cmd)).get();
-            log.info("[webhook] Re-activated flow {} at step {}", flowId, stepName);
-        } catch (Exception e) {
-            log.error("[webhook] Failed to re-activate flow {}: {}", flowId, e.getMessage());
-        }
     }
 }

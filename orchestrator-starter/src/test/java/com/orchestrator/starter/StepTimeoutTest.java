@@ -46,10 +46,19 @@ class StepTimeoutTest {
         when(stepLogRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         // 1-second timeout
-        FlowOrchestrator<TestFlow> orchestrator = new FlowOrchestrator(
-                flowRepo, stepRegistry, outboxRepo, stepLogRepo,
-                new ObjectMapper(), "test", "test.commands", "test.commands.replies",
-                true, null, false, kafkaTemplate, 1, null);
+        FlowOrchestrator<TestFlow> orchestrator = FlowOrchestrator.<TestFlow>builder()
+                .flowRepository(flowRepo)
+                .stepRegistry(stepRegistry)
+                .outboxRepository(outboxRepo)
+                .stepLogRepository(stepLogRepo)
+                .objectMapper(new ObjectMapper())
+                .flowType("test")
+                .commandTopic("test.commands")
+                .replyTopic("test.commands.replies")
+                .replyEnabled(true)
+                .kafkaTemplate(kafkaTemplate)
+                .stepTimeoutSeconds(1)
+                .build();
 
         TestFlow flow = new TestFlow();
         flow.setId("flow-1");
@@ -85,10 +94,19 @@ class StepTimeoutTest {
         when(stepLogRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         // Timeout disabled (0)
-        FlowOrchestrator<TestFlow> orchestrator = new FlowOrchestrator(
-                flowRepo, stepRegistry, outboxRepo, stepLogRepo,
-                new ObjectMapper(), "test", "test.commands", "test.commands.replies",
-                true, null, false, kafkaTemplate, 0, null);
+        FlowOrchestrator<TestFlow> orchestrator = FlowOrchestrator.<TestFlow>builder()
+                .flowRepository(flowRepo)
+                .stepRegistry(stepRegistry)
+                .outboxRepository(outboxRepo)
+                .stepLogRepository(stepLogRepo)
+                .objectMapper(new ObjectMapper())
+                .flowType("test")
+                .commandTopic("test.commands")
+                .replyTopic("test.commands.replies")
+                .replyEnabled(true)
+                .kafkaTemplate(kafkaTemplate)
+                .stepTimeoutSeconds(0)
+                .build();
 
         TestFlow flow = new TestFlow();
         flow.setId("flow-1");

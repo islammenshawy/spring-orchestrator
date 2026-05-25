@@ -699,6 +699,31 @@ else
   fail "Scenario 17: Flow failed after concurrent signal (status=$SIGSTEP_STATUS)"
 fi
 
+# ========== Flaky Test Detection ==========
+header "FLAKY TEST DETECTION (3 iterations)"
+FLAKY_RUNS=${FLAKY_RUNS:-3}
+FLAKY_FAILURES=0
+FLAKY_LOG="/tmp/chaos-flaky-$(date +%s).log"
+
+for i in $(seq 1 "$FLAKY_RUNS"); do
+  log "Flaky detection run $i/$FLAKY_RUNS..."
+  if mvn test -pl orchestrator-starter,digital-instrument-service -q -Dsurefire.rerunFailingTestsCount=0 >> "$FLAKY_LOG" 2>&1; then
+    log "  Run $i: ALL PASS"
+  else
+    FLAKY_FAILURES=$((FLAKY_FAILURES + 1))
+    log "  Run $i: FAILURES DETECTED"
+    grep -E "Tests run:.*Failures: [1-9]|FAIL" "$FLAKY_LOG" | tail -5
+  fi
+done
+
+if [ "$FLAKY_FAILURES" -gt 0 ] && [ "$FLAKY_FAILURES" -lt "$FLAKY_RUNS" ]; then
+  fail "FLAKY TESTS DETECTED — $FLAKY_FAILURES/$FLAKY_RUNS runs failed (non-deterministic). See $FLAKY_LOG"
+elif [ "$FLAKY_FAILURES" -eq "$FLAKY_RUNS" ]; then
+  fail "ALL $FLAKY_RUNS test runs failed — likely a real bug, not flaky. See $FLAKY_LOG"
+else
+  pass "No flaky tests detected ($FLAKY_RUNS/$FLAKY_RUNS passed)"
+fi
+
 # ========== Results ==========
 collect_metrics "FINAL"
 

@@ -103,7 +103,7 @@ public class OrchestratorAutoConfiguration {
             OrchestratorProperties props,
             OrchestratorMetrics metrics) {
         return new OutboxPublisher(outboxRepository, kafkaTemplate,
-                props.getOutbox().getMaxPublishRetries(), metrics);
+                props.getOutbox().getMaxPublishRetries(), props.getOutbox().getBatchSize(), metrics);
     }
 
     // ========== FlowTypeRegistry (the core multi-flow bean) ==========
@@ -228,11 +228,22 @@ public class OrchestratorAutoConfiguration {
         }
 
         // Per-flow FlowOrchestrator
-        FlowOrchestrator orchestrator = new FlowOrchestrator(
-                repository, stepRegistry, outboxRepository, stepLogRepository,
-                objectMapper, flowType, commandTopic, replyTopic, replyEnabled,
-                transactionTemplate, props.getAudit().isIncludeFlowState(), kafkaTemplate,
-                props.getStep().getTimeoutSeconds(), metrics);
+        FlowOrchestrator orchestrator = FlowOrchestrator.builder()
+                .flowRepository(repository)
+                .stepRegistry(stepRegistry)
+                .outboxRepository(outboxRepository)
+                .stepLogRepository(stepLogRepository)
+                .objectMapper(objectMapper)
+                .flowType(flowType)
+                .commandTopic(commandTopic)
+                .replyTopic(replyTopic)
+                .replyEnabled(replyEnabled)
+                .txTemplate(transactionTemplate)
+                .includeFlowStateInLogs(props.getAudit().isIncludeFlowState())
+                .kafkaTemplate(kafkaTemplate)
+                .stepTimeoutSeconds(props.getStep().getTimeoutSeconds())
+                .metrics(metrics)
+                .build();
         if (entityClass != null && entityClass != Object.class) {
             orchestrator.setEntityClass(entityClass);
         }

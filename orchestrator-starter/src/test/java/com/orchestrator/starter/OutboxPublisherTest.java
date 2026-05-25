@@ -7,6 +7,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.kafka.core.KafkaTemplate;
 
+import org.springframework.data.domain.Pageable;
+
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -25,7 +27,7 @@ class OutboxPublisherTest {
     void setUp() {
         repository = mock(OutboxEventRepository.class);
         kafkaTemplate = mock(KafkaTemplate.class);
-        publisher = new OutboxPublisher(repository, kafkaTemplate, 3); // max 3 retries
+        publisher = new OutboxPublisher(repository, kafkaTemplate, 3, 100, null); // max 3 retries, batch 100
     }
 
     @Test
@@ -33,7 +35,7 @@ class OutboxPublisherTest {
         OutboxEvent event = OutboxEvent.builder()
                 .id("e1").flowId("f1").topic("topic").key("k1").payload("payload")
                 .build();
-        when(repository.findTop100ByPublishedFalseAndDeadLetteredFalseOrderByCreatedAtAsc())
+        when(repository.findByPublishedFalseAndDeadLetteredFalseOrderByCreatedAtAsc(any(Pageable.class)))
                 .thenReturn(List.of(event));
         when(kafkaTemplate.send("topic", "k1", "payload"))
                 .thenReturn(CompletableFuture.completedFuture(null));
@@ -43,7 +45,7 @@ class OutboxPublisherTest {
         assertTrue(event.isPublished());
         assertFalse(event.isDeadLettered());
         assertEquals(0, event.getFailureCount());
-        verify(repository).save(event);
+        verify(repository).saveAll(List.of(event));
     }
 
     @Test
@@ -55,7 +57,7 @@ class OutboxPublisherTest {
                 .id("e2").flowId("f2").topic("topic").key("k2").payload("ok")
                 .build();
 
-        when(repository.findTop100ByPublishedFalseAndDeadLetteredFalseOrderByCreatedAtAsc())
+        when(repository.findByPublishedFalseAndDeadLetteredFalseOrderByCreatedAtAsc(any(Pageable.class)))
                 .thenReturn(List.of(poisonEvent, goodEvent));
         when(kafkaTemplate.send("topic", "k1", "too-large"))
                 .thenReturn(CompletableFuture.failedFuture(new RuntimeException("Message too large")));
@@ -73,8 +75,8 @@ class OutboxPublisherTest {
         assertTrue(goodEvent.isPublished());
         assertEquals(0, goodEvent.getFailureCount());
 
-        // Both saved
-        verify(repository, times(2)).save(any(OutboxEvent.class));
+        // All events batch-saved in one call
+        verify(repository).saveAll(List.of(poisonEvent, goodEvent));
     }
 
     @Test
@@ -84,7 +86,7 @@ class OutboxPublisherTest {
                 .failureCount(2) // already failed twice, this will be attempt 3
                 .build();
 
-        when(repository.findTop100ByPublishedFalseAndDeadLetteredFalseOrderByCreatedAtAsc())
+        when(repository.findByPublishedFalseAndDeadLetteredFalseOrderByCreatedAtAsc(any(Pageable.class)))
                 .thenReturn(List.of(poisonEvent));
         when(kafkaTemplate.send("topic", "k1", "bad"))
                 .thenReturn(CompletableFuture.failedFuture(new RuntimeException("Message too large")));
@@ -94,17 +96,17 @@ class OutboxPublisherTest {
         // After 3rd failure (>= maxPublishRetries=3): dead-lettered
         assertEquals(3, poisonEvent.getFailureCount());
         assertTrue(poisonEvent.isDeadLettered());
-        verify(repository).save(poisonEvent);
+        verify(repository).saveAll(List.of(poisonEvent));
     }
 
     @Test
     void publishPendingEvents_emptyBatch_noOp() {
-        when(repository.findTop100ByPublishedFalseAndDeadLetteredFalseOrderByCreatedAtAsc())
+        when(repository.findByPublishedFalseAndDeadLetteredFalseOrderByCreatedAtAsc(any(Pageable.class)))
                 .thenReturn(List.of());
 
         publisher.publishPendingEvents();
 
         verify(kafkaTemplate, never()).send(anyString(), anyString(), anyString());
-        verify(repository, never()).save(any());
+        verify(repository, never()).saveAll(anyList());
     }
 }

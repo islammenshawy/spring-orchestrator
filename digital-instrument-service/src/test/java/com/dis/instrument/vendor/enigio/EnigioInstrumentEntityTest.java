@@ -130,7 +130,7 @@ class EnigioInstrumentEntityTest {
         entity.setTransferId("xfr_001");
 
         assertThat(entity.getTraceOriginalId()).isNotNull();
-        assertThat(entity.getSigningStatus()).isEqualTo("SIGNED");
+        assertThat(entity.getSigningStatus()).isEqualTo(com.dis.instrument.model.SigningStatus.SIGNED);
         assertThat(entity.getValidationResult()).isEqualTo("VALID");
         assertThat(entity.getTransferId()).isNotNull();
     }

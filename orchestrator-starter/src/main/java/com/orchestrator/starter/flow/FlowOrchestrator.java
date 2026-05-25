@@ -15,6 +15,8 @@ import com.orchestrator.starter.kafka.StepReplyMessage;
 import com.orchestrator.starter.outbox.OutboxEvent;
 import com.orchestrator.starter.outbox.OutboxEventRepository;
 import tools.jackson.databind.ObjectMapper;
+import lombok.Builder;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -55,28 +57,12 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private final int stepTimeoutSeconds;
     private final ExecutorService stepExecutor;
     private final OrchestratorMetrics metrics;
-    private int MAX_LOG_SNAPSHOT_BYTES = 32_768; // 32 KB default
-    private Class<F> entityClass;
-    private org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
-    private jakarta.validation.Validator validator;
+    @Setter private int maxLogSnapshotBytes = 32_768; // 32 KB default
+    @Setter private Class<F> entityClass;
+    @Setter private org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
+    @Setter private jakarta.validation.Validator validator;
 
-    public FlowOrchestrator(
-            OrchestratorFlowRepository<F> flowRepository,
-            StepRegistry<F> stepRegistry,
-            OutboxEventRepository outboxRepository,
-            StepExecutionLogRepository stepLogRepository,
-            ObjectMapper objectMapper,
-            String commandTopic,
-            String replyTopic,
-            boolean replyEnabled,
-            TransactionTemplate txTemplate,
-            boolean includeFlowStateInLogs,
-            KafkaTemplate kafkaTemplate) {
-        this(flowRepository, stepRegistry, outboxRepository, stepLogRepository,
-                objectMapper, null, commandTopic, replyTopic, replyEnabled,
-                txTemplate, includeFlowStateInLogs, kafkaTemplate, 60, null);
-    }
-
+    @Builder
     public FlowOrchestrator(
             OrchestratorFlowRepository<F> flowRepository,
             StepRegistry<F> stepRegistry,
@@ -404,11 +390,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     // ========== Signals ==========
 
-    private SignalRegistry<F> signalRegistry;
-
-    public void setSignalRegistry(SignalRegistry<F> signalRegistry) {
-        this.signalRegistry = signalRegistry;
-    }
+    @Setter private SignalRegistry<F> signalRegistry;
 
     /**
      * Send a signal to a running flow. Temporal-style:
@@ -638,11 +620,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
     }
 
-    private FlowTypeRegistry flowTypeRegistry;
-
-    public void setFlowTypeRegistry(FlowTypeRegistry registry) {
-        this.flowTypeRegistry = registry;
-    }
+    @Setter private FlowTypeRegistry flowTypeRegistry;
 
     /**
      * Cancel all child flows when parent is cancelled.
@@ -983,24 +961,48 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             return;
         }
 
-        // We won the race — publish next step command
+        // We won the race — publish next step command.
+        // Direct Kafka publish first (low latency). On failure, write outbox fallback
+        // so the outbox publisher delivers it. Recovery scanner also handles the case
+        // where crash occurs between DB CAS and Kafka publish (staleThresholdMinutes).
         String partitionKey = flow.getCorrelationId() != null
                 ? flow.getCorrelationId() : flow.getId();
 
         List<String> stepsAtNextOrder = stepRegistry.getStepsAtSameOrder(nextStep);
-        try {
-            if (stepsAtNextOrder.size() > 1) {
-                for (String parallelStep : stepsAtNextOrder) {
-                    publishStepDirect(flow, parallelStep, partitionKey);
+        List<String> stepsToPublish = stepsAtNextOrder.size() > 1 ? stepsAtNextOrder : List.of(nextStep);
+
+        for (String step : stepsToPublish) {
+            try {
+                publishStepDirect(flow, step, partitionKey);
+            } catch (Exception e) {
+                // Direct publish failed — write outbox fallback for guaranteed delivery
+                log.warn("[Saga] Direct advance send failed for flow {} step {} — writing outbox fallback: {}",
+                        flow.getId(), step, e.getMessage());
+                try {
+                    StepCommandMessage cmd = StepCommandMessage.builder()
+                            .eventId(UUID.randomUUID().toString())
+                            .flowId(flow.getId())
+                            .correlationId(flow.getCorrelationId())
+                            .stepName(step)
+                            .flowType(flowType)
+                            .build();
+                    outboxRepository.save(OutboxEvent.builder()
+                            .id(UUID.randomUUID().toString())
+                            .flowId(flow.getId())
+                            .topic(commandTopic)
+                            .key(partitionKey)
+                            .payload(objectMapper.writeValueAsString(cmd))
+                            .build());
+                } catch (Exception ex) {
+                    log.error("[Saga] Outbox fallback also failed for flow {} step {}: {}",
+                            flow.getId(), step, ex.getMessage());
                 }
-                log.info("[Saga] Published {} parallel steps for flow {}: {}",
-                        stepsAtNextOrder.size(), flow.getId(), stepsAtNextOrder);
-            } else {
-                publishStepDirect(flow, nextStep, partitionKey);
             }
-        } catch (Exception e) {
-            log.warn("[Saga] Direct advance send failed for flow {} step {}: {}",
-                    flow.getId(), nextStep, e.getMessage());
+        }
+
+        if (stepsToPublish.size() > 1) {
+            log.info("[Saga] Published {} parallel steps for flow {}: {}",
+                    stepsToPublish.size(), flow.getId(), stepsToPublish);
         }
     }
 
@@ -1332,21 +1334,6 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      * and save. On conflict, re-read the latest version and retry.
      */
 
-    public void setEntityClass(Class<F> entityClass) {
-        this.entityClass = entityClass;
-    }
-
-    public void setMongoTemplate(org.springframework.data.mongodb.core.MongoTemplate mongoTemplate) {
-        this.mongoTemplate = mongoTemplate;
-    }
-
-    public void setValidator(jakarta.validation.Validator validator) {
-        this.validator = validator;
-    }
-
-    public void setMaxLogSnapshotBytes(int maxLogSnapshotBytes) {
-        this.MAX_LOG_SNAPSHOT_BYTES = maxLogSnapshotBytes;
-    }
 
 
     /**
@@ -1424,9 +1411,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private String serializeForLog(F flow) {
         try {
             String json = objectMapper.writeValueAsString(flow);
-            if (json.length() > MAX_LOG_SNAPSHOT_BYTES) {
+            if (json.length() > maxLogSnapshotBytes) {
                 log.debug("[Saga] Flow state too large for step log ({} bytes > {} max), skipping",
-                        json.length(), MAX_LOG_SNAPSHOT_BYTES);
+                        json.length(), maxLogSnapshotBytes);
                 return null;
             }
             return json;
