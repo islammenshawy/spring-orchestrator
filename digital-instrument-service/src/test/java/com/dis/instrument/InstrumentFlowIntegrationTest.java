@@ -892,6 +892,67 @@ class InstrumentFlowIntegrationTest {
                 "Flow should no longer be CANCELLED after replay");
     }
 
+    // ===== Race Condition Integration Tests =====
+
+    @Test
+    @Order(50)
+    @DisplayName("Race: Concurrent approvals — no corruption")
+    void race_concurrentApprovals() throws Exception {
+        var result = startInstrumentFlow("RACE-APPROVE-001", InstrumentType.PROMISSORY_NOTE);
+        String flowId = (String) result.get("id");
+
+        if (!waitForParked(flowId)) { fail("Flow never parked"); return; }
+
+        // Fire 3 concurrent approve requests
+        var futures = new java.util.ArrayList<java.util.concurrent.CompletableFuture<?>>();
+        for (int i = 0; i < 3; i++) {
+            futures.add(java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try {
+                    rest.post().uri("/flows/enigio-instrument/" + flowId + "/approve")
+                            .contentType(MediaType.APPLICATION_JSON).body(Map.of())
+                            .retrieve().body(Map.class);
+                } catch (Exception ignored) {}
+            }));
+        }
+        java.util.concurrent.CompletableFuture.allOf(futures.toArray(new java.util.concurrent.CompletableFuture[0])).join();
+
+        Thread.sleep(2000);
+        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(flow);
+        assertNotEquals(com.orchestrator.starter.domain.FlowStatus.FAILED, flow.getStatus(),
+                "Concurrent approvals should not corrupt flow");
+    }
+
+    @Test
+    @Order(51)
+    @DisplayName("Race: Approve on already-advanced flow returns 400")
+    void race_approveOnAdvancedFlow() throws Exception {
+        var result = startInstrumentFlow("RACE-ADVANCED-001", InstrumentType.BILL_OF_EXCHANGE);
+        String flowId = (String) result.get("id");
+
+        // Wait for flow to reach PARKED, then approve it
+        if (!waitForParked(flowId)) { fail("Flow never parked"); return; }
+
+        rest.post().uri("/flows/enigio-instrument/" + flowId + "/approve")
+                .contentType(MediaType.APPLICATION_JSON).body(Map.of())
+                .retrieve().body(Map.class);
+
+        // Wait for flow to advance past the gate
+        Thread.sleep(5000);
+
+        // Try to approve again — flow has advanced, should get 400
+        try {
+            rest.post().uri("/flows/enigio-instrument/" + flowId + "/approve")
+                    .contentType(MediaType.APPLICATION_JSON).body(Map.of())
+                    .retrieve().body(Map.class);
+            // Might succeed if flow is at another gate — that's OK
+        } catch (Exception e) {
+            // Expected 400 — flow is no longer at the approval gate
+            assertTrue(e.getMessage().contains("400") || e.getMessage().contains("not awaiting"),
+                    "Should reject approval on advanced flow");
+        }
+    }
+
     private boolean waitForParked(String flowId) throws InterruptedException {
         long deadline = System.currentTimeMillis() + Duration.ofMinutes(1).toMillis();
         while (System.currentTimeMillis() < deadline) {

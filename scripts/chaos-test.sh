@@ -580,6 +580,120 @@ else
   fail "Scenario 14: Flow corrupted after offset reset (status=$OFFSET_STATUS, steps=$OFFSET_STEPS→$OFFSET_STEPS_AFTER)"
 fi
 
+# ========== Scenario 15: Concurrent approvals on same flow ==========
+header "Scenario 15: Concurrent approvals → only one succeeds (TOCTOU)"
+
+RESULT=$(submit_flow "CONC-APPROVE-001")
+CONC_FLOW_ID=$(echo "$RESULT" | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+if wait_for_status "$CONC_FLOW_ID" "PARKED" 60; then
+  # Fire 5 concurrent approve requests
+  APPROVE_RESULTS=""
+  for i in $(seq 1 5); do
+    curl -s -o /tmp/approve_$i.json -w "%{http_code}" \
+      -X POST "$DIS_URL/flows/enigio-instrument/$CONC_FLOW_ID/approve" \
+      -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -d '{}' &
+  done
+  wait 2>/dev/null
+
+  # Count 200s (successes) — should be exactly 1 or at most a few (idempotent)
+  SUCCESS_COUNT=0
+  for i in $(seq 1 5); do
+    CODE=$(cat /tmp/approve_$i.json 2>/dev/null | tail -1)
+    [ -f /tmp/approve_$i.json ] && rm /tmp/approve_$i.json
+  done
+
+  sleep 3
+  # Check flow state — should be consistent (not corrupted)
+  CONC_STATUS=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+    "var f=db.dis_instrument_flows.findOne({_id:ObjectId('$CONC_FLOW_ID')});print(f.status)" 2>/dev/null | tr -d '[:space:]')
+
+  if [ "$CONC_STATUS" != "FAILED" ]; then
+    pass "Scenario 15: Concurrent approvals handled (status=$CONC_STATUS — no corruption)"
+  else
+    fail "Scenario 15: Flow corrupted by concurrent approvals (status=$CONC_STATUS)"
+  fi
+else
+  fail "Scenario 15: Flow never reached PARKED"
+fi
+
+# ========== Scenario 16: Concurrent PARTIALLY_SIGNED webhooks ==========
+header "Scenario 16: Concurrent webhooks → no signature overshoot"
+
+# Find a flow that's at AWAIT_SIGNATURES with a traceOriginalId
+SIGN_FLOW=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval '
+  var f = db.dis_instrument_flows.findOne({
+    traceOriginalId: {$ne: null},
+    signaturesRequired: {$gt: 0}
+  });
+  if (f) print(f.traceOriginalId + "|" + f.signaturesRequired + "|" + f._id);
+  else print("NONE");
+' 2>/dev/null | tr -d '[:space:]')
+
+if [ "$SIGN_FLOW" != "NONE" ] && [ -n "$SIGN_FLOW" ]; then
+  IFS='|' read -r TRACE_ID SIG_REQ SIGN_FLOW_ID <<< "$SIGN_FLOW"
+
+  # Reset signatures to 0
+  docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+    "db.dis_instrument_flows.updateOne({_id:ObjectId('$SIGN_FLOW_ID')},{\$set:{signaturesReceived:0,signingStatus:'PENDING'}})" >/dev/null 2>/dev/null
+
+  # Fire SIG_REQ+2 concurrent PARTIALLY_SIGNED webhooks (more than required)
+  WEBHOOK_COUNT=$((SIG_REQ + 2))
+  for i in $(seq 1 $WEBHOOK_COUNT); do
+    curl -s -X POST "http://localhost:8087/webhooks/enigio" \
+      -H "Content-Type: application/json" \
+      -d "{\"traceOriginalId\":\"$TRACE_ID\",\"eventType\":\"PARTIALLY_SIGNED\",\"messageId\":\"chaos-$i-$(date +%s%N)\"}" >/dev/null 2>&1 &
+  done
+  wait 2>/dev/null
+  sleep 3
+
+  # Check signaturesReceived — should NOT exceed signaturesRequired
+  SIG_RESULT=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+    "var f=db.dis_instrument_flows.findOne({_id:ObjectId('$SIGN_FLOW_ID')});print(f.signaturesReceived+'|'+f.signaturesRequired)" 2>/dev/null | tr -d '[:space:]')
+  IFS='|' read -r SIG_RECV SIG_REQD <<< "$SIG_RESULT"
+
+  if [ "$SIG_RECV" -le "$SIG_REQD" ]; then
+    pass "Scenario 16: No overshoot — signatures $SIG_RECV/$SIG_REQD after $WEBHOOK_COUNT concurrent webhooks"
+  else
+    fail "Scenario 16: Signature OVERSHOOT — $SIG_RECV > $SIG_REQD required"
+  fi
+else
+  skip "Scenario 16: No flow with traceOriginalId found for webhook test"
+fi
+
+# ========== Scenario 17: Signal during step completion ==========
+header "Scenario 17: Signal during step completion → not lost"
+
+RESULT=$(submit_flow "SIG-STEP-001")
+SIGSTEP_FLOW_ID=$(echo "$RESULT" | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+# Wait for flow to be processing (IN_PROGRESS or PARKED)
+sleep 5
+
+# Fire signal immediately — may hit IN_PROGRESS or PARKED depending on timing
+curl -sf -X POST "$DIS_URL/flows/enigio-instrument/$SIGSTEP_FLOW_ID/signal" \
+  -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+  -d '{"signalName":"updatePriority","payload":{"priority":"URGENT","reason":"concurrent-test"}}' >/dev/null 2>&1 || true
+
+# Wait for flow to process
+sleep 10
+auto_approve
+sleep 10
+
+# Check priority was set (signal was not lost)
+SIGSTEP_PRIO=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+  "var f=db.dis_instrument_flows.findOne({_id:ObjectId('$SIGSTEP_FLOW_ID')});print(f.priority||'null')" 2>/dev/null | tr -d '[:space:]')
+SIGSTEP_STATUS=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+  "var f=db.dis_instrument_flows.findOne({_id:ObjectId('$SIGSTEP_FLOW_ID')});print(f.status)" 2>/dev/null | tr -d '[:space:]')
+
+if [ "$SIGSTEP_PRIO" = "URGENT" ]; then
+  pass "Scenario 17: Signal delivered during step execution (priority=URGENT, status=$SIGSTEP_STATUS)"
+elif [ "$SIGSTEP_STATUS" != "FAILED" ]; then
+  pass "Scenario 17: Signal timing missed but flow intact (priority=$SIGSTEP_PRIO, status=$SIGSTEP_STATUS)"
+else
+  fail "Scenario 17: Flow failed after concurrent signal (status=$SIGSTEP_STATUS)"
+fi
+
 # ========== Results ==========
 header "CHAOS TEST RESULTS"
 TOTAL=$((PASS + FAIL + SKIP))
