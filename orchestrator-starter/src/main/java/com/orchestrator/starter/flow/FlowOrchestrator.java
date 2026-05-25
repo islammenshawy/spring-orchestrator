@@ -533,13 +533,39 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                     signalName, payloadJson, Instant.now());
 
             if (mongoTemplate != null && entityClass != null) {
-                mongoTemplate.updateFirst(
+                // Atomic CAS: only push if flow is still IN_PROGRESS
+                // If flow advanced between our read and this write, modifiedCount=0
+                long modified = mongoTemplate.updateFirst(
                         org.springframework.data.mongodb.core.query.Query.query(
-                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flowId)),
+                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flowId)
+                                        .and("status").is(FlowStatus.IN_PROGRESS.name())),
                         new org.springframework.data.mongodb.core.query.Update()
                                 .push("pendingSignals", pending),
-                        entityClass);
-                log.info("[Signal] Queued '{}' on flow {} (IN_PROGRESS)", signalName, flowId);
+                        entityClass).getModifiedCount();
+                if (modified > 0) {
+                    log.info("[Signal] Queued '{}' on flow {} (IN_PROGRESS)", signalName, flowId);
+                } else {
+                    // Flow advanced — re-read and execute immediately if now PARKED
+                    F freshFlow = flowRepository.findById(flowId).orElse(null);
+                    if (freshFlow != null && (freshFlow.getStatus() == FlowStatus.PARKED
+                            || freshFlow.getStatus() == FlowStatus.WAITING_RETRY)) {
+                        Object typedPayload = convertPayload(handler, payload);
+                        handler.invoke(freshFlow, typedPayload);
+                        saveFlow(freshFlow);
+                        try {
+                            String pk = freshFlow.getCorrelationId() != null
+                                    ? freshFlow.getCorrelationId() : freshFlow.getId();
+                            publishStepDirect(freshFlow, freshFlow.getCurrentStep(), pk);
+                        } catch (Exception ex) {
+                            log.warn("[Signal] Re-publish after late signal failed: {}", ex.getMessage());
+                        }
+                        log.info("[Signal] Executed '{}' on flow {} (was IN_PROGRESS, now {})",
+                                signalName, flowId, freshFlow.getStatus());
+                    } else {
+                        log.warn("[Signal] Flow {} changed to {} — signal '{}' dropped",
+                                flowId, freshFlow != null ? freshFlow.getStatus() : "NOT_FOUND", signalName);
+                    }
+                }
             } else {
                 var signals = flow.getPendingSignals();
                 if (signals == null) {
@@ -568,14 +594,21 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         // - Signals $pushed AFTER this → create a new array → survive for next drain
         java.util.List<com.orchestrator.starter.domain.PendingSignal> pending;
         if (mongoTemplate != null && entityClass != null) {
-            F snapshot = (F) mongoTemplate.findAndModify(
-                    org.springframework.data.mongodb.core.query.Query.query(
-                            org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flow.getId())
-                                    .and("pendingSignals").ne(null)),
-                    new org.springframework.data.mongodb.core.query.Update().unset("pendingSignals"),
-                    org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(false),
-                    entityClass);
-            pending = snapshot != null ? snapshot.getPendingSignals() : null;
+            try {
+                F snapshot = (F) mongoTemplate.findAndModify(
+                        org.springframework.data.mongodb.core.query.Query.query(
+                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flow.getId())
+                                        .and("pendingSignals").ne(null)),
+                        new org.springframework.data.mongodb.core.query.Update().unset("pendingSignals"),
+                        org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(false),
+                        entityClass);
+                pending = snapshot != null ? snapshot.getPendingSignals() : null;
+            } catch (Exception e) {
+                // findAndModify failed — signals stay in MongoDB, will be drained on next step
+                log.warn("[Signal] Drain findAndModify failed for flow {} — signals preserved for next drain: {}",
+                        flow.getId(), e.getMessage());
+                return;
+            }
         } else {
             pending = flow.getPendingSignals();
             flow.setPendingSignals(null);

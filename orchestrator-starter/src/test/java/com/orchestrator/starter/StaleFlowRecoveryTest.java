@@ -93,7 +93,7 @@ class StaleFlowRecoveryTest {
         when(mongoTemplate.find(any(Query.class), eq(entityClass)))
                 .thenAnswer(inv -> {
                     Query q = inv.getArgument(0);
-                    if (q.toString().contains("IN_PROGRESS")) return candidates;
+                    if (q.toString().contains(FlowStatus.IN_PROGRESS.name())) return candidates;
                     return List.of();
                 });
         // updateMulti for claim returns claimedCount
@@ -180,7 +180,7 @@ class StaleFlowRecoveryTest {
         // FlowA mocks — only return staleA for IN_PROGRESS queries
         when(mongoTemplate.find(any(Query.class), eq(FlowA.class)))
                 .thenAnswer(inv -> {
-                    if (inv.getArgument(0).toString().contains("IN_PROGRESS")) return List.of(staleA);
+                    if (inv.getArgument(0).toString().contains(FlowStatus.IN_PROGRESS.name())) return List.of(staleA);
                     return List.of();
                 });
         when(mongoTemplate.updateMulti(any(Query.class), any(Update.class), eq(FlowA.class)))
@@ -189,7 +189,7 @@ class StaleFlowRecoveryTest {
         // FlowB mocks
         when(mongoTemplate.find(any(Query.class), eq(FlowB.class)))
                 .thenAnswer(inv -> {
-                    if (inv.getArgument(0).toString().contains("IN_PROGRESS")) return List.of(staleB);
+                    if (inv.getArgument(0).toString().contains(FlowStatus.IN_PROGRESS.name())) return List.of(staleB);
                     return List.of();
                 });
         when(mongoTemplate.updateMulti(any(Query.class), any(Update.class), eq(FlowB.class)))

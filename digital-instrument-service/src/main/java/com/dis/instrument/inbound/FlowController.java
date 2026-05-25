@@ -130,39 +130,51 @@ public class FlowController {
             @PathVariable String id,
             @RequestBody(required = false) Map<String, Object> body) {
 
-        EnigioInstrumentEntity flow = mongoTemplate.findById(id, EnigioInstrumentEntity.class);
-        if (flow == null) {
-            return ResponseEntity.notFound().build();
-        }
-
-        String currentStep = flow.getCurrentStep();
+        // Atomic CAS: approve only if flow is still at the expected gate step
+        // Prevents TOCTOU race where flow advances between read and update
         String approvedPhase;
+        String currentStep;
+        String correlationId;
 
-        if (FlowStep.AWAIT_PREPARATION_APPROVAL.matches(currentStep)) {
-            mongoTemplate.updateFirst(
-                    Query.query(Criteria.where("_id").is(id)),
-                    new Update().set("signingApproved", true),
-                    EnigioInstrumentEntity.class);
+        // Try signing approval gate
+        EnigioInstrumentEntity flow = mongoTemplate.findAndModify(
+                Query.query(Criteria.where("_id").is(id)
+                        .and("currentStep").is(FlowStep.AWAIT_PREPARATION_APPROVAL.name())),
+                new Update().set("signingApproved", true),
+                org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(true),
+                EnigioInstrumentEntity.class);
+
+        if (flow != null) {
             approvedPhase = "signing";
+            currentStep = flow.getCurrentStep();
+            correlationId = flow.getCorrelationId();
             log.info("[{}] Signing phase approved by downstream", id);
-
-        } else if (FlowStep.AWAIT_DELIVERY_APPROVAL.matches(currentStep)) {
-            mongoTemplate.updateFirst(
-                    Query.query(Criteria.where("_id").is(id)),
-                    new Update().set("deliveryApproved", true),
-                    EnigioInstrumentEntity.class);
-            approvedPhase = "delivery";
-            log.info("[{}] Delivery phase approved by downstream", id);
-
         } else {
-            return ResponseEntity.badRequest().body(new ErrorResponse(
-                    "Flow is not awaiting approval", id,
-                    currentStep != null ? stepToPhase(currentStep) : "unknown", null));
+            // Try delivery approval gate
+            flow = mongoTemplate.findAndModify(
+                    Query.query(Criteria.where("_id").is(id)
+                            .and("currentStep").is(FlowStep.AWAIT_DELIVERY_APPROVAL.name())),
+                    new Update().set("deliveryApproved", true),
+                    org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(true),
+                    EnigioInstrumentEntity.class);
+
+            if (flow != null) {
+                approvedPhase = "delivery";
+                currentStep = flow.getCurrentStep();
+                correlationId = flow.getCorrelationId();
+                log.info("[{}] Delivery phase approved by downstream", id);
+            } else {
+                // Neither gate matched — flow may have advanced or doesn't exist
+                EnigioInstrumentEntity existing = mongoTemplate.findById(id, EnigioInstrumentEntity.class);
+                if (existing == null) return ResponseEntity.notFound().build();
+                return ResponseEntity.badRequest().body(new ErrorResponse(
+                        "Flow is not awaiting approval (current step may have changed)", id,
+                        existing.getCurrentStep() != null ? stepToPhase(existing.getCurrentStep()) : "unknown", null));
+            }
         }
 
-        // Re-activate: publish step command to Kafka so the gate step re-executes
-        // and finds the approval flag set → advances to next group
-        reactivateFlow(id, flow.getCorrelationId(), currentStep);
+        // Re-activate: publish step command to Kafka
+        reactivateFlow(id, correlationId, currentStep);
 
         return ResponseEntity.ok(new ApprovalResponse(
                 id, approvedPhase, stepToPhase(currentStep),

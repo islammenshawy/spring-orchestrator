@@ -138,9 +138,11 @@ public class StaleFlowRecoveryService {
                 .map(c -> ((OrchestratorFlow) c).getId())
                 .toList();
 
-        // Step 2: Claim those IDs atomically via updateMulti with $in
+        // Step 2: Claim those IDs atomically — include status check to prevent claim hang
+        // If status changed between find and claim, the flow won't be claimed
         long claimed = mongoTemplate.updateMulti(
                 Query.query(Criteria.where("_id").in(candidateIds)
+                        .and("status").is(FlowStatus.IN_PROGRESS.name())
                         .and("claimedBy").is(null)),
                 new Update()
                         .set("claimedBy", podId)
@@ -149,7 +151,7 @@ public class StaleFlowRecoveryService {
 
         if (claimed == 0) return;
 
-        // Step 3: Find the claimed batch
+        // Step 3: Find the claimed batch — re-verify status is still IN_PROGRESS
         List<?> batch = mongoTemplate.find(
                 Query.query(Criteria.where("claimedBy").is(podId)
                         .and("status").is(FlowStatus.IN_PROGRESS.name())),

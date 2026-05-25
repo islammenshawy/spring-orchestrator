@@ -127,21 +127,23 @@ public class WebhookController {
 
         switch (eventType) {
             case "PARTIALLY_SIGNED" -> {
-                // Guard: skip if already fully signed (prevents overshoot)
-                EnigioInstrumentEntity existing = mongoTemplate.findOne(query, EnigioInstrumentEntity.class);
-                if (existing != null && existing.getSignaturesRequired() > 0
-                        && existing.getSignaturesReceived() >= existing.getSignaturesRequired()) {
-                    log.info("[webhook] PARTIALLY_SIGNED ignored — already at {}/{} signatures",
-                            existing.getSignaturesReceived(), existing.getSignaturesRequired());
-                    return ResponseEntity.ok(new WebhookResponse("received", eventType));
-                }
-
-                EnigioInstrumentEntity flow = mongoTemplate.findAndModify(query,
+                // Atomic guard + increment: only increment if below required count
+                // Prevents double-increment race when concurrent webhooks arrive
+                EnigioInstrumentEntity flow = mongoTemplate.findAndModify(
+                        Query.query(Criteria.where("traceOriginalId").is(traceOriginalId)
+                                .and("$expr").is(new org.bson.Document("$lt",
+                                        java.util.List.of("$signaturesReceived", "$signaturesRequired")))),
                         new Update()
                                 .inc("signaturesReceived", 1)
                                 .set("signingStatus", SigningStatus.PARTIALLY_SIGNED.name()),
                         FindAndModifyOptions.options().returnNew(true),
                         EnigioInstrumentEntity.class);
+
+                if (flow == null) {
+                    // Either document not found or already at/above required
+                    log.info("[webhook] PARTIALLY_SIGNED ignored — already fully signed or unknown doc");
+                    return ResponseEntity.ok(new WebhookResponse("received", eventType));
+                }
 
                 if (flow != null) {
                     log.info("[webhook] Signature {}/{} received for instrument {}",
