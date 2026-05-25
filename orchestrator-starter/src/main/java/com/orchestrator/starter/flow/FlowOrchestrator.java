@@ -362,10 +362,6 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     /**
      * Called by the reply consumer after receiving a COMPLETED reply.
-     * Advances the flow to the next step.
-     */
-    /**
-     * Called by the reply consumer after receiving a COMPLETED reply.
      * Uses the flow snapshot from the reply message (not a MongoDB re-read)
      * to avoid the race condition where re-read returns stale data.
      */
