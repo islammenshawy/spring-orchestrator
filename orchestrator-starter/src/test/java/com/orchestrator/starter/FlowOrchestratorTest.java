@@ -27,6 +27,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.kafka.core.KafkaTemplate;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -189,7 +190,8 @@ class FlowOrchestratorTest {
         orchestrator.executeStep("flow-1", "STEP_A");
 
         assertEquals(FlowStatus.FAILED, flow.getStatus());
-        verify(flowRepo).save(flow);
+        // 2 saves: first COMPENSATING (crash-safe), then FAILED (after compensation)
+        verify(flowRepo, times(2)).save(flow);
     }
 
     // ========== Infrastructure errors ==========
@@ -243,7 +245,8 @@ class FlowOrchestratorTest {
 
         assertEquals(FlowStatus.FAILED, flow.getStatus());
         assertTrue(flow.getErrorMessage().contains("HTTP 500 on vendor API"));
-        verify(flowRepo).save(flow);
+        // 2 saves: first COMPENSATING (crash-safe), then FAILED (no steps to compensate)
+        verify(flowRepo, times(2)).save(flow);
     }
 
     @Test
@@ -939,5 +942,66 @@ class FlowOrchestratorTest {
         orchestrator.advanceAfterReply("flow-cancelling", "STEP_A", null);
 
         verify(stepRegistry, never()).getHandler("STEP_A");
+    }
+
+    // ========== Crash resilience: WAITING_RETRY/PARKED guard ==========
+
+    @Test
+    void executeStep_waitingRetryWithFutureBackoff_skipsExecution() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-waiting");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.WAITING_RETRY);
+        flow.setNextRetryAt(Instant.now().plus(Duration.ofMinutes(5))); // future backoff
+
+        when(flowRepo.findById("flow-waiting")).thenReturn(Optional.of(flow));
+
+        // Should skip — scheduler will handle at correct backoff time
+        orchestrator.executeStep("flow-waiting", "STEP_A");
+
+        verify(stepRegistry, never()).getHandler("STEP_A");
+        verify(flowRepo, never()).save(any());
+    }
+
+    @Test
+    void executeStep_waitingRetryWithPastBackoff_executesNormally() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-retry-due");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.WAITING_RETRY);
+        flow.setNextRetryAt(Instant.now().minus(Duration.ofSeconds(10))); // past — due for retry
+
+        StepHandler<TestFlow> handler = mock(StepHandler.class);
+        when(handler.getStepName()).thenReturn("STEP_A");
+        when(flowRepo.findById("flow-retry-due")).thenReturn(Optional.of(flow));
+        when(stepRegistry.getHandler("STEP_A")).thenReturn(handler);
+
+        // Should execute — backoff time has passed
+        orchestrator.executeStep("flow-retry-due", "STEP_A");
+
+        verify(stepRegistry).getHandler("STEP_A");
+    }
+
+    // ========== Crash resilience: COMPENSATING before FAILED ==========
+
+    @Test
+    void nonRetryableException_goesThrough_compensating_before_failed() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-comp");
+        flow.setCurrentStep("STEP_B");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+
+        StepHandler<TestFlow> handler = mock(StepHandler.class);
+        when(handler.getStepName()).thenReturn("STEP_B");
+        doThrow(new NonRetryableStepException("bad")).when(handler).execute(flow);
+
+        when(flowRepo.findById("flow-comp")).thenReturn(Optional.of(flow));
+        when(stepRegistry.getHandler("STEP_B")).thenReturn(handler);
+        when(stepRegistry.getCompletedStepsBefore("STEP_B")).thenReturn(List.of());
+
+        orchestrator.executeStep("flow-comp", "STEP_B");
+
+        // Final state should be FAILED (went through COMPENSATING → FAILED)
+        assertEquals(FlowStatus.FAILED, flow.getStatus());
     }
 }

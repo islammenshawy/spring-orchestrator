@@ -91,6 +91,8 @@ public class StaleFlowRecoveryService {
             redeliverParkedSafetyNet(descriptor.getFlowType(), descriptor.getEntityClass(), commandTopic);
 
             expireWaitingFlows(descriptor.getFlowType(), descriptor.getEntityClass());
+
+            recoverStuckCompensation(descriptor);
         }
     }
 
@@ -386,6 +388,61 @@ public class StaleFlowRecoveryService {
             metrics.flowFailed(flowType);
             log.info("[Recovery] Expired flow {} at step {} (waited {}h)",
                     flow.getId(), flow.getCurrentStep(), waitedHours);
+        }
+    }
+
+    /**
+     * Recover flows stuck in COMPENSATING or CANCELLING status after a crash.
+     * These intermediate states have no auto-recovery — the recovery scanner
+     * must detect and re-run compensation/cancellation.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void recoverStuckCompensation(FlowTypeDescriptor descriptor) {
+        Instant threshold = Instant.now().minus(staleThresholdMinutes, ChronoUnit.MINUTES);
+        Class<?> entityClass = descriptor.getEntityClass();
+
+        Query candidateQuery = Query.query(Criteria.where("status")
+                .in(FlowStatus.COMPENSATING.name(), FlowStatus.CANCELLING.name())
+                .and("updatedAt").lt(threshold)
+                .and("claimedBy").is(null))
+                .limit(batchSize);
+        candidateQuery.fields().include("_id", "status");
+        List<?> candidates = mongoTemplate.find(candidateQuery, entityClass);
+        if (candidates.isEmpty()) return;
+
+        List<String> ids = candidates.stream()
+                .map(c -> ((OrchestratorFlow) c).getId()).toList();
+
+        long claimed = mongoTemplate.updateMulti(
+                Query.query(Criteria.where("_id").in(ids)
+                        .and("claimedBy").is(null)
+                        .and("status").in(FlowStatus.COMPENSATING.name(), FlowStatus.CANCELLING.name())),
+                new Update().set("claimedBy", podId).set("claimedAt", Instant.now()),
+                entityClass).getModifiedCount();
+        if (claimed == 0) return;
+
+        List<?> batch = mongoTemplate.find(
+                Query.query(Criteria.where("claimedBy").is(podId)
+                        .and("status").in(FlowStatus.COMPENSATING.name(), FlowStatus.CANCELLING.name())),
+                entityClass);
+
+        log.info("[Recovery] Found {} stuck compensation/cancellation flows (pod: {})", batch.size(), podId);
+
+        for (Object obj : batch) {
+            OrchestratorFlow flow = (OrchestratorFlow) obj;
+            try {
+                if (FlowStatus.COMPENSATING.name().equals(flow.getStatus().name())) {
+                    log.info("[Recovery] Re-running compensation for stuck flow {}", flow.getId());
+                    descriptor.getOrchestrator().retryCompensation(flow.getId());
+                } else {
+                    log.info("[Recovery] Re-running cancellation for stuck flow {}", flow.getId());
+                    descriptor.getOrchestrator().cancelFlow(flow.getId(), "recovery: stuck in CANCELLING");
+                }
+            } catch (Exception e) {
+                log.error("[Recovery] Failed to recover stuck flow {}: {}", flow.getId(), e.getMessage());
+            } finally {
+                releaseClaim(flow.getId(), entityClass);
+            }
         }
     }
 

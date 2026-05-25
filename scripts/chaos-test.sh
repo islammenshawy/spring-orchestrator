@@ -580,9 +580,9 @@ OFFSET_STEPS_AFTER=${OFFSET_STEPS_AFTER:-0}
 
 log "After offset reset: status=$OFFSET_STATUS, steps=$OFFSET_STEPS_AFTER"
 if [ "$OFFSET_STATUS" != "FAILED" ] && [ "$OFFSET_STEPS_AFTER" -ge "$OFFSET_STEPS" ]; then
-  pass "Scenario 14: Flow intact after offset reset (status=$OFFSET_STATUS, steps=$OFFSET_STEPS→$OFFSET_STEPS_AFTER)"
+  pass "Scenario 14: Flow intact after offset reset (status=$OFFSET_STATUS, steps=${OFFSET_STEPS}->${OFFSET_STEPS_AFTER})"
 else
-  fail "Scenario 14: Flow corrupted after offset reset (status=$OFFSET_STATUS, steps=$OFFSET_STEPS→$OFFSET_STEPS_AFTER)"
+  fail "Scenario 14: Flow corrupted after offset reset (status=$OFFSET_STATUS, steps=${OFFSET_STEPS}->${OFFSET_STEPS_AFTER})"
 fi
 
 # ========== Scenario 15: Concurrent approvals on same flow ==========

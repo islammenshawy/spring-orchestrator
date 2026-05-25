@@ -184,6 +184,15 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             log.info("[Saga] Flow {} is {} — skipping step {}", flowId, flow.getStatus(), stepName);
             return;
         }
+        // Guard against crash-recovery re-delivery: if the flow was already moved to
+        // WAITING_RETRY with a future nextRetryAt (crash after saving retry status but before
+        // throwing), skip immediate re-execution — the scheduler will handle it at backoff time.
+        // Only skip if nextRetryAt is in the future — past nextRetryAt means scheduler triggered this.
+        if (flow.getStatus() == FlowStatus.WAITING_RETRY
+                && flow.getNextRetryAt() != null && flow.getNextRetryAt().isAfter(Instant.now())) {
+            log.debug("[Saga] Flow {} is WAITING_RETRY with future nextRetryAt — skipping, scheduler will handle", flowId);
+            return;
+        }
 
         // Use the step name from the Kafka message (supports parallel steps)
         if (stepName == null) stepName = flow.getCurrentStep();
@@ -251,12 +260,12 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             if (!recovered) return; // permanent failure or non-recoverable — don't advance
         }
 
-        // Step succeeded — mark completed and persist
+        // Step succeeded — drain signals first (prevents $pushed signals from being
+        // overwritten by saveFlowWithRetry), then mark completed and persist.
+        drainPendingSignals(flow);
+
         markStepCompleted(flow, stepName);
         saveFlowWithRetry(flow, flowId);
-
-        // Drain pending signals before advancing (Temporal-style: signals execute between steps)
-        drainPendingSignals(flow);
 
         metrics.stepExecution(flowType, stepName, StepOutcome.COMPLETED.name(),
                 Duration.between(startedAt, Instant.now()));
@@ -375,7 +384,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         String errorDetail = exceptionMessage != null
                 ? "[DLT] " + exceptionMessage
                 : "[DLT] Exhausted all retry attempts";
-        flow.setStatus(FlowStatus.FAILED);
+
+        // Mark COMPENSATING first — crash-safe: recovery scanner handles stuck COMPENSATING
+        flow.setStatus(FlowStatus.COMPENSATING);
         flow.setErrorMessage(errorDetail);
         flow.setUpdatedAt(Instant.now());
         metrics.flowFailed(flowType);
@@ -385,7 +396,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 StepOutcome.DEAD_LETTERED.name(), flow.getRetryCount(),
                 null, null, errorDetail, Instant.now());
 
-        // Run compensation for all completed steps in reverse
+        // Run compensation — undo completed steps in reverse
         runCompensation(flow);
     }
 
@@ -730,7 +741,13 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     private void runCompensation(F flow) {
         List<String> completedSteps = stepRegistry.getCompletedStepsBefore(flow.getCurrentStep());
-        if (completedSteps.isEmpty()) return;
+        if (completedSteps.isEmpty()) {
+            // No steps to compensate — mark FAILED directly
+            flow.setStatus(FlowStatus.FAILED);
+            flow.setUpdatedAt(Instant.now());
+            saveFlow(flow);
+            return;
+        }
 
         log.info("[Saga] Running compensation for flow {} — {} steps to undo",
                 flow.getId(), completedSteps.size());
@@ -781,7 +798,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      */
     public void retryCompensation(String flowId) {
         F flow = flowRepository.findById(flowId).orElse(null);
-        if (flow == null || flow.getStatus() != FlowStatus.COMPENSATION_FAILED) return;
+        if (flow == null) return;
+        if (flow.getStatus() != FlowStatus.COMPENSATION_FAILED
+                && flow.getStatus() != FlowStatus.COMPENSATING) return;
         flow.setCompensationError(null);
         runCompensation(flow);
     }
@@ -1211,18 +1230,22 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private void handlePermanentFailure(F flow, NonRetryableStepException e) {
         metrics.flowFailed(flowType);
         String errorMsg = e.getMessage() != null ? e.getMessage() : "permanent failure";
+
+        // Set COMPENSATING + error message first — if crash during compensation,
+        // recovery scanner will detect COMPENSATING and re-run (Fix S1/S5)
+        flow.setStatus(FlowStatus.COMPENSATING);
+        flow.setErrorMessage(errorMsg);
+        flow.setUpdatedAt(Instant.now());
         if (mongoTemplate != null && entityClass != null) {
             updateFlowPartial(flow.getId(), java.util.Map.of(
-                    "status", FlowStatus.FAILED.name(),
+                    "status", FlowStatus.COMPENSATING.name(),
                     "errorMessage", errorMsg,
                     "updatedAt", Instant.now()));
         } else {
-            flow.setStatus(FlowStatus.FAILED);
-            flow.setErrorMessage(errorMsg);
-            flow.setUpdatedAt(Instant.now());
             saveFlow(flow);
         }
-        // Saga compensation — undo completed steps in reverse
+
+        // Run compensation — sets final status (FAILED or COMPENSATION_FAILED) and saves
         runCompensation(flow);
     }
 
