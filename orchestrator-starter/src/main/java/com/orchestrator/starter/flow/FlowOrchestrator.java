@@ -553,6 +553,10 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
             try {
                 Object typedPayload = deserializePayload(handler, ps.getPayloadJson());
+                if (typedPayload == null && handler.getPayloadType() != null && ps.getPayloadJson() != null) {
+                    log.warn("[Signal] Skipping pending '{}' — payload deserialization failed", ps.getSignalName());
+                    continue;
+                }
                 handler.invoke(flow, typedPayload);
                 log.info("[Signal] Executed pending '{}' on flow {}", ps.getSignalName(), flow.getId());
             } catch (Exception e) {
@@ -673,7 +677,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
         FlowStatus status = flow.getStatus();
         if (status != FlowStatus.IN_PROGRESS && status != FlowStatus.WAITING_RETRY
-                && status != FlowStatus.PARKED && status != FlowStatus.PENDING) {
+                && status != FlowStatus.PARKED && status != FlowStatus.PENDING
+                && status != FlowStatus.CANCELLING) {
             log.warn("[Saga] Cannot cancel flow {} — status is {}", flowId, status);
             return null;
         }

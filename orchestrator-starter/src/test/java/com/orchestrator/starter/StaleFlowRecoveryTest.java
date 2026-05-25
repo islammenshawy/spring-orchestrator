@@ -160,7 +160,8 @@ class StaleFlowRecoveryTest {
         verify(mongoTemplate, atLeastOnce()).updateFirst(any(Query.class), updateCaptor.capture(), eq(FlowA.class));
         String updateStr = updateCaptor.getAllValues().stream()
                 .map(Object::toString).reduce("", String::concat);
-        assertThat(updateStr).contains("FAILED");
+        // Sets COMPENSATING first (crash-safe), then retryCompensation sets final status
+        assertThat(updateStr).contains("COMPENSATING");
     }
 
     @Test

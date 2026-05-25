@@ -83,8 +83,7 @@ public class StaleFlowRecoveryService {
             // Release orphaned claims first (crashed pods)
             releaseOrphanedClaims(descriptor.getEntityClass());
 
-            recoverFlowType(descriptor.getFlowType(), descriptor.getEntityClass(),
-                    commandTopic, descriptor.getStepRegistry());
+            recoverFlowType(descriptor, commandTopic);
 
             redeliverPollingFlows(descriptor.getFlowType(), descriptor.getEntityClass(), commandTopic);
 
@@ -122,9 +121,11 @@ public class StaleFlowRecoveryService {
      * 3. process: for each flow, check outbox + recovery count, then publish to Kafka
      * 4. release: clear claimedBy/claimedAt, bump updatedAt, inc recoveryCount
      */
-    @SuppressWarnings("unchecked")
-    private void recoverFlowType(String flowType, Class<?> entityClass,
-                                  String commandTopic, StepRegistry<?> stepRegistry) {
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void recoverFlowType(FlowTypeDescriptor descriptor, String commandTopic) {
+        String flowType = descriptor.getFlowType();
+        Class<?> entityClass = descriptor.getEntityClass();
+        StepRegistry<?> stepRegistry = descriptor.getStepRegistry();
         Instant threshold = Instant.now().minus(staleThresholdMinutes, ChronoUnit.MINUTES);
 
         // Step 1: Find candidate IDs (limited to batchSize)
@@ -173,17 +174,26 @@ public class StaleFlowRecoveryService {
 
             // Recovery loop detection: cap at maxRecoveryAttempts
             if (flow.getRecoveryCount() >= maxRecoveryAttempts) {
-                log.error("[Recovery] Flow {} exceeded max recovery attempts ({}) — marking FAILED",
+                log.error("[Recovery] Flow {} exceeded max recovery attempts ({}) — marking COMPENSATING, running compensation",
                         flow.getId(), maxRecoveryAttempts);
+                // Mark COMPENSATING first, then run compensation (crash-safe: recovery scanner
+                // handles stuck COMPENSATING). This ensures saga compensation always runs.
                 mongoTemplate.updateFirst(
                         Query.query(Criteria.where("_id").is(flow.getId())),
                         new Update()
-                                .set("status", FlowStatus.FAILED.name())
+                                .set("status", FlowStatus.COMPENSATING.name())
                                 .set("errorMessage", "Exceeded max recovery attempts (" + maxRecoveryAttempts + ")")
                                 .set("updatedAt", Instant.now())
                                 .set("claimedBy", null)
                                 .set("claimedAt", null),
                         entityClass);
+                // Run compensation — sets final status (FAILED or COMPENSATION_FAILED)
+                try {
+                    descriptor.getOrchestrator().retryCompensation(flow.getId());
+                } catch (Exception compEx) {
+                    log.error("[Recovery] Compensation failed for exhausted flow {}: {}",
+                            flow.getId(), compEx.getMessage());
+                }
                 metrics.flowFailed(flowType);
                 continue;
             }
