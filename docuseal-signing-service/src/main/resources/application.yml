@@ -17,9 +17,9 @@ spring:
       mail.smtp.starttls.enable: true
 
 docuseal:
-  api-key: ${DOCUSEAL_API_KEY:k6udyskk8vdeu3pYJRWTnqFzY1KRRnJQUcJ1SuFACqi}
+  api-key: ${DOCUSEAL_API_KEY:KagEMca26iJzVpZ8v5N5a5wuYysh9QC56ZYCoWR8tNJ}
   base-url: https://api.docuseal.com
-  template-id: 3797104
+  template-id: 3799895
   poll-interval-seconds: 30
   expiry-hours: 72
 
