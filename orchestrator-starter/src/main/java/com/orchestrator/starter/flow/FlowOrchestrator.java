@@ -558,17 +558,27 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     /**
      * Execute all pending signals after a step completes, before advancing.
      */
+    @SuppressWarnings("unchecked")
     private void drainPendingSignals(F flow) {
         if (signalRegistry == null) return;
 
-        // Re-read pendingSignals from MongoDB to catch signals pushed during step execution
-        // This prevents the race condition where $push happens between step start and drain.
+        // Atomic read-and-clear: findAndModify returns the OLD pendingSignals
+        // and unsets them in a single MongoDB operation. Zero race window:
+        // - Signals $pushed BEFORE this → in the returned list → drained
+        // - Signals $pushed AFTER this → create a new array → survive for next drain
         java.util.List<com.orchestrator.starter.domain.PendingSignal> pending;
         if (mongoTemplate != null && entityClass != null) {
-            F fresh = flowRepository.findById(flow.getId()).orElse(null);
-            pending = fresh != null ? fresh.getPendingSignals() : null;
+            F snapshot = (F) mongoTemplate.findAndModify(
+                    org.springframework.data.mongodb.core.query.Query.query(
+                            org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flow.getId())
+                                    .and("pendingSignals").ne(null)),
+                    new org.springframework.data.mongodb.core.query.Update().unset("pendingSignals"),
+                    org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(false),
+                    entityClass);
+            pending = snapshot != null ? snapshot.getPendingSignals() : null;
         } else {
             pending = flow.getPendingSignals();
+            flow.setPendingSignals(null);
         }
 
         if (pending == null || pending.isEmpty()) return;
@@ -590,17 +600,6 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                         ps.getSignalName(), flow.getId(), e.getMessage());
             }
         }
-
-        // Atomically clear pendingSignals — any signals pushed after our read will survive
-        // because $set replaces the whole array, and new $push operations after this are safe.
-        if (mongoTemplate != null && entityClass != null) {
-            mongoTemplate.updateFirst(
-                    org.springframework.data.mongodb.core.query.Query.query(
-                            org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flow.getId())),
-                    new org.springframework.data.mongodb.core.query.Update().unset("pendingSignals"),
-                    entityClass);
-        }
-        flow.setPendingSignals(null);
     }
 
     /** Convert payload to the handler's expected type via Jackson. */
