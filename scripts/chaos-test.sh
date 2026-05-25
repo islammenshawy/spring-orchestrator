@@ -14,6 +14,10 @@ PASS=0
 FAIL=0
 SKIP=0
 
+# Source metrics collector
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/collect-metrics.sh"
+
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 header() { echo ""; echo "========== $1 =========="; }
 
@@ -72,6 +76,7 @@ auto_approve() {
 curl -sf "$DIS_URL/actuator/health" >/dev/null || { log "DIS not reachable at $DIS_URL"; exit 1; }
 log "DIS healthy at $DIS_URL"
 log "Starting chaos test suite"
+collect_metrics "BASELINE"
 
 # ========== Scenario 1: Pod crash mid-step ==========
 header "Scenario 1: Pod crash mid-step → recovery scanner picks up"
@@ -695,6 +700,8 @@ else
 fi
 
 # ========== Results ==========
+collect_metrics "FINAL"
+
 header "CHAOS TEST RESULTS"
 TOTAL=$((PASS + FAIL + SKIP))
 log "Total: $TOTAL | Pass: $PASS | Fail: $FAIL | Skip: $SKIP"

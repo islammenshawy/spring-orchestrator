@@ -12,6 +12,11 @@ POD_KILL_WAVE=${POD_KILL_WAVE:-0}  # Wave number to kill DIS-1 (0=auto at 40%)
 DEDUP_INTERVAL=${DEDUP_INTERVAL:-5} # Inject duplicates every N waves
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
+METRICS_INTERVAL=${METRICS_INTERVAL:-5}  # Brief metrics every N waves
+
+# Source metrics collector
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/collect-metrics.sh"
 
 # Pre-flight
 curl -sf "$DIS_URL/actuator/health" >/dev/null || { log "DIS not reachable at $DIS_URL"; exit 1; }
@@ -238,6 +243,7 @@ END=$((SECONDS + DURATION * 60))
 WAVE=0
 TOTAL_SUBMITTED=0
 
+collect_metrics "BASELINE"
 log "Starting ${DURATION}m test — $WAVE_SIZE flows every ${WAVE_INTERVAL}s"
 [ "$CHAOS" -eq 1 ] && log "CHAOS MODE ENABLED — duplicate injection every ${DEDUP_INTERVAL} waves, pod kill at 40%"
 
@@ -260,6 +266,11 @@ while [ $SECONDS -lt $END ]; do
 
   # Auto-approve gate steps between waves
   auto_approve
+
+  # Periodic infrastructure metrics
+  if [ $((WAVE % METRICS_INTERVAL)) -eq 0 ]; then
+    collect_metrics_brief
+  fi
 
   # Send signals to random in-flight flows every N waves
   if [ $((WAVE % SIGNAL_INTERVAL)) -eq 0 ]; then
@@ -332,5 +343,7 @@ SIGNALED_FLOWS=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_
 log "Flows with priority set: $SIGNALED_FLOWS"
 
 chaos_report
+
+collect_metrics "FINAL"
 
 log "DONE"
