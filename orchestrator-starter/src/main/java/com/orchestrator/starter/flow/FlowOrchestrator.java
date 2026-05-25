@@ -304,7 +304,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         if (flow == null) {
             throw new IllegalArgumentException("Flow not found: " + flowId);
         }
-        if (flow.getStatus() == FlowStatus.COMPLETED || flow.getStatus() == FlowStatus.FAILED) return;
+        if (flow.getStatus() == FlowStatus.COMPLETED || flow.getStatus() == FlowStatus.FAILED
+                || flow.getStatus() == FlowStatus.CANCELLED || flow.getStatus() == FlowStatus.CANCELLING) return;
 
         StepHandler<F> handler = stepRegistry.getHandler(stepName);
         markParallelStepCompleted(flow, stepName, handler, stepName);
@@ -557,9 +558,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         try {
             return objectMapper.convertValue(payload, handler.getPayloadType());
         } catch (Exception e) {
-            log.warn("[Signal] Failed to convert payload to {}: {}",
-                    handler.getPayloadType().getSimpleName(), e.getMessage());
-            return payload;
+            throw new IllegalArgumentException(
+                    "Cannot convert signal payload to " + handler.getPayloadType().getSimpleName()
+                            + ": " + e.getMessage(), e);
         }
     }
 
@@ -1243,7 +1244,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             saveFlow(flow);
 
             List<StepHandler<F>> siblings = stepRegistry.getParallelGroup(adapter.getParallelGroup());
-            boolean allDone = siblings.stream().allMatch(s -> flow.getCompletedSteps().contains(s.getStepName()));
+            boolean allDone = siblings.stream().allMatch(s -> completed.contains(s.getStepName()));
 
             if (allDone) {
                 log.info("[Saga] All parallel steps in group '{}' completed for flow {}",

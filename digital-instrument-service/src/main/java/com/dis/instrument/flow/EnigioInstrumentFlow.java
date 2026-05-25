@@ -552,7 +552,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
     public void updatePriority(EnigioInstrumentEntity flow, PriorityUpdate data) {
         log.info("[{}] Priority updated to {} via signal (reason: {})",
                 flow.getId(), data.getPriority(), data.getReason());
-        flow.setPriority(data.getPriority().name());
+        flow.setPriority(data.getPriority());
     }
 
     @Signal

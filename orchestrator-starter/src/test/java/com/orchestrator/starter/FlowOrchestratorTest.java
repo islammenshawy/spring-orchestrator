@@ -908,4 +908,36 @@ class FlowOrchestratorTest {
         assertTrue(flow.isApproved(), "Signal queued during step should be drained");
         assertNull(flow.getPendingSignals(), "Pending signals cleared after drain");
     }
+
+    // ========== Deepseek 1.3: advanceAfterReply skips cancelled flows ==========
+
+    @Test
+    void advanceAfterReply_cancelledFlow_doesNotAdvance() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-cancelled");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.CANCELLED);
+
+        when(flowRepo.findById("flow-cancelled")).thenReturn(Optional.of(flow));
+
+        // Should return silently — not try to advance a cancelled flow
+        orchestrator.advanceAfterReply("flow-cancelled", "STEP_A", null);
+
+        // Verify no step registry lookup or save happens
+        verify(stepRegistry, never()).getHandler("STEP_A");
+    }
+
+    @Test
+    void advanceAfterReply_cancellingFlow_doesNotAdvance() {
+        TestFlow flow = new TestFlow();
+        flow.setId("flow-cancelling");
+        flow.setCurrentStep("STEP_A");
+        flow.setStatus(FlowStatus.CANCELLING);
+
+        when(flowRepo.findById("flow-cancelling")).thenReturn(Optional.of(flow));
+
+        orchestrator.advanceAfterReply("flow-cancelling", "STEP_A", null);
+
+        verify(stepRegistry, never()).getHandler("STEP_A");
+    }
 }

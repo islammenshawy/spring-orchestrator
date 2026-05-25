@@ -59,7 +59,7 @@ public class EnigioInstrumentEntity extends AbstractFlow {
     private List<Attachment> attachments;
     private Map<String, Object> customData;
     private String callbackUrl;
-    private String priority;
+    private Priority priority;
 
     /** MongoDB document IDs for additional documents to attach to the envelope.
      *  Only IDs go through Kafka — binary content stays in MongoDB. */

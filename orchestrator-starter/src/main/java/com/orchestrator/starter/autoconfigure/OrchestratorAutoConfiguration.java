@@ -384,7 +384,10 @@ public class OrchestratorAutoConfiguration {
                                 mongoOffsetStore.saveOffset(groupId, record.topic(),
                                         record.partition(), record.offset(),
                                         record.key(), record.timestamp());
-                            } catch (Exception ignored) {}
+                            } catch (Exception e) {
+                                log.debug("[Offset] Failed to save offset for {}/{}: {}",
+                                        record.topic(), record.partition(), e.getMessage());
+                            }
                         }
                     });
             container.setBeanName("orchestrator-reply-" + topic.replace(".", "-"));

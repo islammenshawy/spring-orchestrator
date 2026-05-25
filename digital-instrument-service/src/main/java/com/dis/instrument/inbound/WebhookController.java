@@ -114,7 +114,14 @@ public class WebhookController {
 
         WebhookEventHandler handler = handlerMap.get(eventType);
         if (handler != null) {
-            handler.handle(traceOriginalId, payload);
+            try {
+                handler.handle(traceOriginalId, payload);
+            } catch (Exception e) {
+                // Always return 200 to vendor — prevents infinite retry storms.
+                // Internal failures are logged; recovery/outbox handles delivery.
+                log.error("[webhook] Handler failed for {} traceOriginalId={}: {}",
+                        eventType, traceOriginalId, e.getMessage(), e);
+            }
         } else {
             log.info("[webhook] Ignoring unknown event type: {} for {}", eventType, traceOriginalId);
         }

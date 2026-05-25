@@ -1,6 +1,7 @@
 package com.orchestrator.starter.kafka;
 
 import com.orchestrator.starter.domain.OrchestratorFlow;
+import com.orchestrator.starter.domain.StepOutcome;
 import com.orchestrator.starter.flow.FlowOrchestrator;
 import com.orchestrator.starter.flow.FlowTypeDescriptor;
 import com.orchestrator.starter.flow.FlowTypeRegistry;
@@ -91,7 +92,7 @@ public class OrchestratorKafkaConsumer<F extends OrchestratorFlow> {
                 topic, offset, reply.getStepName(), reply.getStatus(), reply.getFlowId(),
                 reply.getFlowType() != null ? reply.getFlowType() : "default");
 
-        if ("COMPLETED".equals(reply.getStatus()) || "RECOVERED".equals(reply.getStatus())) {
+        if (StepOutcome.COMPLETED.name().equals(reply.getStatus()) || StepOutcome.RECOVERED.name().equals(reply.getStatus())) {
             descriptor.getOrchestrator().advanceAfterReply(
                     reply.getFlowId(), reply.getStepName(), reply.getFlowSnapshot());
         }

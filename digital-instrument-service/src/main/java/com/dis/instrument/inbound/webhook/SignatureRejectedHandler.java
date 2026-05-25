@@ -6,6 +6,7 @@ import com.dis.instrument.model.WebhookEvent;
 import com.dis.instrument.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -30,16 +31,20 @@ public class SignatureRejectedHandler implements WebhookEventHandler {
 
     @Override
     public void handle(String traceOriginalId, Map<String, Object> payload) {
-        Query query = Query.query(Criteria.where("traceOriginalId").is(traceOriginalId));
-        mongoTemplate.updateFirst(query,
+        // Only reject if not already SIGNED — prevents overwriting a completed signing
+        EnigioInstrumentEntity flow = mongoTemplate.findAndModify(
+                Query.query(Criteria.where("traceOriginalId").is(traceOriginalId)
+                        .and("signingStatus").ne(SigningStatus.SIGNED.name())),
                 new Update().set("signingStatus", SigningStatus.REJECTED.name()),
+                FindAndModifyOptions.options().returnNew(true),
                 EnigioInstrumentEntity.class);
 
-        EnigioInstrumentEntity flow = mongoTemplate.findOne(query, EnigioInstrumentEntity.class);
         if (flow != null) {
             log.info("[webhook] Signature REJECTED for instrument {}", flow.getId());
             notificationPublisher.notifyPhaseComplete(flow,
                     "SIGNATURE_REJECTED", "REJECTED");
+        } else {
+            log.info("[webhook] SIGNATURE_REJECTED ignored — already SIGNED or unknown doc");
         }
     }
 }

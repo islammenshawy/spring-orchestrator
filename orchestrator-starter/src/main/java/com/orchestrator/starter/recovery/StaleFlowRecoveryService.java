@@ -275,9 +275,15 @@ public class StaleFlowRecoveryService {
                 .map(c -> ((OrchestratorFlow) c).getId())
                 .toList();
 
+        // Include status check in claim to prevent claiming flows that changed status
+        // between candidate query and claim (e.g., completed by another pod)
+        var claimCriteria = Criteria.where("_id").in(candidateIds)
+                .and("claimedBy").is(null);
+        if (expectedStatus != null) {
+            claimCriteria = claimCriteria.and("status").is(expectedStatus.name());
+        }
         long claimed = mongoTemplate.updateMulti(
-                Query.query(Criteria.where("_id").in(candidateIds)
-                        .and("claimedBy").is(null)),
+                Query.query(claimCriteria),
                 new Update()
                         .set("claimedBy", podId)
                         .set("claimedAt", Instant.now()),
@@ -286,9 +292,6 @@ public class StaleFlowRecoveryService {
         if (claimed == 0) return;
 
         var claimedCriteria = Criteria.where("claimedBy").is(podId);
-        if (expectedStatus != null) {
-            claimedCriteria = claimedCriteria.and("status").is(expectedStatus.name());
-        }
         List<?> batch = mongoTemplate.find(Query.query(claimedCriteria), entityClass);
 
         log.info("[Recovery] Claimed {} {} flows for type '{}' (pod: {})",
@@ -351,7 +354,8 @@ public class StaleFlowRecoveryService {
 
         long claimed = mongoTemplate.updateMulti(
                 Query.query(Criteria.where("_id").in(expiryIds)
-                        .and("claimedBy").is(null)),
+                        .and("claimedBy").is(null)
+                        .and("status").in(FlowStatus.WAITING_RETRY.name(), FlowStatus.PARKED.name())),
                 new Update()
                         .set("claimedBy", podId)
                         .set("claimedAt", now),

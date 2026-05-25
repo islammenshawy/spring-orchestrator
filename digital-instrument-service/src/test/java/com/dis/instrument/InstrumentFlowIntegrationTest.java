@@ -734,7 +734,7 @@ class InstrumentFlowIntegrationTest {
         EnigioInstrumentEntity flow = mongoTemplate.findById(
                 flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
         assertNotNull(flow);
-        assertEquals("URGENT", flow.getPriority());
+        assertEquals(com.dis.instrument.model.Priority.URGENT, flow.getPriority());
     }
 
     @Test
