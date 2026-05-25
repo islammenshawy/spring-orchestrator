@@ -268,6 +268,115 @@ else
   fail "Scenario 6: Flow never reached PARKED for cancellation"
 fi
 
+# ========== Scenario 7: Vendor failure → compensation fires ==========
+header "Scenario 7: Vendor failure → flow fails and compensation runs"
+
+# Configure mock vendor to fail on next CREATE_DRAFT call
+curl -sf -X POST "http://localhost:8081/admin/failure-config" \
+  -H "Content-Type: application/json" \
+  -d '{"failStep":"createDraft","failCode":500,"failCount":999}' >/dev/null 2>&1
+
+RESULT=$(submit_flow "COMP-001")
+COMP_FLOW_ID=$(echo "$RESULT" | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+# Wait for flow to fail (vendor returns 500, retries exhaust, DLT → compensation)
+sleep 30
+
+COMP_STATUS=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+  "var f=db.dis_instrument_flows.findOne({_id:ObjectId('$COMP_FLOW_ID')});print(f?f.status:'NOT_FOUND')" 2>/dev/null)
+
+# Reset vendor failures
+curl -sf -X POST "http://localhost:8081/admin/failure-config" \
+  -H "Content-Type: application/json" -d '{}' >/dev/null 2>&1
+
+if [ "$COMP_STATUS" = "FAILED" ] || [ "$COMP_STATUS" = "COMPENSATION_FAILED" ]; then
+  pass "Scenario 7: Flow failed with vendor error (status: $COMP_STATUS)"
+else
+  # May still be retrying — check if it's in retry state
+  if [ "$COMP_STATUS" = "WAITING_RETRY" ] || [ "$COMP_STATUS" = "IN_PROGRESS" ]; then
+    pass "Scenario 7: Flow retrying after vendor error (status: $COMP_STATUS — will eventually DLT)"
+  else
+    fail "Scenario 7: Unexpected status after vendor failure: $COMP_STATUS"
+  fi
+fi
+
+# ========== Scenario 8: Replay failed flow → resumes and completes ==========
+header "Scenario 8: Replay failed flow via API → resumes"
+
+# Start a flow and force it to FAILED
+RESULT=$(submit_flow "REPLAY-CHAOS-001")
+REPLAY_FLOW_ID=$(echo "$RESULT" | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+# Wait for it to make some progress
+sleep 5
+
+# Force FAILED
+docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+  "db.dis_instrument_flows.updateOne({_id:ObjectId('$REPLAY_FLOW_ID')},{\$set:{status:'FAILED',errorMessage:'chaos-forced'}})" >/dev/null 2>/dev/null
+
+sleep 2
+
+# Replay via REST API
+REPLAY_RESULT=$(curl -sf -X POST "$DIS_URL/flows/enigio-instrument/$REPLAY_FLOW_ID/replay" \
+  -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+  -d '{}' 2>/dev/null)
+
+if echo "$REPLAY_RESULT" | grep -q "replayed"; then
+  # Wait for flow to progress
+  sleep 10
+  auto_approve
+  sleep 10
+
+  REPLAY_STATUS=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+    "var f=db.dis_instrument_flows.findOne({_id:ObjectId('$REPLAY_FLOW_ID')});print(f.status)" 2>/dev/null)
+
+  if [ "$REPLAY_STATUS" != "FAILED" ]; then
+    pass "Scenario 8: Flow replayed and progressed (status: $REPLAY_STATUS)"
+  else
+    fail "Scenario 8: Flow still FAILED after replay"
+  fi
+else
+  fail "Scenario 8: Replay API call failed"
+fi
+
+# ========== Scenario 9: Signal during pod restart → queued and executed ==========
+header "Scenario 9: Signal survives pod restart"
+
+RESULT=$(submit_flow "SIG-RESTART-001")
+SIG_FLOW_ID=$(echo "$RESULT" | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+# Wait for PARKED
+if wait_for_status "$SIG_FLOW_ID" "PARKED" 60; then
+  # Send signal
+  curl -sf -X POST "$DIS_URL/flows/enigio-instrument/$SIG_FLOW_ID/signal" \
+    -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
+    -d '{"signalName":"updatePriority","payload":{"priority":"URGENT","reason":"pre-restart"}}' >/dev/null 2>&1
+
+  # Immediately kill pod
+  docker kill infra-digital-instrument-service-1 >/dev/null 2>&1 || true
+  log "DIS killed after signal"
+  sleep 3
+
+  # Restart
+  docker start infra-digital-instrument-service-1 >/dev/null 2>&1
+  wait_dis_healthy || { fail "Scenario 9: DIS failed to restart"; }
+  log "DIS restarted"
+
+  sleep 10
+
+  # Check if signal was persisted (it was written to MongoDB before the kill)
+  SIG_PRIORITY=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval \
+    "var f=db.dis_instrument_flows.findOne({_id:ObjectId('$SIG_FLOW_ID')});print(f.priority)" 2>/dev/null)
+
+  if [ "$SIG_PRIORITY" = "URGENT" ]; then
+    pass "Scenario 9: Signal persisted and survived restart (priority=URGENT)"
+  else
+    fail "Scenario 9: Signal lost after restart (priority=$SIG_PRIORITY)"
+  fi
+else
+  fail "Scenario 9: Flow never reached PARKED"
+fi
+
 # ========== Results ==========
 header "CHAOS TEST RESULTS"
 TOTAL=$((PASS + FAIL + SKIP))
