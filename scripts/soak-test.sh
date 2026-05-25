@@ -247,8 +247,9 @@ collect_metrics "BASELINE"
 log "Starting ${DURATION}m test — $WAVE_SIZE flows every ${WAVE_INTERVAL}s"
 [ "$CHAOS" -eq 1 ] && log "CHAOS MODE ENABLED — duplicate injection every ${DEDUP_INTERVAL} waves, pod kill at 40%"
 
-# Calculate pod kill wave (40% through test)
+# Calculate pod kill wave (40% through test) and midpoint for full snapshot
 TOTAL_WAVES=$(( DURATION * 60 / WAVE_INTERVAL ))
+MIDPOINT_WAVE=$(( TOTAL_WAVES / 2 ))
 [ "$POD_KILL_WAVE" -eq 0 ] && POD_KILL_WAVE=$(( TOTAL_WAVES * 40 / 100 ))
 
 while [ $SECONDS -lt $END ]; do
@@ -270,6 +271,11 @@ while [ $SECONDS -lt $END ]; do
   # Periodic infrastructure metrics
   if [ $((WAVE % METRICS_INTERVAL)) -eq 0 ]; then
     collect_metrics_brief
+  fi
+
+  # Full snapshot at midpoint
+  if [ "$WAVE" -eq "$MIDPOINT_WAVE" ]; then
+    collect_metrics "MIDPOINT (wave $WAVE/$TOTAL_WAVES)"
   fi
 
   # Send signals to random in-flight flows every N waves
