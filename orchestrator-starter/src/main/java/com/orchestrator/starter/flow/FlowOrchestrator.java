@@ -1421,4 +1421,11 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             return null;
         }
     }
+
+    /** Shutdown the step executor to prevent thread leaks. */
+    public void shutdown() {
+        if (stepExecutor != null) {
+            stepExecutor.shutdown();
+        }
+    }
 }

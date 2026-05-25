@@ -38,92 +38,7 @@ public class FlowDefinitionScanner {
             Object flowDef = entry.getValue();
             Class<?> clazz = flowDef.getClass();
 
-            // Collect @Step method names for validation
-            Set<String> stepMethodNames = new HashSet<>();
-            Set<Integer> stepOrders = new HashSet<>();
-            Set<String> stepNames = new HashSet<>();
-
-            // Pass 1: discover @Step methods
-            for (Method method : clazz.getDeclaredMethods()) {
-                Step stepAnnotation = method.getAnnotation(Step.class);
-                if (stepAnnotation == null) continue;
-
-                // Validate signature
-                if (method.getParameterCount() != 1 ||
-                        !OrchestratorFlow.class.isAssignableFrom(method.getParameterTypes()[0])) {
-                    throw new IllegalStateException(
-                            "@Step method " + clazz.getSimpleName() + "." + method.getName() +
-                                    " must accept exactly one parameter extending OrchestratorFlow");
-                }
-
-                // Validate no duplicate order
-                // Duplicate orders allowed for @Parallel steps (same order = parallel execution)
-                if (!stepOrders.add(stepAnnotation.order())
-                        && !method.isAnnotationPresent(Parallel.class)) {
-                    throw new IllegalStateException(
-                            "@Flow " + clazz.getSimpleName() + ": duplicate step order " +
-                                    stepAnnotation.order() + " on method " + method.getName() +
-                                    ". Use @Parallel for concurrent steps.");
-                }
-
-                // Validate no duplicate name
-                String resolvedName = stepAnnotation.name().isEmpty()
-                        ? method.getName().replaceAll("([a-z])([A-Z])", "$1_$2").toUpperCase()
-                        : stepAnnotation.name();
-                if (!stepNames.add(resolvedName)) {
-                    throw new IllegalStateException(
-                            "@Flow " + clazz.getSimpleName() + ": duplicate step name '" +
-                                    resolvedName + "'");
-                }
-
-                stepMethodNames.add(method.getName());
-
-                MethodStepAdapter adapter = new MethodStepAdapter(flowDef, method, stepAnnotation);
-                handlers.add(adapter);
-            }
-
-            // Pass 2: validate @Compensate references
-            for (Method method : clazz.getDeclaredMethods()) {
-                Compensate comp = method.getAnnotation(Compensate.class);
-                if (comp == null) continue;
-
-                // Validate: @Compensate(step=X) must reference an existing @Step method
-                if (!stepMethodNames.contains(comp.step())) {
-                    throw new IllegalStateException(
-                            "@Compensate on " + clazz.getSimpleName() + "." + method.getName() +
-                                    " references step '" + comp.step() +
-                                    "' but no @Step method with that name exists. " +
-                                    "Available steps: " + stepMethodNames);
-                }
-
-                // Validate signature
-                if (method.getParameterCount() != 1 ||
-                        !OrchestratorFlow.class.isAssignableFrom(method.getParameterTypes()[0])) {
-                    throw new IllegalStateException(
-                            "@Compensate method " + clazz.getSimpleName() + "." + method.getName() +
-                                    " must accept exactly one parameter extending OrchestratorFlow");
-                }
-            }
-
-            // Pass 3: validate @Parallel and @JoinOn
-            Set<String> parallelGroups = new HashSet<>();
-            Set<String> joinGroups = new HashSet<>();
-            for (Method method : clazz.getDeclaredMethods()) {
-                Parallel parallel = method.getAnnotation(Parallel.class);
-                if (parallel != null) {
-                    parallelGroups.add(parallel.group());
-                }
-                JoinOn joinOn = method.getAnnotation(JoinOn.class);
-                if (joinOn != null) joinGroups.add(joinOn.group());
-            }
-            // Every @JoinOn group must have matching @Parallel group
-            for (String group : joinGroups) {
-                if (!parallelGroups.contains(group)) {
-                    throw new IllegalStateException(
-                            "@JoinOn references group '" + group + "' but no @Parallel steps " +
-                                    "with that group exist in " + clazz.getSimpleName());
-                }
-            }
+            handlers.addAll(discoverAndValidateSteps(flowDef, clazz));
 
             if (handlers.isEmpty()) {
                 log.warn("@Flow class {} has no @Step methods", clazz.getSimpleName());
@@ -165,74 +80,7 @@ public class FlowDefinitionScanner {
             // Derive entity class from FlowDefinition<F>
             Class<?> entityClass = discoverEntityClass(clazz);
 
-            // Scan steps (reuse existing validation logic)
-            List<StepHandler> handlers = new ArrayList<>();
-            Set<String> stepMethodNames = new HashSet<>();
-            Set<Integer> stepOrders = new HashSet<>();
-            Set<String> stepNames = new HashSet<>();
-
-            for (Method method : clazz.getDeclaredMethods()) {
-                Step stepAnnotation = method.getAnnotation(Step.class);
-                if (stepAnnotation == null) continue;
-
-                if (method.getParameterCount() != 1 ||
-                        !OrchestratorFlow.class.isAssignableFrom(method.getParameterTypes()[0])) {
-                    throw new IllegalStateException(
-                            "@Step method " + clazz.getSimpleName() + "." + method.getName() +
-                                    " must accept exactly one parameter extending OrchestratorFlow");
-                }
-                // Duplicate orders allowed for @Parallel steps (same order = parallel execution)
-                if (!stepOrders.add(stepAnnotation.order())
-                        && !method.isAnnotationPresent(Parallel.class)) {
-                    throw new IllegalStateException(
-                            "@Flow " + clazz.getSimpleName() + ": duplicate step order " +
-                                    stepAnnotation.order() + " on method " + method.getName() +
-                                    ". Use @Parallel for concurrent steps.");
-                }
-                String resolvedName = stepAnnotation.name().isEmpty()
-                        ? method.getName().replaceAll("([a-z])([A-Z])", "$1_$2").toUpperCase()
-                        : stepAnnotation.name();
-                if (!stepNames.add(resolvedName)) {
-                    throw new IllegalStateException(
-                            "@Flow " + clazz.getSimpleName() + ": duplicate step name '" + resolvedName + "'");
-                }
-                stepMethodNames.add(method.getName());
-                handlers.add(new MethodStepAdapter(flowDef, method, stepAnnotation));
-            }
-
-            // Validate @Compensate and @Parallel/@JoinOn (same as scan())
-            Set<String> parallelGroups = new HashSet<>();
-            Set<String> joinGroups = new HashSet<>();
-            for (Method method : clazz.getDeclaredMethods()) {
-                Compensate comp = method.getAnnotation(Compensate.class);
-                if (comp != null) {
-                    if (!stepMethodNames.contains(comp.step())) {
-                        throw new IllegalStateException(
-                                "@Compensate on " + clazz.getSimpleName() + "." + method.getName() +
-                                        " references step '" + comp.step() + "' — available: " + stepMethodNames);
-                    }
-                    if (method.getParameterCount() != 1 ||
-                            !OrchestratorFlow.class.isAssignableFrom(method.getParameterTypes()[0])) {
-                        throw new IllegalStateException(
-                                "@Compensate method " + clazz.getSimpleName() + "." + method.getName() +
-                                        " must accept exactly one OrchestratorFlow parameter");
-                    }
-                }
-                Parallel parallel = method.getAnnotation(Parallel.class);
-                if (parallel != null) {
-                    parallelGroups.add(parallel.group());
-                }
-                JoinOn joinOn = method.getAnnotation(JoinOn.class);
-                if (joinOn != null) joinGroups.add(joinOn.group());
-            }
-            for (String group : joinGroups) {
-                if (!parallelGroups.contains(group)) {
-                    throw new IllegalStateException(
-                            "@JoinOn references group '" + group + "' — no @Parallel with that group in " +
-                                    clazz.getSimpleName());
-                }
-            }
-
+            List<StepHandler> handlers = discoverAndValidateSteps(flowDef, clazz);
             handlers.sort(Comparator.comparingInt(StepHandler::getOrder));
 
             // Discover @Signal methods
@@ -263,6 +111,80 @@ public class FlowDefinitionScanner {
         }
 
         return result;
+    }
+
+    /**
+     * Shared step discovery + validation logic used by both scan() and scanByFlowType().
+     * Discovers @Step methods, validates signatures, orders, names,
+     * @Compensate references, and @Parallel/@JoinOn groups.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static List<StepHandler> discoverAndValidateSteps(Object flowDef, Class<?> clazz) {
+        List<StepHandler> handlers = new ArrayList<>();
+        Set<String> stepMethodNames = new HashSet<>();
+        Set<Integer> stepOrders = new HashSet<>();
+        Set<String> stepNames = new HashSet<>();
+
+        for (Method method : clazz.getDeclaredMethods()) {
+            Step stepAnnotation = method.getAnnotation(Step.class);
+            if (stepAnnotation == null) continue;
+
+            if (method.getParameterCount() != 1 ||
+                    !OrchestratorFlow.class.isAssignableFrom(method.getParameterTypes()[0])) {
+                throw new IllegalStateException(
+                        "@Step method " + clazz.getSimpleName() + "." + method.getName() +
+                                " must accept exactly one parameter extending OrchestratorFlow");
+            }
+            if (!stepOrders.add(stepAnnotation.order())
+                    && !method.isAnnotationPresent(Parallel.class)) {
+                throw new IllegalStateException(
+                        "@Flow " + clazz.getSimpleName() + ": duplicate step order " +
+                                stepAnnotation.order() + " on method " + method.getName() +
+                                ". Use @Parallel for concurrent steps.");
+            }
+            String resolvedName = stepAnnotation.name().isEmpty()
+                    ? method.getName().replaceAll("([a-z])([A-Z])", "$1_$2").toUpperCase()
+                    : stepAnnotation.name();
+            if (!stepNames.add(resolvedName)) {
+                throw new IllegalStateException(
+                        "@Flow " + clazz.getSimpleName() + ": duplicate step name '" + resolvedName + "'");
+            }
+            stepMethodNames.add(method.getName());
+            handlers.add(new MethodStepAdapter(flowDef, method, stepAnnotation));
+        }
+
+        // Validate @Compensate references and @Parallel/@JoinOn groups
+        Set<String> parallelGroups = new HashSet<>();
+        Set<String> joinGroups = new HashSet<>();
+        for (Method method : clazz.getDeclaredMethods()) {
+            Compensate comp = method.getAnnotation(Compensate.class);
+            if (comp != null) {
+                if (!stepMethodNames.contains(comp.step())) {
+                    throw new IllegalStateException(
+                            "@Compensate on " + clazz.getSimpleName() + "." + method.getName() +
+                                    " references step '" + comp.step() + "' — available: " + stepMethodNames);
+                }
+                if (method.getParameterCount() != 1 ||
+                        !OrchestratorFlow.class.isAssignableFrom(method.getParameterTypes()[0])) {
+                    throw new IllegalStateException(
+                            "@Compensate method " + clazz.getSimpleName() + "." + method.getName() +
+                                    " must accept exactly one OrchestratorFlow parameter");
+                }
+            }
+            Parallel parallel = method.getAnnotation(Parallel.class);
+            if (parallel != null) parallelGroups.add(parallel.group());
+            JoinOn joinOn = method.getAnnotation(JoinOn.class);
+            if (joinOn != null) joinGroups.add(joinOn.group());
+        }
+        for (String group : joinGroups) {
+            if (!parallelGroups.contains(group)) {
+                throw new IllegalStateException(
+                        "@JoinOn references group '" + group + "' — no @Parallel with that group in " +
+                                clazz.getSimpleName());
+            }
+        }
+
+        return handlers;
     }
 
     /** Derive flowType from class name: EnigioDocumentFlow → enigio-document */
