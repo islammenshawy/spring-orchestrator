@@ -151,7 +151,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             }
         }
 
-        waitUntil(() -> flow.isSigningApproved(), Duration.ofHours(72));
+        waitUntil(() -> flow.isSigningApproved(), Duration.ofHours(approvalExpiryHours));
 
         log.info("[{}] Signing phase approved by downstream", flow.getId());
     }
@@ -278,7 +278,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
 
         // Still pending — park and wait for webhook or next poll
         flow.setSigningStatus(status);
-        waitUntil(() -> SigningStatus.SIGNED.name().equals(flow.getSigningStatus()), Duration.ofHours(48));
+        waitUntil(() -> SigningStatus.SIGNED.name().equals(flow.getSigningStatus()), Duration.ofHours(signingExpiryHours));
     }
 
     // ===== Gate 2: Notify downstream, await approval for delivery =====
@@ -305,7 +305,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
             }
         }
 
-        waitUntil(() -> flow.isDeliveryApproved(), Duration.ofHours(72));
+        waitUntil(() -> flow.isDeliveryApproved(), Duration.ofHours(approvalExpiryHours));
 
         log.info("[{}] Delivery phase approved by downstream", flow.getId());
     }
@@ -431,7 +431,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         }
 
         // Still waiting — park in DB, TRANSFER/TRANSFER_REJECTED webhook will re-activate
-        waitUntil(() -> flow.isTransferAccepted(), Duration.ofHours(72));
+        waitUntil(() -> flow.isTransferAccepted(), Duration.ofHours(approvalExpiryHours));
     }
 
     // ===== Cancellation Handlers =====

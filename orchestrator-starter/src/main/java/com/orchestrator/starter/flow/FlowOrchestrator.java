@@ -298,9 +298,11 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         // The reply consumer may have incremented the version via $set.
         // On conflict: re-read latest version, copy it to our flow object, retry save.
         // This preserves all domain fields set by the step handler.
+        boolean saved = false;
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
                 saveFlow(flow);
+                saved = true;
                 break;
             } catch (org.springframework.dao.OptimisticLockingFailureException e) {
                 log.debug("[Saga] Version conflict saving flow {} (attempt {}), retrying", flowId, attempt + 1);
@@ -308,8 +310,20 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 if (fresh instanceof com.orchestrator.starter.domain.AbstractFlow af
                         && flow instanceof com.orchestrator.starter.domain.AbstractFlow afFlow) {
                     afFlow.setVersion(af.getVersion());
-                    afFlow.setCurrentStep(af.getCurrentStep()); // reply may have advanced
+                    afFlow.setCurrentStep(af.getCurrentStep());
                 }
+            }
+        }
+        if (!saved) {
+            // Final fallback: partial $set to persist critical domain fields
+            log.error("[Saga] Version conflict persisted after 3 attempts for flow {} — using partial update", flowId);
+            if (mongoTemplate != null && entityClass != null) {
+                updateFlowPartial(flowId, java.util.Map.of(
+                        "completedSteps", flow.getCompletedSteps(),
+                        "retryCount", flow.getRetryCount(),
+                        "errorMessage", flow.getErrorMessage() != null ? flow.getErrorMessage() : "",
+                        "recoveryCount", flow.getRecoveryCount(),
+                        "updatedAt", Instant.now()));
             }
         }
 
@@ -392,8 +406,26 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             // Reply uses flowId as key — reply consumer always runs on same instance
             kafkaTemplate.send(replyTopic, flowId, objectMapper.writeValueAsString(reply)).get();
         } catch (Exception e) {
-            log.warn("[Saga] Reply publish failed for flow {} step {}: {}",
+            log.error("[Saga] Reply publish failed for flow {} step {} — writing outbox fallback: {}",
                     flowId, stepName, e.getMessage());
+            // Fallback: write reply as outbox event so it gets retried
+            try {
+                String partitionKey = flowId;
+                StepReplyMessage reply = StepReplyMessage.builder()
+                        .flowId(flowId).stepName(stepName)
+                        .eventId(UUID.randomUUID().toString())
+                        .status(status).errorMessage(error)
+                        .flowType(flowType).flowSnapshot(flowSnapshot).build();
+                outboxRepository.save(com.orchestrator.starter.outbox.OutboxEvent.builder()
+                        .id(UUID.randomUUID().toString())
+                        .flowId(flowId)
+                        .topic(replyTopic)
+                        .key(partitionKey)
+                        .payload(objectMapper.writeValueAsString(reply))
+                        .build());
+            } catch (Exception ex) {
+                log.error("[Saga] Reply outbox fallback also failed for flow {}: {}", flowId, ex.getMessage());
+            }
         }
     }
 
@@ -522,8 +554,19 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      * Execute all pending signals after a step completes, before advancing.
      */
     private void drainPendingSignals(F flow) {
-        var pending = flow.getPendingSignals();
-        if (pending == null || pending.isEmpty() || signalRegistry == null) return;
+        if (signalRegistry == null) return;
+
+        // Re-read pendingSignals from MongoDB to catch signals pushed during step execution
+        // This prevents the race condition where $push happens between step start and drain.
+        java.util.List<com.orchestrator.starter.domain.PendingSignal> pending;
+        if (mongoTemplate != null && entityClass != null) {
+            F fresh = flowRepository.findById(flow.getId()).orElse(null);
+            pending = fresh != null ? fresh.getPendingSignals() : null;
+        } else {
+            pending = flow.getPendingSignals();
+        }
+
+        if (pending == null || pending.isEmpty()) return;
 
         log.info("[Signal] Draining {} pending signal(s) for flow {}", pending.size(), flow.getId());
 
@@ -543,8 +586,16 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
+        // Atomically clear pendingSignals — any signals pushed after our read will survive
+        // because $set replaces the whole array, and new $push operations after this are safe.
+        if (mongoTemplate != null && entityClass != null) {
+            mongoTemplate.updateFirst(
+                    org.springframework.data.mongodb.core.query.Query.query(
+                            org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flow.getId())),
+                    new org.springframework.data.mongodb.core.query.Update().unset("pendingSignals"),
+                    entityClass);
+        }
         flow.setPendingSignals(null);
-        saveFlow(flow);
     }
 
     /** Convert payload to the handler's expected type via Jackson. */

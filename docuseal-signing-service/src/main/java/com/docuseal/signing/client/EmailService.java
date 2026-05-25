@@ -39,6 +39,10 @@ public class EmailService {
     }
 
     private void send(String to, String subject, String body) {
+        if (!enabled) {
+            log.debug("[Email] Mail not configured — skipping '{}'", subject);
+            return;
+        }
         try {
             SimpleMailMessage message = new SimpleMailMessage();
             message.setTo(to);
