@@ -271,10 +271,10 @@ fi
 # ========== Scenario 7: Vendor failure → compensation fires ==========
 header "Scenario 7: Vendor failure → flow fails and compensation runs"
 
-# Configure mock vendor to fail on next CREATE_DRAFT call
+# Configure mock vendor to fail on createDocument calls with HTTP 500
 curl -s -X POST "http://localhost:8081/admin/failure-config" \
   -H "Content-Type: application/json" \
-  -d '{"failStep":"createDraft","failCode":500,"failCount":999}' >/dev/null 2>&1 || true
+  -d '{"createDocument":"HTTP_500"}' >/dev/null 2>&1 || true
 
 RESULT=$(submit_flow "COMP-001")
 COMP_FLOW_ID=$(echo "$RESULT" | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])" 2>/dev/null)
@@ -288,7 +288,7 @@ COMP_STATUS=$(docker exec infra-mongodb-1 mongosh --quiet digital_instrument_ser
 
 # Reset vendor failures
 curl -s -X POST "http://localhost:8081/admin/failure-config" \
-  -H "Content-Type: application/json" -d '{}' >/dev/null 2>&1 || true
+  -H "Content-Type: application/json" -d '{"createDocument":"NONE"}' >/dev/null 2>&1 || true
 
 # Any non-FAILED status is acceptable — the flow may have raced past the failing step
 case "$COMP_STATUS" in
