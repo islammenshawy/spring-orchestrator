@@ -1,5 +1,6 @@
 package com.orchestrator.starter.autoconfigure;
 
+import com.orchestrator.starter.flow.FlowOrchestrator;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -96,6 +97,6 @@ public class OrchestratorMetrics {
     }
 
     private static String safe(String flowType) {
-        return flowType != null ? flowType : "default";
+        return flowType != null ? flowType : FlowOrchestrator.DEFAULT_FLOW_TYPE;
     }
 }

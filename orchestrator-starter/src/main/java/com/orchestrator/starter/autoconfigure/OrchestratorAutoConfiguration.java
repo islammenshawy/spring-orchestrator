@@ -134,7 +134,7 @@ public class OrchestratorAutoConfiguration {
             if (!handlers.isEmpty()) {
                 log.info("No @Flow classes found, using {} StepHandler beans", handlers.size());
                 FlowTypeDescriptor desc = buildDescriptor(
-                        "default", Object.class, Object.class,
+                        FlowOrchestrator.DEFAULT_FLOW_TYPE, Object.class, Object.class,
                         "", handlers, props, mongoTemplate, outboxRepository,
                         stepLogRepository, objectMapper, kafkaTemplate, transactionTemplate, metrics);
                 return new FlowTypeRegistry(List.of(desc));

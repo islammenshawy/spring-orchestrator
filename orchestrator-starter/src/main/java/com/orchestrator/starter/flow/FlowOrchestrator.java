@@ -42,6 +42,8 @@ import java.util.concurrent.TimeoutException;
 @Slf4j
 public class FlowOrchestrator<F extends OrchestratorFlow> {
 
+    public static final String DEFAULT_FLOW_TYPE = "default";
+
     private final OrchestratorFlowRepository<F> flowRepository;
     private final StepRegistry<F> stepRegistry;
     private final OutboxEventRepository outboxRepository;
@@ -156,7 +158,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     private void doExecuteStep(String flowId, String stepName) {
         MDC.put("flowId", flowId);
-        MDC.put("flowType", flowType != null ? flowType : "default");
+        MDC.put("flowType", flowType != null ? flowType : DEFAULT_FLOW_TYPE);
         if (stepName != null) MDC.put("stepName", stepName);
         try {
         doExecuteStepInner(flowId, stepName);
@@ -1413,7 +1415,11 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      * Builds a MongoDB query from the provided key-value pairs.
      */
     public List<F> findFlows(java.util.Map<String, Object> searchAttributes) {
-        if (mongoTemplate == null || entityClass == null || searchAttributes == null || searchAttributes.isEmpty()) {
+        if (mongoTemplate == null || entityClass == null) {
+            log.warn("[Search] findFlows called but mongoTemplate/entityClass not configured — returning empty");
+            return List.of();
+        }
+        if (searchAttributes == null || searchAttributes.isEmpty()) {
             return List.of();
         }
         var criteria = new org.springframework.data.mongodb.core.query.Criteria();
