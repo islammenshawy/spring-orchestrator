@@ -70,7 +70,10 @@ public class SecurityConfig {
             }
 
             String key = request.getHeader("X-API-Key");
-            if (apiKey != null && !apiKey.isEmpty() && apiKey.equals(key)) {
+            if (apiKey != null && !apiKey.isEmpty() && key != null
+                    && java.security.MessageDigest.isEqual(
+                            apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            key.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
                 var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
                         "api-client", null, java.util.List.of());
                 org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(auth);

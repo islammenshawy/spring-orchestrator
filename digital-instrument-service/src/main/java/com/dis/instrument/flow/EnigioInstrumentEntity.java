@@ -77,6 +77,8 @@ public class EnigioInstrumentEntity extends AbstractFlow {
     private boolean preparationNotified;   // notification published to topic
     private java.time.Instant preparationNotifiedAt; // for approval expiry
     private boolean signingApproved;       // downstream approved via API
+    private java.time.Instant signingApprovedAt;
+    private String signingApprovedBy;     // source IP or caller identity
 
     // ===== Group 2 results — Signing Ceremony =====
 
@@ -93,6 +95,8 @@ public class EnigioInstrumentEntity extends AbstractFlow {
     private boolean signingNotified;       // notification published to topic
     private java.time.Instant signingNotifiedAt;  // for approval expiry
     private boolean deliveryApproved;      // downstream approved via API
+    private java.time.Instant deliveryApprovedAt;
+    private String deliveryApprovedBy;
 
     // ===== Notification dedup — prevents publishing same phase+status repeatedly =====
 

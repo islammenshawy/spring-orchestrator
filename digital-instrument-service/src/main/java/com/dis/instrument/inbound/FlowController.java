@@ -128,7 +128,8 @@ public class FlowController {
     public ResponseEntity<?> approveFlow(
             @Parameter(description = "Instrument ID (from notification payload's `instrumentId` field)", example = "682b3f1a0000000000000001")
             @PathVariable String id,
-            @RequestBody(required = false) Map<String, Object> body) {
+            @RequestBody(required = false) Map<String, Object> body,
+            jakarta.servlet.http.HttpServletRequest request) {
 
         // Atomic CAS: approve only if flow is still at the expected gate step
         // Prevents TOCTOU race where flow advances between read and update
@@ -136,11 +137,16 @@ public class FlowController {
         String currentStep;
         String correlationId;
 
+        String sourceIp = request.getRemoteAddr();
+        java.time.Instant now = java.time.Instant.now();
+
         // Try signing approval gate
         EnigioInstrumentEntity flow = mongoTemplate.findAndModify(
                 Query.query(Criteria.where("_id").is(id)
                         .and("currentStep").is(FlowStep.AWAIT_PREPARATION_APPROVAL.name())),
-                new Update().set("signingApproved", true),
+                new Update().set("signingApproved", true)
+                        .set("signingApprovedAt", now)
+                        .set("signingApprovedBy", sourceIp),
                 org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(true),
                 EnigioInstrumentEntity.class);
 
@@ -154,7 +160,9 @@ public class FlowController {
             flow = mongoTemplate.findAndModify(
                     Query.query(Criteria.where("_id").is(id)
                             .and("currentStep").is(FlowStep.AWAIT_DELIVERY_APPROVAL.name())),
-                    new Update().set("deliveryApproved", true),
+                    new Update().set("deliveryApproved", true)
+                            .set("deliveryApprovedAt", now)
+                            .set("deliveryApprovedBy", sourceIp),
                     org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(true),
                     EnigioInstrumentEntity.class);
 
