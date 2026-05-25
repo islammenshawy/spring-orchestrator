@@ -84,7 +84,7 @@ public class EnigioInstrumentEntity extends AbstractFlow {
     private boolean signingEmailsSent;
     private boolean webhookRegistered;
     private java.time.Instant signingStartedAt;  // when signing emails were sent (for expiry)
-    private String signingStatus;       // PENDING | PARTIALLY_SIGNED | SIGNED | REJECTED | EXPIRED
+    private SigningStatus signingStatus;
     private int signaturesReceived;     // count of individual PARTIALLY_SIGNED events
     private int signaturesRequired;     // total signers count (set from signers.size())
 

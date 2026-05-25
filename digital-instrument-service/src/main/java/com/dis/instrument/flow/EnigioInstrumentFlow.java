@@ -210,22 +210,22 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
      *   3. Expiry — if signing exceeds dis.signing.expiry-hours, fail the flow
      *
      * Each PARTIALLY_SIGNED webhook increments signaturesReceived and notifies downstream.
-     * Flow advances only when signingStatus == SigningStatus.SIGNED.name().
+     * Flow advances only when signingStatus == SigningStatus.SIGNED.
      */
     @Step(order = 7)
     public void awaitSignatures(EnigioInstrumentEntity flow) {
         // 1. Check if webhook already set the status (fast path)
-        if (SigningStatus.SIGNED.name().equals(flow.getSigningStatus())) {
+        if (SigningStatus.SIGNED == flow.getSigningStatus()) {
             log.info("[{}] All {}/{} signatures completed (via webhook)",
                     flow.getId(), flow.getSignaturesReceived(), flow.getSignaturesRequired());
             return;
         }
 
-        if (SigningStatus.REJECTED.name().equals(flow.getSigningStatus())) {
+        if (SigningStatus.REJECTED == flow.getSigningStatus()) {
             throw new NonRetryableStepException("Signature rejected by signer");
         }
 
-        if (SigningStatus.EXPIRED.name().equals(flow.getSigningStatus())) {
+        if (SigningStatus.EXPIRED == flow.getSigningStatus()) {
             throw new NonRetryableStepException("Signing expired after " + signingExpiryHours + " hours");
         }
 
@@ -240,13 +240,13 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
                 // One final poll before expiring
                 String finalStatus = enigioClient.getSigningStatus(flow.getTraceOriginalId());
                 if (SigningStatus.SIGNED.name().equals(finalStatus)) {
-                    flow.setSigningStatus(SigningStatus.SIGNED.name());
+                    flow.setSigningStatus(SigningStatus.SIGNED);
                     flow.setSignaturesReceived(flow.getSignaturesRequired());
                     log.info("[{}] Last-minute signing detected — marking SIGNED", flow.getId());
                     return;
                 }
 
-                flow.setSigningStatus(SigningStatus.EXPIRED.name());
+                flow.setSigningStatus(SigningStatus.EXPIRED);
                 notifyBestEffort(flow, FlowPhase.SIGNING_EXPIRED.name(),
                         flow.getSignaturesReceived() + "/" + flow.getSignaturesRequired() + " signed before expiry");
                 throw new NonRetryableStepException(
@@ -265,20 +265,20 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
         String status = enigioClient.getSigningStatus(flow.getTraceOriginalId());
 
         if (SigningStatus.SIGNED.name().equals(status)) {
-            flow.setSigningStatus(SigningStatus.SIGNED.name());
+            flow.setSigningStatus(SigningStatus.SIGNED);
             flow.setSignaturesReceived(flow.getSignaturesRequired());
             log.info("[{}] All signatures completed (via poll fallback)", flow.getId());
             return;
         }
 
         if (SigningStatus.REJECTED.name().equals(status)) {
-            flow.setSigningStatus(SigningStatus.REJECTED.name());
+            flow.setSigningStatus(SigningStatus.REJECTED);
             throw new NonRetryableStepException("Signature rejected by signer");
         }
 
         // Still pending — park and wait for webhook or next poll
-        flow.setSigningStatus(status);
-        waitUntil(() -> SigningStatus.SIGNED.name().equals(flow.getSigningStatus()), Duration.ofHours(signingExpiryHours));
+        try { flow.setSigningStatus(SigningStatus.valueOf(status)); } catch (Exception e) { /* unknown status */ }
+        waitUntil(() -> SigningStatus.SIGNED == flow.getSigningStatus(), Duration.ofHours(signingExpiryHours));
     }
 
     // ===== Gate 2: Notify downstream, await approval for delivery =====
@@ -557,7 +557,7 @@ public class EnigioInstrumentFlow extends FlowDefinition<EnigioInstrumentEntity>
 
     @Signal
     public void requestCancellation(EnigioInstrumentEntity flow) {
-        if (SigningStatus.SIGNED.name().equals(flow.getSigningStatus())) {
+        if (SigningStatus.SIGNED == flow.getSigningStatus()) {
             throw new IllegalStateException("Cannot cancel — document already signed");
         }
         log.info("[{}] Cancellation requested via signal", flow.getId());

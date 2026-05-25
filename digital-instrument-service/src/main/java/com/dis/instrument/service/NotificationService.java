@@ -61,7 +61,7 @@ public class NotificationService {
                 .currentStep(flow.getCurrentStep())
                 // Vendor state
                 .traceOriginalId(flow.getTraceOriginalId())
-                .signingStatus(flow.getSigningStatus())
+                .signingStatus(flow.getSigningStatus() != null ? flow.getSigningStatus().name() : null)
                 .transferId(flow.getTransferId())
                 // Actionable URLs
                 .approveUrl(baseUrl + flowPath + "/approve")

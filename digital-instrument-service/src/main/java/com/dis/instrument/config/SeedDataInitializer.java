@@ -90,7 +90,7 @@ public class SeedDataInitializer implements CommandLineRunner {
         guarantee.setWebhookRegistered(true);
         guarantee.setSignaturesRequired(2);
         guarantee.setSignaturesReceived(1);
-        guarantee.setSigningStatus(SigningStatus.PARTIALLY_SIGNED.name());
+        guarantee.setSigningStatus(SigningStatus.PARTIALLY_SIGNED);
         guarantee.setSigningStartedAt(Instant.now().minusSeconds(3600));
         seed(guarantee);
 
@@ -113,7 +113,7 @@ public class SeedDataInitializer implements CommandLineRunner {
         invoice.setSigningApproved(true);
         invoice.setSignersAdded(true);
         invoice.setSigningEmailsSent(true);
-        invoice.setSigningStatus(SigningStatus.REJECTED.name());
+        invoice.setSigningStatus(SigningStatus.REJECTED);
         invoice.setErrorMessage("Signature rejected by signer: Hans Mueller — document terms disputed");
         seed(invoice);
 
@@ -156,7 +156,7 @@ public class SeedDataInitializer implements CommandLineRunner {
             flow.setWebhookRegistered(true);
             flow.setSignaturesRequired(signers.size());
             flow.setSignaturesReceived(signers.size());
-            flow.setSigningStatus(SigningStatus.SIGNED.name());
+            flow.setSigningStatus(SigningStatus.SIGNED);
             flow.setSigningStartedAt(flow.getCreatedAt().plusSeconds(60));
             flow.setSigningNotified(true);
             flow.setSigningNotifiedAt(flow.getCreatedAt().plusSeconds(300));

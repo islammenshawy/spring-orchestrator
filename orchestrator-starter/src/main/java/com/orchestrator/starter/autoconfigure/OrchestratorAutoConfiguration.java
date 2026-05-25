@@ -366,6 +366,8 @@ public class OrchestratorAutoConfiguration {
             String groupId = appName + "-orchestrator";
             container.getContainerProperties().setMessageListener(
                     (MessageListener<String, String>) record -> {
+                        consumer.onStepReply(record.value(), record.topic(), record.offset());
+                        // Save offset AFTER successful processing — prevents skipping on DC failover
                         if (saveMongo) {
                             try {
                                 mongoOffsetStore.saveOffset(groupId, record.topic(),
@@ -373,7 +375,6 @@ public class OrchestratorAutoConfiguration {
                                         record.key(), record.timestamp());
                             } catch (Exception ignored) {}
                         }
-                        consumer.onStepReply(record.value(), record.topic(), record.offset());
                     });
             container.setBeanName("orchestrator-reply-" + topic.replace(".", "-"));
             container.start();
@@ -458,10 +459,10 @@ public class OrchestratorAutoConfiguration {
                                       name = org.springframework.kafka.support.KafkaHeaders.RECEIVED_TIMESTAMP, required = false) Long timestamp,
                               @org.springframework.messaging.handler.annotation.Header(
                                       name = org.springframework.kafka.support.KafkaHeaders.RECEIVED_KEY, required = false) String key) {
-            // Save offset to MongoDB BEFORE processing — records what we received
-            // from this partition. If step throws (retry), the offset is still saved.
-            // On DC failover, dis-2 seeks to this position and re-processes
-            // (idempotency guards handle the duplicate).
+            consumer.onStepCommand(payload, topic, offset);
+            // Save offset AFTER successful processing — prevents message loss on DC failover.
+            // If step throws (goes to retry topic), offset is NOT saved → on failover,
+            // the message is re-delivered and idempotency handles the duplicate.
             if (saveMongo && partition != null && timestamp != null) {
                 try {
                     mongoOffsetStore.saveOffset(groupId, topic,
@@ -470,7 +471,6 @@ public class OrchestratorAutoConfiguration {
                     // Don't block processing if offset save fails
                 }
             }
-            consumer.onStepCommand(payload, topic, offset);
         }
 
         @org.springframework.kafka.annotation.KafkaListener(

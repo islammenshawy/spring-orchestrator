@@ -120,7 +120,7 @@ class EnigioInstrumentEntityTest {
         // Group 2
         entity.setSignersAdded(true);
         entity.setSigningEmailsSent(true);
-        entity.setSigningStatus("SIGNED");
+        entity.setSigningStatus(com.dis.instrument.model.SigningStatus.SIGNED);
 
         // Group 3
         entity.setValidationResult("VALID");

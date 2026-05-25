@@ -239,13 +239,13 @@ class EnigioInstrumentFlowTest {
         void awaitSignatures_webhookAlreadySigned() {
             var e = entity();
             e.setTraceOriginalId("to_abc123");
-            e.setSigningStatus("SIGNED");
+            e.setSigningStatus(SigningStatus.SIGNED);
             e.setSignaturesReceived(2);
             e.setSignaturesRequired(2);
 
             flow.awaitSignatures(e);
 
-            assertThat(e.getSigningStatus()).isEqualTo("SIGNED");
+            assertThat(e.getSigningStatus()).isEqualTo(SigningStatus.SIGNED);
             verifyNoInteractions(enigioClient); // no poll needed
         }
 
@@ -260,7 +260,7 @@ class EnigioInstrumentFlowTest {
 
             assertThatThrownBy(() -> flow.awaitSignatures(e))
                     .isInstanceOf(WaitingStepException.class);
-            assertThat(e.getSigningStatus()).isEqualTo("PENDING");
+            assertThat(e.getSigningStatus()).isEqualTo(SigningStatus.PENDING);
             verify(enigioClient).getSigningStatus("to_abc123");
         }
 
@@ -276,7 +276,7 @@ class EnigioInstrumentFlowTest {
 
             flow.awaitSignatures(e);
 
-            assertThat(e.getSigningStatus()).isEqualTo("SIGNED");
+            assertThat(e.getSigningStatus()).isEqualTo(SigningStatus.SIGNED);
             assertThat(e.getSignaturesReceived()).isEqualTo(2);
         }
 
@@ -310,7 +310,7 @@ class EnigioInstrumentFlowTest {
                     .isInstanceOf(NonRetryableStepException.class)
                     .hasMessageContaining("expired");
 
-            assertThat(e.getSigningStatus()).isEqualTo("EXPIRED");
+            assertThat(e.getSigningStatus()).isEqualTo(SigningStatus.EXPIRED);
             verify(notificationPublisher).notifyPhaseComplete(eq(e), eq("SIGNING_EXPIRED"), anyString());
         }
 
@@ -327,7 +327,7 @@ class EnigioInstrumentFlowTest {
 
             flow.awaitSignatures(e);
 
-            assertThat(e.getSigningStatus()).isEqualTo("SIGNED");
+            assertThat(e.getSigningStatus()).isEqualTo(SigningStatus.SIGNED);
         }
     }
 
@@ -339,7 +339,7 @@ class EnigioInstrumentFlowTest {
         @DisplayName("publishes notification and throws retryable when not approved")
         void awaitDeliveryApproval_notApproved() {
             var e = entity();
-            e.setSigningStatus("SIGNED");
+            e.setSigningStatus(SigningStatus.SIGNED);
 
             assertThatThrownBy(() -> flow.awaitDeliveryApproval(e))
                     .isInstanceOf(WaitingStepException.class)
