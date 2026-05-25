@@ -137,7 +137,11 @@ public class FlowController {
         String currentStep;
         String correlationId;
 
-        String sourceIp = request.getRemoteAddr();
+        // Identify caller: forwarded IP (Kubernetes/proxy) + auth principal
+        String forwardedFor = request.getHeader("X-Forwarded-For");
+        String callerIp = forwardedFor != null ? forwardedFor.split(",")[0].trim() : request.getRemoteAddr();
+        var auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        String approvedBy = (auth != null ? auth.getName() : "unknown") + "@" + callerIp;
         java.time.Instant now = java.time.Instant.now();
 
         // Try signing approval gate
@@ -146,7 +150,7 @@ public class FlowController {
                         .and("currentStep").is(FlowStep.AWAIT_PREPARATION_APPROVAL.name())),
                 new Update().set("signingApproved", true)
                         .set("signingApprovedAt", now)
-                        .set("signingApprovedBy", sourceIp),
+                        .set("signingApprovedBy", approvedBy),
                 org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(true),
                 EnigioInstrumentEntity.class);
 
@@ -162,7 +166,7 @@ public class FlowController {
                             .and("currentStep").is(FlowStep.AWAIT_DELIVERY_APPROVAL.name())),
                     new Update().set("deliveryApproved", true)
                             .set("deliveryApprovedAt", now)
-                            .set("deliveryApprovedBy", sourceIp),
+                            .set("deliveryApprovedBy", approvedBy),
                     org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(true),
                     EnigioInstrumentEntity.class);
 
