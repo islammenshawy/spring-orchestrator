@@ -261,80 +261,13 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             handlePermanentFailure(flow, e);
             return;
         } catch (Exception e) {
-            try {
-                StepErrorHandler.handleError(handler, e);
-                // Recovered (e.g., HTTP 409)
-                logStep(flowId, stepName, StepOutcome.RECOVERED.name(), flow.getRetryCount() + 1,
-                        flowBefore, includeFlowStateInLogs ? serializeForLog(flow) : null, e.getMessage(), startedAt);
-                log.info("[Saga] Step {} recovered for flow {}", stepName, flowId);
-            } catch (RetryableStepException re) {
-                logStep(flowId, stepName, StepOutcome.RETRYING.name(), flow.getRetryCount() + 1,
-                        flowBefore, null, re.getMessage(), startedAt);
-                handleRetryableFailure(flow, re);
-                throw re;
-            } catch (NonRetryableStepException nre) {
-                logStep(flowId, stepName, StepOutcome.FAILED.name(), flow.getRetryCount() + 1,
-                        flowBefore, null, nre.getMessage(), startedAt);
-                handlePermanentFailure(flow, nre);
-                return;
-            }
+            boolean recovered = handleUnexpectedStepError(handler, flow, flowId, stepName, flowBefore, startedAt, e);
+            if (!recovered) return; // permanent failure or non-recoverable — don't advance
         }
 
-        // Step succeeded — mark as completed and clear retry/recovery state.
-        // Note: gate steps that need to wait call waitUntil() which throws
-        // WaitingStepException — caught above. If we reach here, the step is done.
-        flow.getCompletedSteps().add(stepName);
-        flow.setRetryCount(0);
-        flow.setBackoffSeconds(0);
-        flow.setNextRetryAt(null);
-        flow.setErrorMessage(null);
-        flow.setRecoveryCount(0);
-        flow.setWaitingSince(null);
-        flow.setExpiresAt(null);
-        flow.setSleepUntil(null);
-        flow.setUpdatedAt(Instant.now());
-
-        // Save flow with version conflict retry.
-        // The reply consumer may have incremented the version via $set.
-        // On conflict: re-read latest version, copy it to our flow object, retry save.
-        // This preserves all domain fields set by the step handler.
-        boolean saved = false;
-        for (int attempt = 0; attempt < 3; attempt++) {
-            try {
-                saveFlow(flow);
-                saved = true;
-                break;
-            } catch (org.springframework.dao.OptimisticLockingFailureException e) {
-                log.debug("[Saga] Version conflict saving flow {} (attempt {}), retrying", flowId, attempt + 1);
-                F fresh = flowRepository.findById(flowId).orElse(null);
-                if (fresh instanceof com.orchestrator.starter.domain.AbstractFlow af
-                        && flow instanceof com.orchestrator.starter.domain.AbstractFlow afFlow) {
-                    afFlow.setVersion(af.getVersion());
-                    afFlow.setCurrentStep(af.getCurrentStep());
-                }
-            }
-        }
-        if (!saved && mongoTemplate != null && entityClass != null) {
-            // Final fallback: serialize full flow to $set — preserves ALL domain fields
-            log.error("[Saga] Version conflict persisted after 3 attempts for flow {} — full partial update", flowId);
-            try {
-                @SuppressWarnings("unchecked")
-                java.util.Map<String, Object> flowMap = objectMapper.convertValue(flow, java.util.Map.class);
-                flowMap.remove("_id");
-                flowMap.remove("id");
-                flowMap.remove("version");
-                flowMap.put("updatedAt", Instant.now());
-                var update = new org.springframework.data.mongodb.core.query.Update();
-                flowMap.forEach(update::set);
-                update.inc("version", 1);
-                mongoTemplate.updateFirst(
-                        org.springframework.data.mongodb.core.query.Query.query(
-                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flowId)),
-                        update, entityClass);
-            } catch (Exception ex) {
-                log.error("[Saga] Full partial update also failed for flow {}: {}", flowId, ex.getMessage());
-            }
-        }
+        // Step succeeded — mark completed and persist
+        markStepCompleted(flow, stepName);
+        saveFlowWithRetry(flow, flowId);
 
         // Drain pending signals before advancing (Temporal-style: signals execute between steps)
         drainPendingSignals(flow);
@@ -1121,6 +1054,86 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      * POLLING: flow waits for nextRetryAt (status=WAITING_RETRY). Scheduler
      *          re-delivers when the poll interval elapses.
      */
+    /** Mark step as completed and clear all retry/recovery state. */
+    private void markStepCompleted(F flow, String stepName) {
+        flow.getCompletedSteps().add(stepName);
+        flow.setRetryCount(0);
+        flow.setBackoffSeconds(0);
+        flow.setNextRetryAt(null);
+        flow.setErrorMessage(null);
+        flow.setRecoveryCount(0);
+        flow.setWaitingSince(null);
+        flow.setExpiresAt(null);
+        flow.setSleepUntil(null);
+        flow.setUpdatedAt(Instant.now());
+    }
+
+    /** Save flow with 3-attempt optimistic lock retry + full $set fallback. */
+    @SuppressWarnings("unchecked")
+    private void saveFlowWithRetry(F flow, String flowId) {
+        boolean saved = false;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                saveFlow(flow);
+                saved = true;
+                break;
+            } catch (org.springframework.dao.OptimisticLockingFailureException e) {
+                log.debug("[Saga] Version conflict saving flow {} (attempt {}), retrying", flowId, attempt + 1);
+                F fresh = flowRepository.findById(flowId).orElse(null);
+                if (fresh instanceof com.orchestrator.starter.domain.AbstractFlow af
+                        && flow instanceof com.orchestrator.starter.domain.AbstractFlow afFlow) {
+                    afFlow.setVersion(af.getVersion());
+                    afFlow.setCurrentStep(af.getCurrentStep());
+                }
+            }
+        }
+        if (!saved && mongoTemplate != null && entityClass != null) {
+            log.error("[Saga] Version conflict persisted after 3 attempts for flow {} — full partial update", flowId);
+            try {
+                java.util.Map<String, Object> flowMap = objectMapper.convertValue(flow, java.util.Map.class);
+                flowMap.remove("_id");
+                flowMap.remove("id");
+                flowMap.remove("version");
+                flowMap.put("updatedAt", Instant.now());
+                var update = new org.springframework.data.mongodb.core.query.Update();
+                flowMap.forEach(update::set);
+                update.inc("version", 1);
+                mongoTemplate.updateFirst(
+                        org.springframework.data.mongodb.core.query.Query.query(
+                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flowId)),
+                        update, entityClass);
+            } catch (Exception ex) {
+                log.error("[Saga] Full partial update also failed for flow {}: {}", flowId, ex.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Handle unexpected exceptions via @RecoverOn / @RetryOn / @FailOn.
+     * @return true if recovered (step should be marked completed), false if permanently failed
+     * @throws RetryableStepException if the error is retryable
+     */
+    private boolean handleUnexpectedStepError(StepHandler<F> handler, F flow, String flowId,
+                                               String stepName, String flowBefore, Instant startedAt, Exception e) {
+        try {
+            StepErrorHandler.handleError(handler, e);
+            logStep(flowId, stepName, StepOutcome.RECOVERED.name(), flow.getRetryCount() + 1,
+                    flowBefore, includeFlowStateInLogs ? serializeForLog(flow) : null, e.getMessage(), startedAt);
+            log.info("[Saga] Step {} recovered for flow {}", stepName, flowId);
+            return true;
+        } catch (RetryableStepException re) {
+            logStep(flowId, stepName, StepOutcome.RETRYING.name(), flow.getRetryCount() + 1,
+                    flowBefore, null, re.getMessage(), startedAt);
+            handleRetryableFailure(flow, re);
+            throw re;
+        } catch (NonRetryableStepException nre) {
+            logStep(flowId, stepName, StepOutcome.FAILED.name(), flow.getRetryCount() + 1,
+                    flowBefore, null, nre.getMessage(), startedAt);
+            handlePermanentFailure(flow, nre);
+            return false;
+        }
+    }
+
     private void handleWaitingStep(F flow, WaitingStepException e) {
         String errorMsg = e.getMessage() != null ? e.getMessage() : "waiting for external event";
         boolean isSleeping = e.getWaitMode() == WaitingStepException.WaitMode.SLEEPING;
