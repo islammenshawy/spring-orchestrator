@@ -700,12 +700,16 @@ else
 fi
 
 # ========== Flaky Test Detection ==========
-header "FLAKY TEST DETECTION (3 iterations)"
+header "FLAKY TEST DETECTION ($FLAKY_RUNS iterations)"
 FLAKY_RUNS=${FLAKY_RUNS:-3}
 FLAKY_FAILURES=0
 FLAKY_LOG="/tmp/chaos-flaky-$(date +%s).log"
 
-for i in $(seq 1 "$FLAKY_RUNS"); do
+if [ "$FLAKY_RUNS" -le 0 ]; then
+  log "Flaky detection skipped (FLAKY_RUNS=$FLAKY_RUNS)"
+fi
+
+for i in $(seq 1 "$FLAKY_RUNS" 2>/dev/null); do
   log "Flaky detection run $i/$FLAKY_RUNS..."
   if mvn test -pl orchestrator-starter,digital-instrument-service -q -Dsurefire.rerunFailingTestsCount=0 >> "$FLAKY_LOG" 2>&1; then
     log "  Run $i: ALL PASS"
