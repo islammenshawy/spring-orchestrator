@@ -294,7 +294,16 @@ class GapFixIntegrationTest {
         var result = startFlow("PN-NOTIFY-001");
         String flowId = (String) result.get("id");
 
-        EnigioInstrumentEntity flow = waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(2));
+        waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(2));
+
+        // Poll for preparationNotified flag — set asynchronously after step transition
+        EnigioInstrumentEntity flow = null;
+        long deadline = System.currentTimeMillis() + 15_000;
+        while (System.currentTimeMillis() < deadline) {
+            flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+            if (flow != null && flow.isPreparationNotified()) break;
+            try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+        }
         assertNotNull(flow);
         assertTrue(flow.isPreparationNotified(),
                 "Preparation notification should be published and flag set");
