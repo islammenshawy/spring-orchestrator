@@ -53,42 +53,56 @@ public class MongoOffsetRecoveryListener implements ConsumerAwareRebalanceListen
     public void onPartitionsAssigned(Consumer<?, ?> consumer, Collection<TopicPartition> partitions) {
         if (partitions.isEmpty()) return;
 
-        // Split partitions into those with Kafka offsets and those without
-        Collection<TopicPartition> needsRecovery = new java.util.ArrayList<>();
-
-        for (TopicPartition partition : partitions) {
-            var committed = consumer.committed(java.util.Set.of(partition));
-            if (committed.get(partition) != null) {
-                // Kafka has the offset — normal operation, no recovery needed
-                continue;
-            }
-            needsRecovery.add(partition);
-        }
-
-        if (needsRecovery.isEmpty()) return;
-
-        log.info("[OffsetRecovery] {} partition(s) with no Kafka offset — checking MongoDB",
-                needsRecovery.size());
-
-        // For partitions without Kafka offsets, try MongoDB
+        // Always check MongoDB for every partition — MongoDB is the cross-DC source of truth.
+        // Kafka's __consumer_offsets may be stale (from a previous deployment on this cluster)
+        // or missing (first time on this cluster). MongoDB offsets are replicated cross-DC.
         Collection<TopicPartition> stillNeedsRecovery = new java.util.ArrayList<>();
 
-        for (TopicPartition partition : needsRecovery) {
+        for (TopicPartition partition : partitions) {
             MongoOffsetStore.StoredOffset stored = offsetStore.getLastOffset(
                     consumerGroup, partition.topic(), partition.partition());
 
             if (stored != null) {
-                // Found in MongoDB — seek by timestamp (cluster-independent)
-                seekByStoredTimestamp(consumer, partition, stored);
+                var committed = consumer.committed(java.util.Set.of(partition));
+                var kafkaOffset = committed.get(partition);
+
+                if (kafkaOffset != null) {
+                    // Both Kafka and MongoDB have offsets — compare to detect stale Kafka offset.
+                    // If MongoDB's stored offset is ahead (newer timestamp), use MongoDB.
+                    // This handles DC failover where Cluster B has old stale Kafka offsets.
+                    long kafkaPosition = kafkaOffset.offset();
+                    long mongoPosition = stored.getOffset();
+
+                    if (mongoPosition > kafkaPosition) {
+                        log.warn("[OffsetRecovery] {} — MongoDB offset ({}) ahead of Kafka offset ({}). " +
+                                        "Kafka offset is stale — recovering from MongoDB (timestamp={})",
+                                partition, mongoPosition, kafkaPosition,
+                                java.time.Instant.ofEpochMilli(stored.getMessageTimestamp()));
+                        seekByStoredTimestamp(consumer, partition, stored);
+                    } else {
+                        // Kafka offset is at or ahead of MongoDB — Kafka is authoritative
+                        log.debug("[OffsetRecovery] {} — Kafka offset ({}) is current, no recovery needed",
+                                partition, kafkaPosition);
+                    }
+                } else {
+                    // No Kafka offset — use MongoDB (classic failover case)
+                    log.info("[OffsetRecovery] {} — no Kafka offset, recovering from MongoDB (timestamp={})",
+                            partition, java.time.Instant.ofEpochMilli(stored.getMessageTimestamp()));
+                    seekByStoredTimestamp(consumer, partition, stored);
+                }
             } else {
-                // Not in MongoDB either — delegate to fallback
-                stillNeedsRecovery.add(partition);
+                // Not in MongoDB — check if Kafka has it
+                var committed = consumer.committed(java.util.Set.of(partition));
+                if (committed.get(partition) == null) {
+                    stillNeedsRecovery.add(partition);
+                }
+                // If Kafka has an offset but MongoDB doesn't, trust Kafka (normal single-cluster operation)
             }
         }
 
         // Delegate remaining partitions to timestamp/earliest/latest fallback
         if (!stillNeedsRecovery.isEmpty()) {
-            log.info("[OffsetRecovery] {} partition(s) not in MongoDB — using fallback strategy",
+            log.info("[OffsetRecovery] {} partition(s) not in Kafka or MongoDB — using fallback strategy",
                     stillNeedsRecovery.size());
             fallbackListener.onPartitionsAssigned(consumer, stillNeedsRecovery);
         }
