@@ -21,11 +21,22 @@ import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class MockDocumentService {
 
     private final FailureConfig failureConfig;
+    private final String defaultWebhookUrl;
     private final Map<String, MockDocument> documents = new ConcurrentHashMap<>();
+
+    public MockDocumentService(FailureConfig failureConfig,
+                                @org.springframework.beans.factory.annotation.Value("${mock.webhook.default-url:}") String defaultWebhookUrl) {
+        this.failureConfig = failureConfig;
+        this.defaultWebhookUrl = defaultWebhookUrl;
+        // Auto-register default webhook URL if configured
+        if (defaultWebhookUrl != null && !defaultWebhookUrl.isBlank()) {
+            registerWebhook(defaultWebhookUrl, Map.of());
+            log.info("Auto-registered default webhook URL: {}", defaultWebhookUrl);
+        }
+    }
     private final Map<String, MockDocument> envelopeDrafts = new ConcurrentHashMap<>();
     /** Webhook registrations deduped by URL. */
     private final List<Map<String, Object>> registeredWebhooks = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -221,21 +232,15 @@ public class MockDocumentService {
 
                     for (Map<String, Object> webhook : registeredWebhooks) {
                         String url = (String) webhook.get("url");
-                        try {
-                            webClient.post().uri(url)
-                                    .bodyValue(Map.of(
-                                            "messageId", UUID.randomUUID().toString(),
-                                            "traceOriginalId", traceOriginalId,
-                                            "eventType", eventType,
-                                            "documentCode", doc.getDocumentCode() != null ? doc.getDocumentCode() : "NEG",
-                                            "reference", doc.getReference() != null ? doc.getReference() : "",
-                                            "documentType", doc.getDocumentType() != null ? doc.getDocumentType() : ""
-                                    ))
-                                    .retrieve().bodyToMono(String.class).block();
-                            log.info("Webhook fired: {} → {} for {}", eventType, url, traceOriginalId);
-                        } catch (Exception e) {
-                            log.warn("Webhook call failed to {}: {}", url, e.getMessage());
-                        }
+                        if (url == null) continue;
+                        fireWebhookWithRetry(webClient, url, Map.of(
+                                "messageId", UUID.randomUUID().toString(),
+                                "traceOriginalId", traceOriginalId,
+                                "eventType", eventType,
+                                "documentCode", doc.getDocumentCode() != null ? doc.getDocumentCode() : "NEG",
+                                "reference", doc.getReference() != null ? doc.getReference() : "",
+                                "documentType", doc.getDocumentType() != null ? doc.getDocumentType() : ""
+                        ), eventType + " for " + traceOriginalId);
                     }
 
                     doc.getRequiredSignatures().get(i).setStatus("SIGNED");
@@ -376,19 +381,12 @@ public class MockDocumentService {
                 for (Map<String, Object> webhook : registeredWebhooks) {
                     String url = (String) webhook.get("url");
                     if (url == null) continue;
-                    try {
-                        webClient.post().uri(url)
-                                .bodyValue(Map.of(
-                                        "messageId", UUID.randomUUID().toString(),
-                                        "traceOriginalId", envelopeTraceId,
-                                        "eventType", "TRANSFER",
-                                        "timestamp", java.time.Instant.now().toString()
-                                ))
-                                .retrieve().bodyToMono(String.class).block();
-                        log.info("Webhook fired: TRANSFER → {} for {}", url, envelopeTraceId);
-                    } catch (Exception e) {
-                        log.warn("Transfer webhook failed to {}: {}", url, e.getMessage());
-                    }
+                    fireWebhookWithRetry(webClient, url, Map.of(
+                            "messageId", UUID.randomUUID().toString(),
+                            "traceOriginalId", envelopeTraceId,
+                            "eventType", "TRANSFER",
+                            "timestamp", java.time.Instant.now().toString()
+                    ), "TRANSFER for " + envelopeTraceId);
                 }
             } catch (Exception e) {
                 log.error("Transfer webhook simulation failed for {}: {}", envelopeTraceId, e.getMessage());
@@ -499,5 +497,29 @@ public class MockDocumentService {
     private void simulateDelay(int minMs, int maxMs) {
         try { Thread.sleep(ThreadLocalRandom.current().nextInt(minMs, maxMs)); }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    }
+
+    /** Fire webhook with retry — simulates real vendor retry behavior on delivery failure. */
+    /** Fire webhook with retry — matches real vendor behavior (retries for up to ~5 min). */
+    private void fireWebhookWithRetry(org.springframework.web.reactive.function.client.WebClient webClient,
+                                       String url, Map<String, Object> payload, String label) {
+        int maxRetries = 10;
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                webClient.post().uri(url)
+                        .bodyValue(payload)
+                        .retrieve().bodyToMono(String.class).block();
+                log.info("Webhook fired: {} → {} (attempt {})", label, url, attempt);
+                return;
+            } catch (Exception e) {
+                log.warn("Webhook {} to {} failed (attempt {}/{}): {}", label, url, attempt, maxRetries, e.getMessage());
+                if (attempt < maxRetries) {
+                    try { Thread.sleep(5000L * attempt); } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt(); return;
+                    }
+                }
+            }
+        }
+        log.error("Webhook {} to {} failed after {} retries — giving up", label, url, maxRetries);
     }
 }

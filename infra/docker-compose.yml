@@ -122,11 +122,14 @@ services:
         JAR_FILE: mock-vendor/target/mock-vendor-0.0.1-SNAPSHOT.jar
     ports:
       - "8081:8081"
+    environment:
+      MOCK_WEBHOOK_DEFAULT_URL: http://digital-instrument-service:8087/webhooks/enigio
     healthcheck:
       test: wget -qO- http://localhost:8081/actuator/health || exit 1
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
 
   # ========== Dashboard ==========
   dashboard:
@@ -236,6 +239,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 15
+    restart: unless-stopped
 
   # ========== Nginx Load Balancer (for multi-instance DIS) ==========
   nginx:

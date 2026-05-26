@@ -50,6 +50,9 @@ public class MockDocument {
     // Transfer
     private String transferId;
 
+    // Webhook callback URL — stored per-document for reliable delivery after restart
+    private String callbackUrl;
+
     // State
     private boolean invalidated;
     private boolean inTransit;
