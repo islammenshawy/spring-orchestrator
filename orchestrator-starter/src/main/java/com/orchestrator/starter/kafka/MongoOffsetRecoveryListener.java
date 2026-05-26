@@ -59,7 +59,8 @@ public class MongoOffsetRecoveryListener implements ConsumerAwareRebalanceListen
         Collection<TopicPartition> stillNeedsRecovery = new java.util.ArrayList<>();
 
         for (TopicPartition partition : partitions) {
-            MongoOffsetStore.StoredOffset stored = offsetStore.getLastOffset(
+            // Check across ALL clusters — on failover, the latest offset may be from another cluster
+            MongoOffsetStore.StoredOffset stored = offsetStore.getLatestOffsetAcrossClusters(
                     consumerGroup, partition.topic(), partition.partition());
 
             if (stored != null) {

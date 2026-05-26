@@ -36,6 +36,10 @@ public class OrchestratorProperties {
         /** Reply topic for step results. Enables decoupled executor/orchestrator pattern.
          *  Defaults to commandTopic + ".replies". Set to empty string to disable (inline mode). */
         private String replyTopic;
+        /** Kafka cluster identifier for multi-DC offset isolation.
+         *  Each DC/cluster must have a unique ID. Offsets are stored per-cluster in MongoDB.
+         *  Default: "default" (single-cluster mode). */
+        private String clusterId = "default";
 
         /** Number of partitions for auto-created topics. Default 6.
          *  More partitions = more consumers can process in parallel.

@@ -49,6 +49,7 @@ public class MongoOffsetStore {
     private static final String COLLECTION = "orchestrator_consumer_offsets";
 
     private final MongoTemplate mongoTemplate;
+    private final String clusterId;
 
     /**
      * Record that a message was successfully processed.
@@ -56,11 +57,12 @@ public class MongoOffsetStore {
      */
     public void saveOffset(String consumerGroup, String topic, int partition,
                            long offset, String eventId, long messageTimestamp) {
-        String id = consumerGroup + "|" + topic + "|" + partition;
+        String id = clusterId + "|" + consumerGroup + "|" + topic + "|" + partition;
 
         mongoTemplate.upsert(
                 Query.query(Criteria.where("_id").is(id)),
                 new Update()
+                        .set("clusterId", clusterId)
                         .set("consumerGroup", consumerGroup)
                         .set("topic", topic)
                         .set("partition", partition)
@@ -76,9 +78,27 @@ public class MongoOffsetStore {
      * Get the last processed offset for a partition.
      * Returns null if no offset stored (first time or collection empty).
      */
+    /**
+     * Get the last processed offset for this cluster's partition.
+     */
     public StoredOffset getLastOffset(String consumerGroup, String topic, int partition) {
-        String id = consumerGroup + "|" + topic + "|" + partition;
+        String id = clusterId + "|" + consumerGroup + "|" + topic + "|" + partition;
         return mongoTemplate.findById(id, StoredOffset.class, COLLECTION);
+    }
+
+    /**
+     * Get the most recent offset across ALL clusters for this partition.
+     * Used during failover to find the latest position regardless of which cluster wrote it.
+     */
+    public StoredOffset getLatestOffsetAcrossClusters(String consumerGroup, String topic, int partition) {
+        Query query = Query.query(
+                Criteria.where("consumerGroup").is(consumerGroup)
+                        .and("topic").is(topic)
+                        .and("partition").is(partition))
+                .with(org.springframework.data.domain.Sort.by(
+                        org.springframework.data.domain.Sort.Direction.DESC, "messageTimestamp"))
+                .limit(1);
+        return mongoTemplate.findOne(query, StoredOffset.class, COLLECTION);
     }
 
     /**
@@ -87,7 +107,8 @@ public class MongoOffsetStore {
      */
     public StoredOffset getLastOffsetForTopic(String consumerGroup, String topic) {
         Query query = Query.query(
-                Criteria.where("consumerGroup").is(consumerGroup)
+                Criteria.where("clusterId").is(clusterId)
+                        .and("consumerGroup").is(consumerGroup)
                         .and("topic").is(topic))
                 .with(org.springframework.data.domain.Sort.by(
                         org.springframework.data.domain.Sort.Direction.DESC, "offset"))
@@ -102,6 +123,7 @@ public class MongoOffsetStore {
     public static class StoredOffset {
         @Id
         private String id;
+        private String clusterId;
         private String consumerGroup;
         private String topic;
         private int partition;

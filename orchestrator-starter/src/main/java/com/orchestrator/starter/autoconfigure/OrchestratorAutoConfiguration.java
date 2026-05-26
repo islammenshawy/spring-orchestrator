@@ -323,8 +323,9 @@ public class OrchestratorAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public MongoOffsetStore mongoOffsetStore(MongoTemplate mongoTemplate) {
-        return new MongoOffsetStore(mongoTemplate);
+    public MongoOffsetStore mongoOffsetStore(MongoTemplate mongoTemplate, OrchestratorProperties props) {
+        String clusterId = props.getKafka().getClusterId();
+        return new MongoOffsetStore(mongoTemplate, clusterId);
     }
 
     @Bean
