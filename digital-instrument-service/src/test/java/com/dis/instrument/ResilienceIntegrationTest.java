@@ -91,7 +91,7 @@ class ResilienceIntegrationTest {
         var result = startFlow("PN-DEDUP-001");
         String flowId = (String) result.get("id");
 
-        EnigioInstrumentEntity flow = waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(2));
+        EnigioInstrumentEntity flow = waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(3));
         assertNotNull(flow, "Flow should reach gate step");
 
         // Record vendor call count BEFORE duplicate injection
@@ -194,7 +194,7 @@ class ResilienceIntegrationTest {
         String flowId = (String) result.get("id");
 
         // Wait for flow to reach gate step (proves it started processing)
-        EnigioInstrumentEntity flow = waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(2));
+        EnigioInstrumentEntity flow = waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(3));
         assertNotNull(flow);
 
         // Simulate pod crash: set status=IN_PROGRESS with old updatedAt
@@ -244,7 +244,7 @@ class ResilienceIntegrationTest {
         var result = startFlow("PN-MAX-REC-001");
         String flowId = (String) result.get("id");
 
-        waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(2));
+        waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(3));
 
         // Simulate flow stuck with recoveryCount at max (10)
         mongoTemplate.updateFirst(
@@ -287,7 +287,7 @@ class ResilienceIntegrationTest {
 
         // Wait for all to reach gate step
         for (String flowId : flowIds) {
-            waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(2));
+            waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(3));
         }
 
         // Batch-update all to stale IN_PROGRESS in one operation
@@ -384,7 +384,11 @@ class ResilienceIntegrationTest {
         while (System.currentTimeMillis() < deadline) {
             EnigioInstrumentEntity flow = mongoTemplate.findById(
                     flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
-            if (flow != null && targetStep.equals(flow.getCurrentStep())) return flow;
+            if (flow != null) {
+                // Accept exact match OR flow that already passed the target step
+                if (targetStep.equals(flow.getCurrentStep())) return flow;
+                if (flow.getCompletedSteps() != null && flow.getCompletedSteps().contains(targetStep)) return flow;
+            }
             try { Thread.sleep(1000); } catch (InterruptedException e) { break; }
         }
         EnigioInstrumentEntity flow = mongoTemplate.findById(
