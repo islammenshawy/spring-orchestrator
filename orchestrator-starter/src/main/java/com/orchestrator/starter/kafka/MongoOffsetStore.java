@@ -57,7 +57,7 @@ public class MongoOffsetStore {
      */
     public void saveOffset(String consumerGroup, String topic, int partition,
                            long offset, String eventId, long messageTimestamp) {
-        String id = clusterId + "|" + consumerGroup + "|" + topic + "|" + partition;
+        String id = buildKey(consumerGroup, topic, partition);
 
         mongoTemplate.upsert(
                 Query.query(Criteria.where("_id").is(id)),
@@ -82,8 +82,16 @@ public class MongoOffsetStore {
      * Get the last processed offset for this cluster's partition.
      */
     public StoredOffset getLastOffset(String consumerGroup, String topic, int partition) {
-        String id = clusterId + "|" + consumerGroup + "|" + topic + "|" + partition;
+        String id = buildKey(consumerGroup, topic, partition);
         return mongoTemplate.findById(id, StoredOffset.class, COLLECTION);
+    }
+
+    /** Key format: backward compatible — only prepend clusterId when multi-cluster is configured. */
+    private String buildKey(String consumerGroup, String topic, int partition) {
+        if ("default".equals(clusterId)) {
+            return consumerGroup + "|" + topic + "|" + partition;
+        }
+        return clusterId + "|" + consumerGroup + "|" + topic + "|" + partition;
     }
 
     /**
@@ -107,8 +115,7 @@ public class MongoOffsetStore {
      */
     public StoredOffset getLastOffsetForTopic(String consumerGroup, String topic) {
         Query query = Query.query(
-                Criteria.where("clusterId").is(clusterId)
-                        .and("consumerGroup").is(consumerGroup)
+                Criteria.where("consumerGroup").is(consumerGroup)
                         .and("topic").is(topic))
                 .with(org.springframework.data.domain.Sort.by(
                         org.springframework.data.domain.Sort.Direction.DESC, "offset"))
