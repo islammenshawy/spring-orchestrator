@@ -341,6 +341,7 @@ public class OrchestratorAutoConfiguration {
     // ========== Programmatic Kafka Listeners ==========
 
     @Bean
+    @SuppressWarnings("unchecked")
     public List<ConcurrentMessageListenerContainer<String, String>> orchestratorListenerContainers(
             FlowTypeRegistry registry,
             OrchestratorKafkaConsumer<?> consumer,
@@ -349,7 +350,8 @@ public class OrchestratorAutoConfiguration {
             OrchestratorProperties props,
             MongoOffsetStore mongoOffsetStore,
             TimestampOffsetRecoveryListener timestampFallback,
-            org.springframework.core.env.Environment env) {
+            org.springframework.core.env.Environment env,
+            java.util.Optional<com.orchestrator.starter.failover.DcAwareListenerManager> listenerManagerOpt) {
 
         List<ConcurrentMessageListenerContainer<String, String>> containers = new ArrayList<>();
         String appName = env.getProperty("spring.application.name", "orchestrator");
@@ -365,19 +367,18 @@ public class OrchestratorAutoConfiguration {
             log.info("Offset recovery: Kafka-only (single-cluster mode)");
         }
 
-        // Command listeners — use @KafkaListener via adapter bean (supports RetryTopicConfiguration)
-        // Programmatic containers here are ONLY for reply and DLT topics.
-        // Command topic listeners are registered via OrchestratorKafkaListenerAdapter below.
+        // Wire rebalance listener into DcAwareListenerManager if failover is enabled
+        var listenerManager = listenerManagerOpt.orElse(null);
+        if (listenerManager != null) {
+            listenerManager.setRebalanceListener(rebalanceListener);
+            log.info("Failover: consumer containers will be created via DcAwareListenerManager");
+        }
 
         // Reply listeners — one per unique reply topic (if reply mode enabled)
         for (String topic : registry.getAllReplyTopics()) {
-            var container = containerFactory.createContainer(topic);
-            container.getContainerProperties().setGroupId(appName + "-orchestrator");
-            container.getContainerProperties().setConsumerRebalanceListener(rebalanceListener);
             boolean saveMongo = props.getRecovery().getOffsetStore() == OrchestratorProperties.OffsetStore.MONGO;
             String groupId = appName + "-orchestrator";
-            container.getContainerProperties().setMessageListener(
-                    (MessageListener<String, String>) record -> {
+            MessageListener<String, String> replyListener = (MessageListener<String, String>) record -> {
                         consumer.onStepReply(record.value(), record.topic(), record.offset());
                         // Save offset AFTER successful processing — prevents skipping on DC failover
                         if (saveMongo) {
@@ -390,10 +391,29 @@ public class OrchestratorAutoConfiguration {
                                         record.topic(), record.partition(), e.getMessage());
                             }
                         }
-                    });
-            container.setBeanName("orchestrator-reply-" + topic.replace(".", "-"));
-            container.start();
-            containers.add(container);
+                    };
+
+            if (listenerManager != null) {
+                // Failover mode: register blueprint, manager creates containers for both DCs
+                var blueprint = com.orchestrator.starter.failover.ContainerBlueprint.builder()
+                        .id("orchestrator-reply-" + topic.replace(".", "-"))
+                        .originalTopic(topic)
+                        .groupId(groupId)
+                        .messageListener(replyListener)
+                        .concurrency(1)
+                        .build();
+                var container = listenerManager.registerAndCreate(blueprint);
+                containers.add(container);
+            } else {
+                // Single-cluster mode: create and start directly
+                var container = containerFactory.createContainer(topic);
+                container.getContainerProperties().setGroupId(groupId);
+                container.getContainerProperties().setConsumerRebalanceListener(rebalanceListener);
+                container.getContainerProperties().setMessageListener(replyListener);
+                container.setBeanName("orchestrator-reply-" + topic.replace(".", "-"));
+                container.start();
+                containers.add(container);
+            }
             log.info("Kafka listener: reply topic '{}' → group '{}-orchestrator'", topic, appName);
         }
 
@@ -404,19 +424,32 @@ public class OrchestratorAutoConfiguration {
                 .forEach(d -> dltTopics.add(d.getReplyTopic() + "-dlt"));
 
         for (String topic : dltTopics) {
-            var container = containerFactory.createContainer(topic);
-            container.getContainerProperties().setGroupId(appName + "-dlt");
-            container.getContainerProperties().setConsumerRebalanceListener(rebalanceListener);
-            container.getContainerProperties().setMessageListener(
-                    (MessageListener<String, String>) record -> {
-                        // Extract exception from headers if available
-                        String exMsg = extractDltException(record);
-                        consumer.onDlt(record.value(), record.topic(), record.offset(),
-                                exMsg != null ? exMsg : "unknown");
-                    });
-            container.setBeanName("orchestrator-dlt-" + topic.replace(".", "-"));
-            container.start();
-            containers.add(container);
+            String dltGroupId = appName + "-dlt";
+            MessageListener<String, String> dltListener = record -> {
+                String exMsg = extractDltException(record);
+                consumer.onDlt(record.value(), record.topic(), record.offset(),
+                        exMsg != null ? exMsg : "unknown");
+            };
+
+            if (listenerManager != null) {
+                var blueprint = com.orchestrator.starter.failover.ContainerBlueprint.builder()
+                        .id("orchestrator-dlt-" + topic.replace(".", "-"))
+                        .originalTopic(topic)
+                        .groupId(dltGroupId)
+                        .messageListener(dltListener)
+                        .concurrency(1)
+                        .build();
+                var container = listenerManager.registerAndCreate(blueprint);
+                containers.add(container);
+            } else {
+                var container = containerFactory.createContainer(topic);
+                container.getContainerProperties().setGroupId(dltGroupId);
+                container.getContainerProperties().setConsumerRebalanceListener(rebalanceListener);
+                container.getContainerProperties().setMessageListener(dltListener);
+                container.setBeanName("orchestrator-dlt-" + topic.replace(".", "-"));
+                container.start();
+                containers.add(container);
+            }
             log.info("Kafka listener: DLT topic '{}' → group '{}-dlt'", topic, appName);
         }
 

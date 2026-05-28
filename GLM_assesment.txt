@@ -1,0 +1,560 @@
+================================================================================
+  SPRING ORCHESTRATOR — COMPREHENSIVE CODE ASSESSMENT (GLM Analysis)
+  Date: 2026-05-25
+================================================================================
+
+ARCHITECTURE OVERVIEW
+---------------------
+Multi-module Maven project: an annotation-driven workflow orchestrator library
+(orchestrator-starter) backed by MongoDB + Kafka, with a production service
+(digital-instrument-service) integrating Enigio trace:original, a signing
+service (docuseal-signing-service), and a mock vendor for testing.
+
+The library is well-architected overall: transactional outbox, jittered retry,
+two-layer idempotency, gate/poll/sleep step modes, saga compensation, parallel
+steps with join, signal-based communication, and child workflow support.
+
+================================================================================
+SECTION 1: BUGS
+================================================================================
+
+1.1 FLOWORCHESTRATOR — VERSION CONFLICT RETRY MAY SILENTLY DROP DOMAIN FIELDS
+    File: orchestrator-starter/.../flow/FlowOrchestrator.java:301-314
+    Severity: HIGH
+
+    The 3-attempt optimistic lock retry loop copies only `version` and
+    `currentStep` from the fresh DB read. If the reply consumer updated other
+    fields between the read and save, those changes are overwritten by the
+    stale in-memory flow object. After 3 failed attempts, the loop exits
+    WITHOUT saving — domain fields set by the step handler may be lost.
+
+    Recommendation: On final failure, log a warning and attempt a partial
+    $set update with the domain fields from the in-memory flow object, or
+    increase the retry window and copy more fields from the fresh version.
+
+1.2 FLOWORCHESTRATOR — STEP COMPLETION SAVED BEFORE PARALLEL/ADVANCE CHECK
+    File: orchestrator-starter/.../flow/FlowOrchestrator.java:286-313
+    Severity: MEDIUM
+
+    After step success, `flow.getCompletedSteps().add(stepName)` and
+    `saveFlow(flow)` happen BEFORE `advanceToNextStep()`. If the app crashes
+    between `saveFlow()` and the Kafka publish in `advanceToNextStep()`, the
+    flow is persisted with the step marked completed but the next step is
+    never published. Recovery scanner will eventually catch this, but there's
+    a gap equal to `staleThresholdMinutes` (default 15 min).
+
+1.3 FLOWORCHESTRATOR — SIGNAL RACE CONDITION ON IN_PROGRESS FLOWS
+    File: orchestrator-starter/.../flow/FlowOrchestrator.java:492-515
+    Severity: MEDIUM
+
+    When a signal arrives for an IN_PROGRESS flow, it uses `mongoTemplate.updateFirst`
+    with `$push` to append to `pendingSignals`. But the concurrent step execution
+    (on a different thread/consumer) may be reading `pendingSignals` at the same
+    time via `drainPendingSignals()`. Since MongoDB reads are not isolated from
+    concurrent writes without transactions, a signal queued between the read and
+    the `setPendingSignals(null)` in `drainPendingSignals` would be lost.
+
+1.4 FLOWORCHESTRATOR — PUBLISHREPLY SWALLOW EXCEPTIONS
+    File: orchestrator-starter/.../flow/FlowOrchestrator.java:380-398
+    Severity: MEDIUM
+
+    `publishReply()` catches ALL exceptions and only logs a warning. If Kafka
+    is down, the reply is silently lost and the flow stalls in reply mode.
+    The outbox pattern is NOT used for replies — there's no recovery mechanism.
+
+    Recommendation: Either throw the exception to trigger Kafka retry, or write
+    a reply outbox event as a safety net.
+
+1.5 STEPREGISTRY — GETCOMPLETEDSTEPSBEFORE RETURNS MUTABLE SUBLIST
+    File: orchestrator-starter/.../flow/StepRegistry.java:108-112
+    Severity: LOW
+
+    `orderedStepNames.subList()` returns a view of the underlying list. While
+    `orderedStepNames` is created via `List.copyOf()` (immutable), `subList()`
+    on an immutable list still returns a view. If a caller accidentally
+    modifies the returned sublist, it throws UnsupportedOperationException —
+    which is safe but surprising. `runCompensation` and `runCancellation`
+    both iterate this list in reverse, which is fine.
+
+1.6 ENIGIOINSTRUMENTFLOW — HARDCODED 72H EXPIRY OVERRIDES CONFIG
+    File: digital-instrument-service/.../flow/EnigioInstrumentFlow.java:154,308
+    Severity: LOW
+
+    `waitUntil(() -> ..., Duration.ofHours(72))` hardcodes 72h for approval
+    gates, while `approvalExpiryHours` is configurable (default 72h). These
+    two values can diverge — the `waitUntil` expiry is independent of the
+    manual expiry check above it. If someone changes `approvalExpiryHours`
+    to 48h, the manual check fires at 48h but `waitUntil` still parks for 72h.
+
+    Recommendation: Use `Duration.ofHours(approvalExpiryHours)` in the
+    `waitUntil` call.
+
+1.7 SECURITYCONFIG — API KEY COMPARED VIA .equals() (TIMING ATTACK)
+    File: digital-instrument-service/.../config/SecurityConfig.java:73
+    Severity: LOW
+
+    `apiKey.equals(key)` is vulnerable to timing attacks. Use
+    `MessageDigest.isEqual()` or `BCrypt.checkpw()` for constant-time comparison.
+
+1.8 SEEDDATAINITIALIZER — RUNS ON EVERY NON-PROD STARTUP
+    File: digital-instrument-service/.../config/SeedDataInitializer.java:31-36
+    Severity: LOW
+
+    Checks `countDocuments() > 0` to skip seeding. But if the collection has
+    documents from a previous version with a different schema, the seed is
+    skipped. Also, the count check is not atomic — two instances starting
+    simultaneously could both see count=0 and seed duplicate data.
+
+1.9 DOCUSEAL EMAILSERVICE — NULL CHECK MISSING
+    File: docuseal-signing-service/.../client/EmailService.java
+    Severity: MEDIUM
+
+    The `enabled` flag is set based on whether `mailSender` is null, but the
+    `send()` method does not check `enabled` before calling `mailSender.send()`.
+    If `mailSender` is null, this will throw a NullPointerException.
+
+================================================================================
+SECTION 2: DESIGN GAPS & IMPROVEMENT AREAS
+================================================================================
+
+2.1 NO OBSERVABILITY / DISTRIBUTED TRACING INTEGRATION
+    Severity: HIGH
+
+    The library uses MDC for log correlation (flowId, stepName, parentFlowId)
+    but does NOT integrate with OpenTelemetry or Micrometer Tracing for
+    distributed traces. In a multi-service environment, you cannot trace a
+    request from the REST API → Kafka → step execution → vendor call → reply.
+
+    Recommendation: Add a `Tracer` abstraction that wraps the OpenTelemetry API,
+    with a noop implementation by default. Propagate trace context in
+    StepCommandMessage/StepReplyMessage headers.
+
+2.2 NO CIRCUIT BREAKER ON VENDOR CALLS
+    Severity: HIGH
+
+    The EnigioClient calls go directly through Feign without a circuit breaker
+    (Resilience4j or similar). If the Enigio API is down, every step execution
+    will attempt a vendor call, fail, and route to retry topics — flooding
+    Kafka with retry messages. A circuit breaker would fast-fail and park
+    the flow immediately.
+
+    Recommendation: Add `@CircuitBreaker` from Resilience4j on EnigioClient
+    methods, or integrate a circuit breaker into the StepErrorHandler.
+
+2.3 NO RATE LIMITING / BACKPRESSURE
+    Severity: MEDIUM
+
+    The Kafka consumer processes messages as fast as they arrive. If 10,000
+    flows start simultaneously, all first-step messages hit the consumer at
+    once, which makes 10,000 MongoDB reads and 10,000 vendor API calls.
+    There's no concurrency limit or rate limiter.
+
+    Recommendation: Set `concurrency` on the Kafka listener container to
+    match available resources, and consider a semaphore on vendor API calls.
+
+2.4 NO FLOW-LEVEL DEADLINE / TIMEOUT
+    Severity: MEDIUM
+
+    Individual steps have a configurable timeout (`step.timeoutSeconds`), but
+    there's no flow-level deadline. A flow can run for days (at gate steps)
+    without any overall timeout. If a flow gets stuck in an infinite retry
+    loop across multiple steps, there's no circuit breaker at the flow level.
+
+    Recommendation: Add an optional `flowDeadline` field on AbstractFlow that
+    fails the flow if the total elapsed time exceeds a configurable threshold.
+
+2.5 OUTBOX PUBLISHER — SINGLE-THREADED, NO BATCHING
+    File: orchestrator-starter/.../outbox/OutboxPublisher.java:49-77
+    Severity: MEDIUM
+
+    The outbox publisher fetches up to 100 events and publishes them one at a
+    time with synchronous `.get()` on each Kafka send. This creates a
+    bottleneck — the step transition latency is at least `outbox.pollIntervalMs`
+    plus the Kafka round-trip time per event.
+
+    Recommendation: Use `kafkaTemplate.send()` without `.get()` (fire-and-forget
+    with callbacks) for non-first-step events, or batch the sends.
+
+2.6 NO SCHEMA VALIDATION ON KAFKA MESSAGES
+    Severity: MEDIUM
+
+    StepCommandMessage and StepReplyMessage are plain POJOs deserialized via
+    Jackson. If a message with a missing or mistyped field is published (e.g.,
+    `flowId` is accidentally an integer), the consumer throws a generic
+    deserialization exception with no meaningful error message.
+
+    Recommendation: Add JSON Schema validation or at minimum validate required
+    fields after deserialization in the consumer.
+
+2.7 FLOWORCHESTRATOR — GOD CLASS (1336 LINES)
+    File: orchestrator-starter/.../flow/FlowOrchestrator.java
+    Severity: MEDIUM
+
+    FlowOrchestrator handles step execution, retry logic, compensation,
+    cancellation, signals, child workflows, parallel join, flow search,
+    serialization, timeout execution, and MDC management. This makes it
+    difficult to test in isolation and violates single responsibility.
+
+    Recommendation: Extract into focused classes:
+    - StepExecutor (execute + timeout)
+    - FlowAdvancer (advanceToNextStep + parallel join)
+    - CompensationRunner (runCompensation + retryCompensation)
+    - CancellationRunner (cancelFlow + runCancellation)
+    - SignalProcessor (signal + drainPendingSignals)
+    - ChildWorkflowManager (notifyParent + cancelChildren)
+
+2.8 NO GRACEFUL SHUTDOWN HOOK
+    Severity: MEDIUM
+
+    When the application shuts down, in-flight step executions may be
+    interrupted mid-way. The step timeout mechanism uses virtual threads
+    with `future.cancel(true)`, but there's no JVM shutdown hook that
+    marks in-progress flows as stale for recovery.
+
+    Recommendation: Add a `@PreDestroy` that marks all IN_PROGRESS flows
+    owned by this pod as stale (clear `claimedBy`, set `updatedAt` to past).
+
+2.9 MISSING API VERSIONING
+    File: digital-instrument-service/.../inbound/FlowController.java
+    Severity: LOW
+
+    REST endpoints are at `/flows/enigio-instrument` with no version prefix.
+    If the API contract changes, existing clients will break.
+
+    Recommendation: Use `/api/v1/flows/enigio-instrument` or similar.
+
+2.10 NO HEALTH CHECK FOR VENDOR API CONNECTIVITY
+    Severity: LOW
+
+    The OrchestratorHealthIndicator checks outbox depth and stale flows, but
+    does NOT check whether the Enigio vendor API is reachable. A Kubernetes
+    liveness probe could report healthy while all vendor calls are failing.
+
+2.11 WEBHOOK CONTROLLER — NO SIGNATURE VERIFICATION
+    File: digital-instrument-service/.../inbound/WebhookController.java
+    Severity: HIGH
+
+    The webhook endpoint accepts any request with `traceOriginalId` and
+    `eventType` fields. There's no HMAC signature verification. An attacker
+    could forge FULLY_SIGNED webhooks to bypass the signing ceremony.
+
+    Recommendation: Validate webhook signatures using a shared secret or
+    asymmetric key, as is standard practice for vendor webhooks.
+
+2.12 NO AUDIT LOG FOR APPROVAL ACTIONS
+    File: digital-instrument-service/.../inbound/FlowController.java:127-169
+    Severity: MEDIUM
+
+    The approve endpoint sets `signingApproved` or `deliveryApproved` but
+    does not record WHO approved it, WHEN, or from WHERE. For a financial
+    instrument system, this is a compliance gap.
+
+    Recommendation: Add an audit trail: store approver identity, timestamp,
+    and source IP in the flow entity.
+
+================================================================================
+SECTION 3: TEST QUALITY ANALYSIS
+================================================================================
+
+3.1 INTEGRATION TESTS — SHARED STATE / POOR ISOLATION
+    Severity: HIGH
+    File: digital-instrument-service/.../InstrumentFlowIntegrationTest.java
+
+    - Line 348-349: Counts ALL records in `orchestrator_processed_events`,
+      not just records from this test. Asserts `count > 0`, which passes
+      trivially if any previous test left data.
+    - Line 905-925: `replay_completedFlow_rejectedWithoutFlag` searches for
+      ANY completed flow from earlier tests — explicit test dependency.
+    - Line 46-49: `Thread.sleep(3000)` for Kafka readiness — flaky on slow CI.
+    - Tests use `@Order` annotation, implying sequential execution dependency.
+
+    Recommendation: Each test should create its own flow with a unique
+    correlationId, then query by that specific ID. Use test-specific prefixes.
+
+3.2 EXPLICIT CLEANUP IN TESTS (ANTI-PATTERN)
+    Files:
+    - ResilienceIntegrationTest.java:183 (`deleteById`)
+    - GapFixIntegrationTest.java:114-115, 143 (`deleteById`)
+
+    Per project rules: "Tests must NOT call deleteMany({}), TRUNCATE, DROP TABLE,
+    or deleteCollection()." While these are targeted deletes by specific IDs,
+    they indicate the tests are not properly isolated.
+
+3.3 WEAK ASSERTIONS
+    - JitteredBackOffPolicyTest.java:70-72: `assertTrue(delay >= 0)` where the
+      minimum should be >= 1000 (half of 2000ms with factor 0.5).
+    - StepTimeoutTest.java:63: 5-second Thread.sleep makes the test slow.
+    - FlowDefinitionScannerTest.java: nearly duplicates StartupValidationTest.
+
+3.4 MISSING TEST COVERAGE
+    - @RecoverOn annotation: declared in StepErrorHandlerTest but never tested.
+    - IdempotencyService: no test for non-DuplicateKey exceptions (e.g., MongoDB
+      being down).
+    - StepRegistry: no test for empty registry or duplicate step names.
+    - FlowOrchestrator.executeStep: no test for the version conflict retry loop
+      (lines 301-314) actually succeeding on retry.
+    - No test for the `findFlows(searchAttributes)` method with MongoDB.
+    - No test for compensation retry (`retryCompensation`).
+
+================================================================================
+SECTION 4: CONFIGURATION & INFRASTRUCTURE ISSUES
+================================================================================
+
+4.1 MONGODB — NO AUTHENTICATION
+    File: infra/docker-compose.yml:9
+    Severity: CRITICAL
+
+    MongoDB runs without `--auth` flag. Anyone with network access can
+    read/write all flow data, including PII (signer emails, phone numbers).
+
+4.2 KAFKA — PLAINTEXT PROTOCOL (NO TLS/SASL)
+    File: infra/docker-compose.yml:42-43
+    Severity: CRITICAL
+
+    All Kafka listeners use PLAINTEXT. Step commands contain flow IDs and
+    correlation IDs in cleartext. No encryption, no authentication.
+
+4.3 API KEY HARDCODED IN DOCKER-COMPOSE
+    File: infra/docker-compose.yml:228
+    Severity: HIGH
+
+    `DIS_AUTH_API_KEY: soak-test-key` is visible in version control.
+    Use Docker secrets or environment file (.env excluded from VCS).
+
+4.4 API KEY DEFAULTS TO EMPTY STRING
+    File: digital-instrument-service/.../resources/application.yml:100
+    Severity: HIGH
+
+    `dis.auth.api-key: ${DIS_AUTH_API_KEY:}` — if the env var is not set,
+    the API key is empty. The SecurityConfig filter compares against this
+    empty string, effectively allowing any request with an empty X-API-Key
+    header.
+
+4.5 MONGODB URI — NO CREDENTIALS
+    File: digital-instrument-service/.../resources/application.yml:9
+    Severity: HIGH
+
+    `mongodb.uri: mongodb://mongodb:27017/digital_instrument_service`
+    No username/password. In production, MongoDB must require authentication.
+
+4.6 WEBHOOK CALLBACK URL USES HTTP
+    File: digital-instrument-service/.../resources/application.yml:83
+    Severity: MEDIUM
+
+    `callback-url: http://digital-instrument-service:8087/webhooks/enigio`
+    Should use HTTPS in production to prevent webhook forgery.
+
+4.7 NO RESOURCE LIMITS IN DOCKER COMPOSE
+    File: infra/docker-compose.yml (all services)
+    Severity: MEDIUM
+
+    No `mem_limit`, `cpus`, or `restart` policies. A misbehaving container
+    can consume all host resources. Services won't auto-restart on failure.
+
+4.8 NO PRODUCTION-SPECIFIC CONFIGURATION PROFILE
+    Severity: MEDIUM
+
+    There's no `application-prod.yml`. The main config is used for all
+    environments with only env var overrides. Missing production-specific
+    settings like TLS, connection pooling, thread pools, etc.
+
+4.9 KAFKA/ZOOKEEPER — OUTDATED VERSION
+    File: infra/docker-compose.yml:17,32
+    Severity: LOW
+
+    Uses `cp-kafka:7.5.0` / `cp-zookeeper:7.5.0`. Current is 7.7+.
+    Known CVEs may exist in older versions.
+
+================================================================================
+SECTION 5: CODE QUALITY OBSERVATIONS
+================================================================================
+
+5.1 STRING LITERALS FOR STATUS VALUES (ENUM VIOLATIONS)
+    Files: Multiple in docuseal-signing-service
+    - DocuSealSigningFlow.java:92 — `"completed".equals(flow.getPartyAStatus())`
+    - SigningFlowEntity.java:27-28 — partyAStatus/partyBStatus are Strings
+    - SigningService.java:47 — `"Party A"`, `"Party B"` string literals
+
+    Per project rules: "NEVER use string literals for status values."
+    These should use enums.
+
+5.2 RAW TYPE USAGE
+    - FlowOrchestrator.java:54 — `KafkaTemplate kafkaTemplate` (raw type)
+    - OrchestratorAutoConfiguration.java — multiple raw `KafkaTemplate` usages
+    - FlowOrchestratorTest.java:44 — raw KafkaTemplate mock
+
+    Should use `KafkaTemplate<String, String>` for type safety.
+
+5.3 EXCESSIVE USE OF SUPPRESSWARNINGS
+    - FlowOrchestrator.java: 8 @SuppressWarnings annotations
+    - OrchestratorAutoConfiguration.java: 6 @SuppressWarnings annotations
+    - FlowDefinition.java: 5 @SuppressWarnings annotations
+
+    Many of these suppress unchecked casts that could be avoided with proper
+    generic type parameters or factory methods.
+
+5.4 FLOWORCHESTRATOR — MUTABLE FIELD ASSIGNMENTS AFTER CONSTRUCTION
+    File: orchestrator-starter/.../flow/FlowOrchestrator.java:1234-1248
+
+    `entityClass`, `mongoTemplate`, `validator`, `signalRegistry`,
+    `flowTypeRegistry` are all set via setters after construction. This
+    creates a window where the orchestrator is partially initialized. If any
+    method is called during this window, it will encounter null fields.
+
+    Recommendation: Use a builder pattern or pass all dependencies in the
+    constructor.
+
+5.5 NO IMMUTABILITY FOR DOMAIN MODELS
+    - StepCommandMessage, StepReplyMessage use @Data (mutable).
+    - OutboxEvent uses @Data (mutable).
+
+    Kafka message DTOs should be immutable. Use @Value or records.
+
+5.6 NO LOGGING FRAMEWORK ABSTRACTION
+    The library uses SLF4J directly via @Slf4j (Lombok). This is fine for
+    most cases but there's no structured logging support. In production,
+    JSON-formatted logs with trace IDs are essential for Splunk/ELK.
+
+5.7 MISSING JAVADOC ON PUBLIC API
+    Several public methods in FlowOrchestrator and FlowDefinition lack
+    Javadoc. For a library intended for publication (per README: "publish
+    this"), the public API should be fully documented.
+
+5.8 TEST HELPER CROSS-DEPENDENCY
+    - EnigioInstrumentFlowTest.java:55-57 depends on
+      EnigioInstrumentEntityTest.buildValidEntity()
+
+    If a field is added to EnigioInstrumentEntity and forgotten in the
+    builder, both test classes silently test with incomplete entities.
+    The helper should be in a shared test fixture class.
+
+================================================================================
+SECTION 6: PERFORMANCE CONCERNS
+================================================================================
+
+6.1 OPTIMISTIC LOCKING RETRY — 3 ATTEMPTS MAY NOT BE ENOUGH
+    File: FlowOrchestrator.java:301-314
+
+    In high-concurrency scenarios with parallel steps and reply consumers,
+    3 attempts may exhaust quickly. The retry doesn't use exponential backoff.
+
+6.2 STEP LOG WRITES — NO BATCHING
+    File: FlowOrchestrator.java:1190-1211
+
+    Each step execution writes one StepExecutionLog document to MongoDB.
+    At high throughput (1000 steps/second), this is 1000 individual writes/second.
+
+6.3 RECOVERY SCANNER — FULL COLLECTION SCAN
+    File: StaleFlowRecoveryService.java:129-134
+
+    The stale flow recovery query scans by `(status, updatedAt)` with a limit.
+    While there's a compound index on this, the query still needs to scan
+    forward from the threshold. With millions of completed flows, the index
+    selectivity for IN_PROGRESS is excellent, but the `claimedBy` check
+    requires an additional filter.
+
+6.4 IDEMPOTENCY COLLECTION — NO TTL INDEX EVIDENCE
+    While OrchestratorProperties specifies `processedEventsDays = 30`, there's
+    no visible TTL index creation in IndexInitializer for the processed_events
+    collection. If the TTL index is missing, idempotency records accumulate
+    indefinitely.
+
+6.5 OUTBOX POLLING — 500ms INTERVAL IS A LATENCY FLOOR
+    File: OutboxPublisher.java:48
+
+    Every step transition must wait for the next outbox poll cycle. With 11
+    steps in the Enigio flow, the minimum latency is 11 × 500ms = 5.5 seconds
+    (assuming instant vendor responses). This is fine for the current use case
+    but would be a bottleneck for faster workflows.
+
+================================================================================
+SECTION 7: SECURITY CONCERNS SUMMARY
+================================================================================
+
+| Severity | Issue | File |
+|----------|-------|------|
+| CRITICAL | MongoDB no auth | docker-compose.yml:9 |
+| CRITICAL | Kafka PLAINTEXT | docker-compose.yml:42-43 |
+| HIGH     | No webhook signature verification | WebhookController.java |
+| HIGH     | API key hardcoded in compose | docker-compose.yml:228 |
+| HIGH     | API key defaults to empty | application.yml:100 |
+| HIGH     | MongoDB URI no credentials | application.yml:9 |
+| MEDIUM   | Webhook callback uses HTTP | application.yml:83 |
+| LOW      | Timing attack on API key | SecurityConfig.java:73 |
+| LOW      | No CSRF needed (stateless API) | N/A |
+| LOW      | Swagger endpoints open | SecurityConfig.java:42 |
+
+================================================================================
+SECTION 8: POSITIVE OBSERVATIONS (STRENGTHS)
+================================================================================
+
+1. Transactional outbox pattern is correctly implemented — atomic flow save +
+   outbox event write prevents lost messages.
+
+2. Two-layer idempotency (consumer check-before + handler mark-after) is
+   textbook correct and prevents duplicate processing.
+
+3. Annotation-driven error handling (@RetryOn, @FailOn, @RecoverOn) is elegant
+   and eliminates boilerplate try-catch blocks in step handlers.
+
+4. The FlowDefinition base class provides clean DSL methods (waitUntil, pollUntil,
+   sleep, checkpoint, startChildFlowAsync) that make flow code readable.
+
+5. Startup validation (duplicate step orders, invalid @Compensate references,
+   invalid @JoinOn groups) fails fast with clear error messages.
+
+6. The stale flow recovery service with batch claiming is well-designed for
+   multi-pod deployments — prevents duplicate recovery attempts.
+
+7. Signal-based communication (Temporal-style) is a sophisticated feature
+   rarely seen in Spring-based orchestrators.
+
+8. Step execution timeout via virtual threads is modern and resource-efficient.
+
+9. The mock-vendor service enables realistic end-to-end testing without
+   external dependencies.
+
+10. Comprehensive Swagger documentation on REST endpoints.
+
+================================================================================
+SECTION 9: PRIORITIZED RECOMMENDATIONS
+================================================================================
+
+P0 (Ship Blockers — Must Fix Before Production):
+  1. Add webhook signature verification on WebhookController
+  2. Add MongoDB authentication in docker-compose and application.yml
+  3. Add Kafka SASL/TLS or at minimum network isolation
+  4. Fix API key defaulting to empty string — fail fast if not configured
+  5. Fix integration test isolation — remove shared state dependencies
+
+P1 (High Priority — Fix Within Sprint):
+  1. Add circuit breaker on vendor API calls (Resilience4j)
+  2. Fix publishReply swallowing exceptions
+  3. Fix signal race condition on IN_PROGRESS flows
+  4. Add approval audit trail (who/when/where)
+  5. Add flow-level deadline/timeout
+  6. Add OpenTelemetry tracing integration
+
+P2 (Medium Priority — Backlog):
+  1. Refactor FlowOrchestrator from 1336-line god class
+  2. Add @RecoverOn test coverage
+  3. Fix hardcoded 72h vs configurable approvalExpiryHours mismatch
+  4. Add API versioning to REST endpoints
+  5. Add health check for vendor API connectivity
+  6. Convert docuseal status strings to enums
+  7. Add test for version conflict retry loop in FlowOrchestrator
+  8. Add graceful shutdown hook
+  9. Consolidate FlowDefinitionScannerTest and StartupValidationTest
+
+P3 (Low Priority — Tech Debt):
+  1. Fix raw type warnings (KafkaTemplate, etc.)
+  2. Use builder pattern for FlowOrchestrator instead of setter injection
+  3. Add JSON Schema validation for Kafka messages
+  4. Use constant-time comparison for API key
+  5. Make Kafka message DTOs immutable
+  6. Add Javadoc to public library API
+  7. Update Kafka/Zookeeper images to latest
+
+================================================================================
+END OF ASSESSMENT
+================================================================================

@@ -1,0 +1,1596 @@
+================================================================================
+DEEPSEEK V4 PRO - CODE ASSESSMENT (REVISED v3)
+Project: Spring Orchestrator
+Date: 2026-05-25
+Revision: 3 (second round of code changes evaluated)
+================================================================================
+
+CHANGE LOG — FIXES ACROSS REVISIONS
+------------------------------------
+
+REVISION 2 FIXES (previous round):
+  [FIXED] Q1  — String literal "COMPLETED" → StepOutcome.COMPLETED.name()
+                 in OrchestratorKafkaConsumer.java:95
+  [FIXED] 2.2 — SignatureRejectedHandler race: now uses atomic findAndModify
+                 with signingStatus.ne(SIGNED) guard
+  [FIXED] W3  — WebhookController now wraps handler.handle() in try-catch
+                 and always returns 200 to the vendor
+
+REVISION 3 FIXES (this round):
+  [FIXED] I3/R4 — WAITING_RETRY guard in doExecuteStepInner (FlowOrchestrator.java:187-195)
+                   Crash after handleRetryableFailure no longer causes immediate
+                   re-execution; scheduler respects nextRetryAt backoff.
+  [FIXED] SIG-BUG — drainPendingSignals now runs BEFORE saveFlowWithRetry
+                     (FlowOrchestrator.java:262-267). Signals $pushed to MongoDB
+                     between flow load and save are drained atomically before the
+                     in-memory flow is persisted, preventing the deterministic
+                     signal overwrite bug.
+  [FIXED] S1 — handlePermanentFailure now sets COMPENSATING instead of FAILED
+                before calling runCompensation() (FlowOrchestrator.java:1232-1237).
+                Crash during compensation is now recoverable.
+  [FIXED] S1 — markDeadLettered now sets COMPENSATING instead of FAILED before
+                runCompensation() (FlowOrchestrator.java:389). Same fix as above.
+  [FIXED] S2/S4/S5 — recoverStuckCompensation added to StaleFlowRecoveryService
+                       (StaleFlowRecoveryService.java:394-447). Detects flows stuck
+                       in COMPENSATING or CANCELLING status past staleThresholdMinutes,
+                       re-runs compensation via retryCompensation() or cancellation
+                       via cancelFlow(). Uses batch claiming pattern.
+  [FIXED] retryCompensation now accepts COMPENSATING status in addition to
+           COMPENSATION_FAILED (FlowOrchestrator.java:798-799), enabling recovery
+           scanner to re-run compensation on stuck COMPENSATING flows.
+  [FIXED] runCompensation empty completedSteps guard (FlowOrchestrator.java:744-749):
+           if no completed steps exist, marks FAILED directly instead of staying
+           in COMPENSATING status.
+
+  [NEW]   Tests added for WAITING_RETRY guard and COMPENSATING-before-FAILED
+          behavior (FlowOrchestratorTest.java:946-1068)
+
+CRASH SCENARIO STATUS CHANGE SUMMARY (after all revisions):
+  PREVIOUSLY BROKEN → NOW FIXED: S1, S2, S3, S4 (4 scenarios)
+  PREVIOUSLY DEGRADED → NOW OK: I3, R4, SIG-BUG, W3 (4 scenarios)
+  STILL BROKEN: I2, F5, G2 (3 scenarios)
+  NEWLY DEGRADED: S5 (recovery wired but cancelFlow rejects CANCELLING)
+
+PUSHBACK LOG — INVALID ITEMS REMOVED
+--------------------------------------
+The following 4 issues were flagged as invalid and removed from the assessment:
+
+  [REMOVED] 1.2 (B2) — pendingSignals re-persist: Fixed by drain-before-save swap
+            (revision 3). drainPendingSignals now runs BEFORE saveFlowWithRetry,
+            so signals are atomically drained from MongoDB before the in-memory
+            flow is persisted. The re-persist window is eliminated.
+
+  [REMOVED] 1.3 (B3) — advanceAfterReply cancelled guard: Code at line 307-308
+            already checks CANCELLED and CANCELLING status. This was a misread
+            of the code in the initial assessment.
+
+  [REMOVED] 1.4 (B5) — version conflict domain field loss: The Jackson
+            full-serialization fallback at lines 1093-1111 converts the entire
+            flow to a Map and performs a full $set if all 3 optimistic lock
+            retries fail. Additionally, with drain-before-save, signal
+            modifications are applied before save, reducing concurrent
+            modification conflicts. Domain fields are preserved.
+
+  [REMOVED] 1.5 — StateMachine shared state: The alternative-frameworks modules
+            are reference implementations for comparison, not production code.
+            Issues in these modules are noted in Section 9 only.
+
+  [REMOVED] 6.1 — Jackson groupId: tools.jackson.core is the CORRECT Maven
+            groupId for Jackson 3.x (renamed from com.fasterxml.jackson.core).
+            The POM is correct. This was a Jackson 2.x assumption error.
+
+EXECUTIVE SUMMARY
+-----------------
+Spring Orchestrator is a resilient multi-step workflow orchestration library built
+on Spring Boot 4.0.5, MongoDB 7.0, and Kafka 3.x. It combines Saga orchestration,
+transactional outbox, and Kafka non-blocking retry patterns. The project includes
+a production reference service (Digital Instrument Service) integrating with the
+Enigio trace:original vendor API, plus alternative framework implementations.
+
+Overall the codebase is well-structured with clear separation between the library
+(orchestrator-starter) and application services. However, several high-severity
+bugs and missing safety guards were identified, particularly around concurrent
+flow execution, state persistence races, and error handling gaps.
+
+================================================================================
+SECTION 1: CRITICAL BUGS (High Severity)
+================================================================================
+
+1.1 Parallel Step Completion Check Reads Wrong Collection
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/flow/FlowOrchestrator.java
+    Lines: ~1236-1246
+    Problem: markParallelStepCompleted() adds the parallel step name to
+    `completedParallelSteps` but then checks `flow.getCompletedSteps()` (a
+    different set) for the "all siblings done" condition. Parallel steps are
+    only added to `completedSteps` via markStepCompleted(), which is NOT called
+    for parallel steps in reply mode. This means join points will wait forever
+    because the all-done check never passes.
+    Fix: Change the check to query `flow.getCompletedParallelSteps()` or
+    ensure parallel steps are also added to `completedSteps`.
+
+1.2 advanceAfterReply Missing Cancelled Status Guard — [INVALID: code checks CANCELLED/CANCELLING]
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/flow/FlowOrchestrator.java
+    Lines: 307-308
+    Status: INVALID. Current code at line 307-308 already checks CANCELLED,
+    CANCELLING, COMPLETED, and FAILED. This was a misread of the code in the
+    original assessment.
+
+1.3 claimStaleFlows Does Not Verify Status During Claim
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/recovery/StaleFlowRecoveryService.java
+    Lines: ~278-283
+    Problem: The claim updateMulti in republishBatch() only checks
+    `claimedBy: null` but not the actual flow status (WAITING_RETRY/PARKED).
+    Between the candidate query and the claim, the flow could be completed
+    or failed by another pod, and the claim succeeds anyway.
+    Fix: Add `.and("status").is(expectedStatus.name())` to the claim query
+    (similar to the IN_PROGRESS recovery path).
+
+================================================================================
+SECTION 2: RACE CONDITIONS & CONCURRENCY ISSUES (Medium Severity)
+================================================================================
+
+2.1 CAS Bypass When mongoTemplate Is Null
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/flow/FlowOrchestrator.java
+    Lines: ~951-955
+    Problem: When mongoTemplate is null, `modified` is hardcoded to 1,
+    completely bypassing the duplicate-send prevention check. In that path,
+    a concurrent flow could have already been advanced.
+    Fix: Even without mongoTemplate, should check if the flow was already
+    advanced by another thread.
+
+2.2 SignatureRejectedHandler Can Overwrite SIGNED Status — [FIXED]
+    File: digital-instrument-service/src/main/java/com/dis/instrument/inbound/webhook/SignatureRejectedHandler.java
+    Lines: 34-40
+    Status: FIXED in current code. Now uses atomic findAndModify with
+    `signingStatus.ne(SigningStatus.SIGNED.name())` guard instead of the
+    previous two-step updateFirst + findOne pattern.
+    Remaining note: the handler still calls notificationPublisher.notifyPhaseComplete()
+    synchronously (.get() in NotificationService), which blocks the webhook
+    thread but is now safe from 500 propagation due to the try-catch in
+    WebhookController.
+
+2.3 Dashboard Counter Race Condition (volatile int)
+    File: examples/dashboard/src/main/java/com/enigio/orchestrator/dashboard/controller/DashboardApiController.java
+    Lines: ~202-204, ~271
+    Problem: sustainedLaunched++ and sustainedErrors++ are called from
+    virtual threads but use `volatile int` instead of `AtomicInteger`.
+    volatile guarantees visibility but NOT atomicity for read-modify-write.
+    Fix: Change to AtomicInteger and use incrementAndGet().
+
+================================================================================
+SECTION 3: ERROR HANDLING GAPS (Medium Severity)
+================================================================================
+
+3.1 Empty Catch Block for MongoDB Offset Save Failure
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/autoconfigure/OrchestratorAutoConfiguration.java
+    Lines: ~482-483
+    Problem: catch (Exception e) { } -- completely empty catch block. If
+    the MongoDB offset store fails to save offsets, DC failover recovery
+    is silently broken with zero indication.
+    Fix: At minimum, add a debug/warn log and consider incrementing a
+    failure counter metric.
+
+3.2 convertPayload Returns Wrong Type on Conversion Failure
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/flow/FlowOrchestrator.java
+    Lines: ~554-564
+    Problem: When objectMapper.convertValue() fails, the raw (wrong-typed)
+    payload is returned. The reflection-based handler invocation will receive
+    an object of the wrong type, causing cryptic ClassCastException deep
+    in Method.invoke().
+    Fix: Throw a clear exception or return null with a descriptive log.
+
+3.3 deserializePayload Returns Null Silently
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/flow/FlowOrchestrator.java
+    Lines: ~567-576
+    Problem: If a queued signal's payload cannot be deserialized, null is
+    returned and passed to the signal handler. If the handler expects
+    non-null, this causes NPE.
+    Fix: Log and skip the signal (don't invoke the handler with null).
+
+3.4 Webhook Handler Exceptions Propagate to Vendor with HTTP 500
+    File: digital-instrument-service/src/main/java/com/dis/instrument/inbound/WebhookController.java
+    Line: ~117
+    Problem: handler.handle() is called without try-catch. If processing
+    fails (e.g., Kafka down), the RuntimeException returns HTTP 500 to
+    Enigio, causing the vendor to retry endlessly. Webhooks should always
+    return 200 on first delivery even if internal processing fails.
+    Fix: Wrap in try-catch, log the error, return 200. Use a dead-letter
+    queue or outbox for the failed notification.
+
+3.5 No Global @ControllerAdvice for Standardized Error Responses
+    File: digital-instrument-service (not found)
+    Problem: Each controller handles errors differently -- some return
+    ErrorResponse, some return plain Maps, some return
+    ResponseEntity.internalServerError(). No centralized logging of
+    unhandled exceptions.
+    Fix: Create a @ControllerAdvice class that catches common exceptions
+    and returns consistent ErrorResponse JSON.
+
+3.6 updateFlowPartial Fallback Ignores Most Fields
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/flow/FlowOrchestrator.java
+    Lines: ~1037-1048
+    Problem: The fallback path only handles status, currentStep, and
+    updatedAt. Other fields like completedParallelSteps, retryCount,
+    nextRetryAt passed via the Map are silently dropped.
+    Fix: Handle all possible fields or use a dynamic approach.
+
+3.7 findFlows Returns Empty List Silently on Missing MongoTemplate
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/flow/FlowOrchestrator.java
+    Line: ~1387-1388
+    Problem: Returns List.of() when mongoTemplate or entityClass is null.
+    No log or indication that the search couldn't be performed. Callers
+    think there are no results when the search wasn't executed.
+    Fix: Throw IllegalStateException or log a warning.
+
+================================================================================
+SECTION 4: PERFORMANCE ISSUES
+================================================================================
+
+4.1 OutboxPublisher Blocks Scheduler Thread for Up to 30 Seconds
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/outbox/OutboxPublisher.java
+    Lines: ~95-100
+    Problem: CompletableFuture.allOf().get(30, TimeUnit.SECONDS) blocks the
+    @Scheduled thread. If one send hangs (broker partition leader election),
+    the entire outbox pipeline is stalled for 30s per batch.
+    Fix: Use orTimeout() with a shorter timeout per-send and collect results
+    asynchronously.
+
+4.2 OrchestratorHealthIndicator Makes 2N Count Queries Per Health Check
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/autoconfigure/OrchestratorHealthIndicator.java
+    Lines: ~38-52
+    Problem: Makes 2N count queries (N = number of flow types) for
+    IN_PROGRESS and COMPENSATION_FAILED counts. Kubernetes probes fire
+    every 10-30 seconds. With 5 flow types, that's 10 MongoDB count
+    queries every probe cycle.
+    Fix: Cache counts briefly (e.g., 5-second TTL) or use a single
+    aggregation pipeline.
+
+4.3 findChildFlow -- O(N*M) Nested Iteration
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/flow/FlowDefinition.java
+    Lines: ~283-291
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/flow/FlowOrchestrator.java
+    Lines: ~630-647
+    Problem: Both findChildFlow and cancelChildFlows iterate through ALL
+    flow type descriptors for each child. With 10 flow types and 5 children,
+    that's 50 repository lookups. Cancel repeats the same pattern.
+    Fix: Cache the flow-type-to-repository mapping or add a child-flow-type
+    field to the child entity.
+
+4.4 Multiple VirtualThreadPerTaskExecutor Instances Created
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/flow/FlowOrchestrator.java
+    Lines: ~94-95
+    Problem: Each FlowOrchestrator instance creates a new virtual thread
+    executor. In a multi-flow app with 5 flow types, 5 executors are created.
+    Fix: Share a single executor across all FlowOrchestrator instances.
+
+4.5 Blocking Kafka Sends in Webhook Path
+    File: digital-instrument-service/src/main/java/com/dis/instrument/inbound/webhook/FlowReactivator.java
+    Line: ~44
+    File: digital-instrument-service/src/main/java/com/dis/instrument/service/NotificationService.java
+    Line: ~80
+    Problem: Synchronous kafkaTemplate.send(...).get() in the webhook
+    request path means every webhook's response time is vendor_network +
+    db_query + kafka_send_latency. FlowReactivator has NO outbox fallback
+    unlike FlowController.reactivateFlow().
+    Fix: Use async sends with callbacks. Return 200 to the vendor immediately
+    and process Kafka sends asynchronously. Add outbox fallback to FlowReactivator.
+
+4.6 All Additional Documents Decoded Into Memory at Once
+    File: digital-instrument-service/src/main/java/com/dis/instrument/flow/EnigioInstrumentFlow.java
+    Lines: ~362-369
+    Problem: For N additional documents (each up to 10MB), all are decoded
+    into byte[] in memory. With 10 documents at 10MB each, that's 100MB
+    heap pressure in a single step.
+    Fix: Upload documents one at a time in streaming fashion, or use
+    MongoDB GridFS.
+
+================================================================================
+SECTION 5: SECURITY CONCERNS
+================================================================================
+
+5.1 Hardcoded API Key in Docker Compose
+    File: infra/docker-compose.yml
+    Lines: ~228, ~281
+    Problem: DIS_AUTH_API_KEY: soak-test-key is committed to source control.
+    Also VENDOR_ENIGIO_BASE_URL uses the same key. Visible in docker inspect.
+    Fix: Move to a .env file (gitignored) or Docker secrets.
+
+5.2 MongoDB No Authentication in Docker Compose
+    File: infra/docker-compose.yml
+    Lines: ~4-8
+    Problem: MongoDB started with no MONGO_INITDB_ROOT_USERNAME/PASSWORD.
+    All connection strings use mongodb://mongodb:27017 with no credentials.
+    Fix: Add root credentials via environment variables and update all
+    SPRING_MONGODB_URI connection strings.
+
+5.3 No Size Limit on Signal Payloads via REST API
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/autoconfigure/FlowEndpointAutoConfiguration.java
+    Lines: ~220-243
+    Problem: The signal payload from the HTTP request body is passed directly
+    to orch.signal() and serialized to JSON for MongoDB storage. An attacker
+    could send arbitrarily large payloads, bloating MongoDB documents and
+    exhausting memory.
+    Fix: Add a configurable max payload size validation.
+
+5.4 No PII Redaction in Step Execution Log Snapshots
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/flow/FlowOrchestrator.java
+    Lines: ~1411-1422
+    Problem: When includeFlowStateInLogs is true, the entire flow entity is
+    JSON-serialized and stored in orchestrator_step_log with no mechanism
+    to redact sensitive fields.
+    Fix: Add a @Sensitive annotation or configurable field exclusion.
+
+5.5 Webhook Endpoint No Rate Limiting
+    File: digital-instrument-service/src/main/java/com/dis/instrument/config/SecurityConfig.java
+    Line: ~41
+    Problem: /webhooks/** is permitAll() with no rate limiting. An attacker
+    could flood the endpoint with valid-looking traceOriginalIds, consuming
+    DB resources via findOne queries.
+    Fix: Add rate limiting (e.g., Bucket4j or Resilience4j RateLimiter).
+
+5.6 No HTTPS Enforcement or HSTS Headers
+    File: digital-instrument-service/src/main/java/com/dis/instrument/config/SecurityConfig.java
+    Problem: No requiresChannel().anyRequest().requiresSecure(), no HSTS
+    headers. The service accepts plain HTTP in production profiles.
+    Fix: Add HTTPS enforcement or document that TLS termination happens
+    at the ingress/load balancer.
+
+5.7 Hardcoded API Key in DocuSeal Service Config
+    File: docuseal-signing-service/src/main/resources/application.yml
+    Line: ~20
+    Problem: api-key has a default value that looks like a real DocuSeal
+    API key, committed to source control.
+    Fix: Remove the default value; make the env var required without a
+    fallback. Also remove personal email addresses (lines ~27-28).
+
+================================================================================
+SECTION 6: INFRASTRUCTURE & CONFIGURATION ISSUES
+================================================================================
+
+6.1 Jackson Group ID — [INVALID: tools.jackson.core is correct for Jackson 3.x]
+    File: orchestrator-starter/pom.xml
+    Status: INVALID. Jackson 3.x renamed its Maven groupId from
+    com.fasterxml.jackson.core to tools.jackson.core. The current POM
+    is correct. This was an error in the assessment (assumed Jackson 2.x).
+
+6.2 wget Not Available in JRE Alpine Docker Images
+    File: infra/docker-compose.yml
+    Lines: ~126, ~151, ~177, ~203, ~235, ~290
+    Problem: Health checks use wget, but the eclipse-temurin:21-jre-alpine
+    base image does NOT include wget. All health checks will fail silently.
+    Fix: Install curl or wget in the Dockerfile, or use Java-based health
+    checks via Spring Boot Actuator's readiness probe.
+
+6.3 curl Not Available in nginx:alpine
+    File: infra/docker-compose.yml
+    Line: ~255
+    Problem: The nginx healthcheck uses curl, but nginx:alpine does not
+    include curl by default. Health check always fails.
+    Fix: Use wget -qO- (available in nginx:alpine) instead of curl.
+
+6.4 Kafka Brokers 2 and 3 Missing Health Checks
+    File: infra/docker-compose.yml
+    Lines: ~66-114
+    Problem: Only kafka-1 has a healthcheck. kafka-2 and kafka-3 have none.
+    Dependent services can only depend on kafka-1 with condition: service_healthy.
+    Fix: Add healthcheck blocks to kafka-2 and kafka-3.
+
+6.5 No JVM Memory Flags in Dockerfile
+    File: infra/Dockerfile
+    Line: ~4
+    Problem: ENTRYPOINT ["java", "-jar", "/app.jar"] has no -Xmx, -Xms, or
+    -XX:MaxRAMPercentage flags. The JVM may not be container-aware.
+    Fix: Add -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0.
+
+6.6 Dockerfile Runs as Root
+    File: infra/Dockerfile
+    Lines: ~1-4
+    Problem: No USER directive. Container runs as root.
+    Fix: Add a non-root user: RUN addgroup -S app && adduser -S app -G app
+    followed by USER app.
+
+6.7 TTL Values Mismatch: README vs create-indexes.js
+    File: orchestrator-starter/README.md (lines ~1253-1256) vs
+    infra/create-indexes.js (lines ~81, ~91, ~113)
+    Problem: The README documents outbox TTL as 24h (but code has 7 days),
+    processed events as 7 days (but code has 30 days), step log as 30 days
+    (but code has 90 days). Complete mismatch between documentation and code.
+    Fix: Reconcile all TTL values. Verify against the configuration reference
+    in the README as well.
+
+6.8 kafka-b Has Auto-Create Topics Enabled (Multi-DC)
+    File: infra/docker-compose-multi-dc.yml
+    Line: ~135 vs ~56
+    Problem: kafka-a has KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false" while
+    kafka-b has "true". Inconsistent. Topics may be auto-created on standby
+    cluster with unexpected partition count or RF=1.
+    Fix: Set to "false" on kafka-b to match kafka-a.
+
+6.9 dis-2 Depends on mock-vendor (Defeats Failover in Multi-DC)
+    File: infra/docker-compose-multi-dc.yml
+    Lines: ~160-162
+    Problem: dis-2 (standby DC-2) has depends_on: mock-vendor. If DC-1 is
+    down, mock-vendor is unavailable, so dis-2 can't start -- defeating the
+    entire purpose of the failover setup.
+    Fix: Either deploy a separate mock-vendor in DC-2 or remove this
+    dependency and handle the vendor connection gracefully at runtime.
+
+6.10 Redundant MongoDB Index (status)
+    File: infra/create-indexes.js
+    Lines: ~27-30, ~45-48
+    Problem: The compound index {status:1, updatedAt:1} already covers
+    queries on {status:1} alone (prefix rule). The separate {status:1}
+    index is redundant, wasting storage and write overhead.
+    Fix: Remove the single-field status_idx.
+
+6.11 No Resource Limits on Docker Services
+    File: infra/docker-compose.yml -- all services
+    Problem: No deploy.resources.limits or mem_limit on any service. Kafka
+    is known to be memory-hungry and can starve other services.
+    Fix: Add resource limits for all services, especially Kafka.
+
+6.12 No Restart Policy on Docker Services
+    File: infra/docker-compose.yml -- all services
+    Problem: No restart: directive. If a container exits (crash), it stays down.
+    Fix: Add restart: unless-stopped to critical services.
+
+================================================================================
+SECTION 7: CODE QUALITY ISSUES
+================================================================================
+
+7.1 String Literals Instead of Enum Constants — [FIXED]
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/kafka/OrchestratorKafkaConsumer.java
+    Line: 95
+    Status: FIXED. Now uses StepOutcome.COMPLETED.name() and
+    StepOutcome.RECOVERED.name() instead of string literals
+    "COMPLETED" and "RECOVERED".
+
+7.2 Magic String "default" Scattered Across Codebase
+    Files: FlowOrchestrator.java, OrchestratorMetrics.java,
+    OrchestratorAutoConfiguration.java
+    Problem: The magic string "default" is used as a fallback flow type
+    name in multiple places. Should be a constant.
+    Fix: Define public static final String DEFAULT_FLOW_TYPE = "default".
+
+7.3 FlowOrchestrator Is 1431+ Lines (Monolithic)
+    File: orchestrator-starter/src/main/java/com/orchestrator/starter/flow/FlowOrchestrator.java
+    Problem: Handles step execution, signals, child workflows, cancellation,
+    compensation, replay, batch operations, persistence, and logging. Violates
+    Single Responsibility Principle.
+    Fix: Extract into separate classes: StepExecutor, SignalManager,
+    ChildFlowManager, CompensationRunner, ReplayService.
+
+7.4 Duplicate reactivation Logic
+    Files: digital-instrument-service/.../FlowReactivator.java:32-49 vs
+    digital-instrument-service/.../FlowController.java:306-340
+    Problem: Both classes construct the same StepCommandMessage and send to
+    Kafka. Only FlowController has the outbox fallback. FlowReactivator is
+    missing it.
+    Fix: Consolidate into FlowReactivator with the outbox fallback;
+    FlowController delegates to it.
+
+7.5 Broad @SuppressWarnings Instead of Fixing Raw Types
+    Files: FlowController.java, FlowReactivator.java, NotificationService.java
+    Problem: Widespread use of @SuppressWarnings("rawtypes") and
+    @SuppressWarnings("unchecked") for KafkaTemplate and FlowOrchestrator
+    raw types. Masks real type safety issues.
+    Fix: If the library uses raw types, wrap them in typed adapter classes.
+
+7.6 Inconsistent Exception Retry Scope Across Alternative Frameworks
+    Files: saga-outbox/KafkaRetryTopicConfig.java:47 (RetryableException),
+    saga-outbox/KafkaRetryTopicConfig.java:62 (RuntimeException),
+    statemachine/SmKafkaRetryTopicConfig.java:43 (RuntimeException),
+    spring-integration/SiKafkaRetryConfig.java:43 (RetryableException)
+    Problem: SM retries all RuntimeExceptions including NPEs and bugs. Saga
+    replies retry non-retryable exceptions. No consistency across patterns.
+    Fix: Standardize on RetryableException.class for all retry configs.
+    Never retry on RuntimeException.
+
+7.7 Inconsistent MongoDB Collection Naming
+    Problem: Collections named document_flows, saga_step_logs, sm_step_logs,
+    state_machine_contexts, outbox_events, processed_events, signing_flows,
+    enigio_flows, parallel_flows, orchestrator_step_log, orchestrator_outbox,
+    orchestrator_processed_events. No consistent prefix pattern.
+    Fix: Standardize on an orchestrator_ prefix or configurable namespace.
+
+7.8 Hardcoded flow type string "enigio-instrument" in 4+ places
+    Files: FlowController.java:59,314; FlowReactivator.java:42;
+    SeedDataInitializer.java:138
+    Fix: Define public static final String FLOW_TYPE = "enigio-instrument"
+    in EnigioInstrumentEntity.
+
+7.9 Priority Stored as String Instead of Enum
+    File: digital-instrument-service/.../model/EnigioInstrumentEntity.java:62
+    Problem: priority is String but PriorityUpdate.priority is the Priority
+    enum. Entity should use the enum type directly.
+    Fix: Change to Priority enum type.
+
+================================================================================
+SECTION 8: MISSING TEST COVERAGE
+================================================================================
+
+8.1 orchestrator-starter Test Gaps:
+    - No tests for REST API endpoints (FlowEndpointAutoConfiguration - 10+ endpoints)
+    - No tests for OrchestratorAutoConfiguration bean wiring
+    - No tests for IndexInitializer (TTL index setup)
+    - No tests for TopicValidator (Kafka connectivity)
+    - No tests for offset recovery listeners (MongoOffsetRecoveryListener,
+      TimestampOffsetRecoveryListener, MongoOffsetStore)
+    - No tests for OrchestratorHealthIndicator
+    - No tests for FlowReplayTestRunner itself
+    - No tests for FlowDefinition base class methods (startChildFlow,
+      startChildFlowAsync, awaitChildren)
+    - No tests for redeliverPollingFlows or redeliverParkedSafetyNet
+    - No tests for signal with typed payloads (all use null)
+
+8.2 digital-instrument-service Test Gaps:
+    - No unit tests for WebhookController (payload validation, unknown types)
+    - No unit tests for any webhook handler (PartiallySignedHandler,
+      FullySignedHandler, SignatureRejectedHandler, TransferHandler,
+      TransferRejectedHandler, AuditEventHandler)
+    - No unit tests for FlowController (approval, cancellation scenarios)
+    - No unit tests for VendorSyncController (partial failures, timeouts)
+    - No unit tests for AdditionalDocumentController
+    - No unit tests for NotificationService (dedup, Kafka failure)
+    - No unit tests for FlowReactivator
+    - No unit tests for SecurityConfig
+    - No tests at all for BatchInstrumentFlow
+
+8.3 Modules With Zero Tests:
+    - mock-vendor (0 tests)
+    - docuseal-signing-service (0 tests)
+    - examples/dashboard (0 tests)
+    - alternative-frameworks/common (0 tests)
+    - alternative-frameworks/saga-outbox (0 tests)
+    - alternative-frameworks/statemachine (0 tests)
+    - alternative-frameworks/spring-integration (0 tests)
+    Total: 7 out of 8 non-library modules have zero tests.
+
+================================================================================
+SECTION 9: ADDITIONAL ISSUES IN ALTERNATIVE FRAMEWORKS
+================================================================================
+
+9.1 Manual JSON Construction (Brittle)
+    File: alternative-frameworks/saga-outbox/.../SagaOrchestrator.java
+    Line: ~150
+    Problem: "{\"error\": \"" + errorMessage.replace("\"", "'") + "\"}"
+    produces invalid JSON when error messages contain backslashes or
+    control characters.
+    Fix: Use objectMapper.writeValueAsString(Map.of("error", errorMessage)).
+
+9.2 Potential Message Loss in Spring Integration Error Handler
+    File: alternative-frameworks/spring-integration/.../KafkaInboundConfig.java
+    Lines: ~79-94
+    Problem: Non-RetryableException errors throw new RuntimeException(cause)
+    which is NOT caught by the retry config (only RetryableException), so
+    the message is silently lost without reaching DLT.
+    Fix: Mark the flow as FAILED before throwing, or ensure a DLT handler
+    catches all exception types.
+
+9.3 No Default Case in IntegrationFlow Step Switch
+    File: alternative-frameworks/spring-integration/.../EnigioFlowConfig.java
+    Lines: ~65-71
+    Problem: The switch(step) has no default case. If a new FlowStep value
+    is added, the flow silently does nothing.
+    Fix: Add default -> throw new IllegalStateException("Unknown step: " + step).
+
+9.4 Outbox Publisher Breaks on First Failure
+    File: alternative-frameworks/saga-outbox/.../OutboxPublisher.java
+    Line: ~50
+    Problem: break on failure stops all remaining events in the batch.
+    A single transient Kafka error blocks all subsequent publishes.
+    Fix: Use continue instead of break, with per-event error tracking.
+
+================================================================================
+SECTION 10: SUMMARY
+================================================================================
+
+Total Issues Found: 51 (refined — 4 invalid items removed per pushback)
+- Critical Bugs: 3 (B1 (parallel wrong set), B3 (stale claim no status check),
+    and remaining minor bugs B4 (CAS bypass), B6 (FlowDefinitionScanner scan
+    mixes steps), B7 (advanceAfterReply in reply mode guard) still present)
+- Race Conditions: 1 (S5 — recoverStuckCompensation calls cancelFlow which
+    rejects CANCELLING status)
+- Error Handling Gaps: 7 (all still present — sections 3.1-3.7)
+- Performance Issues: 6 (all still present — sections 4.1-4.6)
+- Security Concerns: 7 (all still present — sections 5.1-5.7)
+- Infrastructure/Config Issues: 11 (was 12 — 6.1 Jackson groupId INVALID)
+- Code Quality Issues: 8 (7.1 fixed; rest still present)
+- Test Coverage Gaps: 11 (all still present — section 8)
+- Alternative Frameworks Issues: 3 (was 4 — statemachine shared state removed
+    since alternative frameworks are not production code)
+
+Changes Across All Revisions:
+  FIXED (rev2): Q1 (enum constants), 2.2 (SignatureRejectedHandler race), W3 (webhook 200)
+  FIXED (rev3): I3/R4 (WAITING_RETRY guard), SIG-BUG (drain-before-save order),
+                S1 (COMPENSATING before compensation), S2/S3/S4 (recoverStuckCompensation),
+                retryCompensation accepts COMPENSATING, empty completedSteps guard
+  NEW BUG (rev3): S5 — recoverStuckCompensation calls cancelFlow() for CANCELLING
+                status, but cancelFlow rejects CANCELLING. Recovery is wired but
+                doesn't work for cancellation. Fix: cancelFlow must accept CANCELLING
+                or recoverStuckCompensation must call runCancellation() directly.
+
+Highest Priority Actions (revised):
+1. Fix S5: cancelFlow must accept CANCELLING status so recoverStuckCompensation
+   can re-run cancellation (or recoverStuckCompensation should call
+   runCancellation() directly, bypassing cancelFlow's status check)
+2. Fix I2: make markStepCompleted + saveFlowWithRetry atomic
+   (use MongoDB $addToSet for completedSteps in a single updateFirst call)
+3. Fix G2: drainPendingSignals should process-then-clear per signal
+   (use $pull for individual removal after successful processing, not
+   findAndModify to clear all upfront)
+4. Fix F5: recovery exhaustion should run compensation before marking FAILED
+5. Fix B1: parallel step completion check reads wrong set
+   (completedSteps vs completedParallelSteps confusion)
+6. Fix B4: CAS bypass in no-MongoTemplate path (advanceToNextStep)
+7. Add MongoDB authentication to docker-compose
+8. Fix wget/curl health check issues in Docker images
+9. Reconcile TTL values between README and create-indexes.js
+10. Add tests for webhook handlers and webhook concurrency scenarios
+
+================================================================================
+SECTION 11: CRASH RESILIENCE ANALYSIS
+================================================================================
+This section traces EVERY write point in the system and asks: "What if the
+process crashes here?" Each scenario is verified against idempotency, outbox,
+saga compensation, retry architecture, and failover recovery guarantees.
+
+11.0 METHODOLOGY
+----------------
+Crash points are ordered by the system's architectural layers. For each:
+  - SCENARIO: exact line range and what happens
+  - VIOLATION: which guarantee(s) are at risk
+  - RECOVERY: does the system self-heal?
+  - SEVERITY: BROKEN (guarantee violated), DEGRADED (recovery exists but delayed
+    or incomplete), OK (fully self-healing)
+
+================================================================================
+11.1 IDEMPOTENCY LAYER CRASH SCENARIOS
+================================================================================
+
+The idempotency layer uses a single-query insert pattern: try-insert with
+DuplicateKeyException catch. Event IDs are UUIDs generated per Kafka message.
+
+SCENARIO I1: Crash between step execution success and tryProcess(eventId)
+  File: OrchestratorKafkaConsumer.java:64-70
+  Path: onStepCommand → executeStep (success: flow advanced, next step
+        published) → CRASH before tryProcess(eventId)
+  Analysis:
+    On Kafka redelivery (same offset not committed), eventId is checked via
+    isProcessed() → returns false (never marked). Step executes again.
+    FlowOrchestrator.doExecuteStepInner at line 208 checks:
+      flow.getCompletedSteps().contains(stepName) → TRUE (was marked)
+      currentStep != stepName → TRUE (was advanced by advanceToNextStep)
+    Result: returns early ("skip"). Step is NOT re-executed.
+    
+    EDGE CASE: If the step was marked completed but advancement failed
+    (crash between markStepCompleted at line 255 and advanceToNextStep at
+    line 259/267), the flow's currentStep equals the stepName. At line 214:
+    "Step completed but flow still here → fall through to execute."
+    The step handler is re-invoked. Correctness depends on handler idempotency.
+    This is documented as a requirement ("step handlers are idempotent" at
+    line 215 comment), but NOT ENFORCED by the library.
+  VIOLATION: None (with idempotent handlers). Without idempotent handlers:
+    duplicate side effects (API calls, emails, DB writes).
+  RECOVERY: Automatic via Kafka redelivery + idempotency check.
+  SEVERITY: OK (handler idempotency is a documented design contract).
+
+SCENARIO I2: Crash between markStepCompleted and saveFlowWithRetry
+  File: FlowOrchestrator.java:255-256
+  Path: flow.getCompletedSteps().add(stepName) succeeds in-memory →
+        CRASH before saveFlowWithRetry persists to MongoDB
+  Analysis:
+    In-memory completedSteps set has the step, but MongoDB does NOT.
+    On redelivery: flow loaded from MongoDB → completedSteps does NOT
+    contain stepName → falls through to execute step again.
+    Step handler runs AGAIN on a flow where the step wasn't saved as
+    completed. This can cause: duplicate API calls, duplicate emails,
+    overwritten webhook-updated fields.
+    CONCRETE EXAMPLE: sendForSigning at EnigioInstrumentFlow.java:173
+    resets signaturesRequired (line 188) and signaturesReceived (line 189).
+    If a PARTIALLY_SIGNED webhook already incremented signaturesReceived,
+    this re-execution OVERWRITES the webhook's progress with 0.
+  VIOLATION: Idempotency contract violated. State corruption possible.
+  RECOVERY: None. The step is silently re-executed with potentially
+    destructive side effects.
+  SEVERITY: BROKEN — markStepCompleted and saveFlowWithRetry must be
+    atomic (either both happen or neither). Current in-memory-then-save
+    pattern has a crash window.
+
+SCENARIO I3: Crash during retry — between handleRetryableFailure and throw — [FIXED]
+  File: FlowOrchestrator.java:1186-1208 (handleRetryableFailure), 187-195 (guard)
+  Path: updateFlowPartial sets WAITING_RETRY status, retryCount, nextRetryAt
+        → CRASH before throwing RetryableStepException
+  PREVIOUS ANALYSIS: Flow status was WAITING_RETRY, but doExecuteStepInner
+    didn't check it → step executed immediately on re-delivery, defeating
+    backoff and inflating retry count.
+  CURRENT ANALYSIS: New guard at lines 187-195 checks:
+      if (status == WAITING_RETRY && nextRetryAt.isAfter(Instant.now())) return;
+    The retry backoff is now honored! If crash happens, Kafka re-delivers the
+    message, but the guard detects future nextRetryAt and skips execution.
+    The scheduler (redeliverPollingFlows) will handle delivery at the correct
+    backoff time.
+  VIOLATION: None. Retry backoff preserved across crash recovery.
+  RECOVERY: Scheduler respects nextRetryAt timing. ✓
+  SEVERITY: OK — FIXED.
+
+SCENARIO I4: Crash in onStepCommand tryProcess success path (already marked)
+  File: OrchestratorKafkaConsumer.java:50-54
+  Path: isProcessed returns true → return (no-op)
+  Analysis: Already-processed message detected. Pure fast-path skip.
+    No state change, no side effects.
+  VIOLATION: None.
+  RECOVERY: N/A.
+  SEVERITY: OK.
+
+================================================================================
+11.2 OUTBOX LAYER CRASH SCENARIOS
+================================================================================
+
+The outbox guarantees at-least-once delivery: write event to MongoDB BEFORE
+publishing to Kafka. If crash before Kafka publish, outbox poller re-delivers.
+
+SCENARIO O1: Crash after flow save + outbox write in startFlow
+  File: FlowOrchestrator.java:124-129
+  Path: runInTransaction: save flow + writeOutboxEvent → CRASH before return
+  Analysis:
+    Flow saved with status IN_PROGRESS ✓
+    Outbox event written (published=false) ✓
+    No Kafka message sent (startFlow does NOT publish directly).
+    On restart: OutboxPublisher polls → finds unpublished event → publishes
+    to Kafka → marks published=true → message delivered. ✓
+  VIOLATION: None. Outbox guarantees delivery.
+  RECOVERY: Automatic via OutboxPublisher polling.
+  SEVERITY: OK.
+
+SCENARIO O2: Crash between MongoDB CAS (advanceToNextStep) and Kafka publish
+  File: FlowOrchestrator.java:940-1001
+  Path: Atomic CAS updates currentStep to nextStep in MongoDB →
+        CRASH before publishStepDirect (Kafka send)
+  Analysis:
+    Flow's currentStep is advanced in MongoDB to nextStep. ✓
+    No Kafka message sent. Flow is stuck at nextStep with status IN_PROGRESS
+    and updatedAt timestamp frozen.
+    On restart: StaleFlowRecoveryService.recoverFlowType finds flow with
+    status=IN_PROGRESS and updatedAt > staleThresholdMinutes → claims and
+    re-publishes the step. ✓
+  VIOLATION: None. Recovery scanner fills the gap.
+  RECOVERY: Automatic via StaleFlowRecoveryService (within staleThresholdMinutes).
+  SEVERITY: Degraded but self-healing (delay = staleThresholdMinutes, typically 5 min).
+
+SCENARIO O3: Crash during outbox fallback write (after Kafka publish failure)
+  File: FlowOrchestrator.java:978-1000
+  Path: publishStepDirect throws → outboxRepository.save starts →
+        CRASH during save
+  Analysis:
+    Flow advanced (CAS succeeded at line 940-951). ✓
+    Kafka publish failed. ✗
+    Outbox save failed (crash). ✗
+    Flow stuck at nextStep with status IN_PROGRESS.
+    Recovery: StaleFlowRecoveryService finds and re-publishes. ✓
+  VIOLATION: None. Recovery fills the gap.
+  RECOVERY: Automatic via recovery scanner.
+  SEVERITY: Degraded but self-healing.
+
+SCENARIO O4: Crash between Kafka publish and marking outbox as published
+  File: OutboxPublisher.java:66-103
+  Path: kafkaTemplate.send() succeeds (callback thenAccept fires) →
+        CRASH before repository.saveAll(events) persists published=true
+  Analysis:
+    Kafka message delivered. ✓
+    Outbox event still has published=false.
+    On restart: OutboxPublisher polls → finds same event → publishes AGAIN.
+    Consumer receives duplicate → idempotency check skips. ✓
+  VIOLATION: None. At-least-once semantics preserved.
+  RECOVERY: Automatic. Duplicate delivery handled by idempotency.
+  SEVERITY: OK.
+
+SCENARIO O5: Crash between saveFlow and publishReply (reply mode)
+  File: FlowOrchestrator.java:256,264-265
+  Path: saveFlowWithRetry persists step completion → CRASH before publishReply
+  Analysis:
+    Flow saved with step marked completed and currentStep updated. ✓
+    Reply message NOT published.
+    In reply mode, command consumer only executes the step; reply consumer
+    advances the flow. Since no reply was sent, the flow never advances.
+    However, currentStep WAS updated to nextStep by advanceToNextStep at line
+    940-951 (called from markParallelStepCompleted at line 1259).
+    Wait — in reply mode, markParallelStepCompleted is NOT called!
+    Looking at line 264-268:
+      if (replyEnabled) { publishReply(...); }
+      else { markParallelStepCompleted(flow, ...); }
+    In reply mode: only publishReply runs. markParallelStepCompleted does NOT.
+    But advanceToNextStep IS called later... let me re-trace.
+    
+    In reply mode: executeStepOnly → executeStep → doExecuteStepInner:
+    - Step succeeds → markStepCompleted (line 255)
+    - saveFlowWithRetry (line 256)
+    - drainPendingSignals (line 259)
+    - Since replyEnabled: publishReply (line 265) ← CRASH HERE
+    - IF NOT replyEnabled: markParallelStepCompleted → calls
+      advanceToNextStep (line 1259 for sequential, line 1252 for parallel)
+    
+    So in reply mode, the step's currentStep is NEVER advanced by the
+    command consumer! It stays at the current step.
+    
+    If crash before publishReply: flow saved with step in completedSteps
+    but currentStep unchanged. On redelivery: doExecuteStepInner line 208:
+    completedSteps.contains(stepName) → true, but currentStep == stepName →
+    falls through to execute again.
+    The step handler re-executes. Must be idempotent.
+  VIOLATION: Handler must be idempotent (documented contract).
+  RECOVERY: On Kafka redelivery, step re-executes → publishes reply →
+    reply consumer advances. ✓
+  SEVERITY: OK (with idempotent handlers).
+
+SCENARIO O6: Crash during reply outbox fallback
+  File: FlowOrchestrator.java:334-353
+  Path: publishReply's kafkaTemplate.send().get() fails →
+        outboxRepository.save starts → CRASH
+  Analysis:
+    Flow saved earlier (caller's responsibility to save before publishReply).
+    kafkaTemplate.send fails.✗
+    Outbox save crashes. ✗
+    Reply message entirely lost.
+    On redelivery: step re-executes → publishes reply again → idempotency
+    creates new eventId → outbox or Kafka delivers it.
+  VIOLATION: None. Reply is regenerated on re-execution.
+  RECOVERY: Automatic via re-execution on Kafka redelivery.
+  SEVERITY: OK.
+
+================================================================================
+11.3 SAGA COMPENSATION CRASH SCENARIOS
+================================================================================
+
+Compensation runs completed steps in reverse order when flow permanently fails.
+This is the core saga guarantee: either all steps succeed, or completed steps
+are undone.
+
+SCENARIO S1: Crash between marking FAILED and running compensation — [FIXED]
+  File: FlowOrchestrator.java:1230-1246 (handlePermanentFailure), 374-400 (markDeadLettered)
+  Path: handlePermanentFailure → updateFlowPartial sets COMPENSATING status
+        (was FAILED), saves → crash before runCompensation()
+  PREVIOUS ANALYSIS: Flow was marked FAILED in MongoDB, compensation never
+    ran. External resources leaked. No auto-recovery for FAILED.
+  CURRENT ANALYSIS: Both handlePermanentFailure and markDeadLettered now
+    set status to COMPENSATING (not FAILED) before running compensation.
+    If crash between COMPENSATING save and runCompensation: recovery
+    scanner's recoverStuckCompensation detects COMPENSATING with
+    updatedAt > staleThresholdMinutes → re-runs retryCompensation().
+    Compensation handlers are idempotent (design contract).
+  VIOLATION: None. Compensation is now recoverable.
+  RECOVERY: Automatic via recoverStuckCompensation within staleThresholdMinutes. ✓
+  SEVERITY: OK — FIXED.
+
+SCENARIO S2: Crash during compensation (mid-loop) — [FIXED]
+  File: FlowOrchestrator.java:742-789 (runCompensation)
+  File: StaleFlowRecoveryService.java:394-447 (recoverStuckCompensation)
+  Path: runCompensation → set COMPENSATING status → save → compensate step N
+        (succeeds) → CRASH before compensating step N-1
+  PREVIOUS ANALYSIS: Flow stuck in COMPENSATING forever. No auto-recovery.
+  CURRENT ANALYSIS: recoverStuckCompensation (new method) detects flows in
+    COMPENSATING status with updatedAt > staleThresholdMinutes → claims and
+    calls retryCompensation(). retryCompensation now accepts COMPENSATING
+    status (was only COMPENSATION_FAILED). All compensation handlers
+    re-run from scratch — must be idempotent (design contract).
+  VIOLATION: None. Compensation is now auto-recoverable.
+  RECOVERY: Automatic via recoverStuckCompensation within staleThresholdMinutes. ✓
+  SEVERITY: OK — FIXED.
+
+SCENARIO S3: Crash after compensation succeeds but before final status save — [FIXED]
+  File: FlowOrchestrator.java:784-792
+  Path: All compensations succeed → setStatus(FAILED) → CRASH before saveFlow
+  CURRENT ANALYSIS: Flow status = COMPENSATING (saved at line 755-756).
+    All compensations completed successfully. recoverStuckCompensation
+    detects COMPENSATING → re-runs retryCompensation().
+    retryCompensation → runCompensation → completedStepsBefore returns
+    same list → re-compensates all steps (idempotent handlers) → succeeds →
+    sets FAILED + saves. Same end state, just double compensating.
+  VIOLATION: None. Double compensation is safe with idempotent handlers.
+  RECOVERY: Automatic via recoverStuckCompensation. ✓
+  SEVERITY: OK — FIXED.
+
+SCENARIO S4: Crash during compensation with one handler failing — [FIXED]
+  File: Same as S2
+  Path: Compensation step fails → anyCompensationFailed=true →
+        CRASH before saving COMPENSATION_FAILED
+  CURRENT ANALYSIS: Same recovery path as S2. recoverStuckCompensation
+    detects COMPENSATING and calls retryCompensation, which re-runs all
+    handlers. The previously-failed handler may now succeed (e.g., network
+    recovery), or fail again (→ COMPENSATION_FAILED, manual intervention).
+  VIOLATION: None. Auto-recovery attempts compensation; if it fails again,
+    flow goes to COMPENSATION_FAILED (requires manual retry).
+  RECOVERY: Automatic via recoverStuckCompensation.
+  SEVERITY: OK — FIXED.
+
+SCENARIO S5: Crash during flow cancellation (runCancellation) — [FIXED]
+  File: FlowOrchestrator.java:695-738 (runCancellation)
+  File: StaleFlowRecoveryService.java:394-447 (recoverStuckCompensation)
+  Path: runCancellation → CRASH mid-loop (status = CANCELLING)
+  PREVIOUS ANALYSIS: Flow stuck in CANCELLING status. No auto-recovery.
+  CURRENT ANALYSIS: recoverStuckCompensation detects CANCELLING status →
+    calls cancelFlow() with "recovery: stuck in CANCELLING" reason.
+    cancelFlow checks if status is cancellable — CANCELLING is NOT in
+    the allowed states (IN_PROGRESS, WAITING_RETRY, PARKED, PENDING)!
+    
+    Wait — looking at cancelFlow at line 664:
+      if (status != IN_PROGRESS && status != WAITING_RETRY
+          && status != PARKED && status != PENDING) return null;
+    CANCELLING is NOT in the list! So cancelFlow() returns null on
+    CANCELLING status. The recovery call does nothing!
+    
+    THIS IS A BUG in the recovery integration: recoverStuckCompensation
+    calls cancelFlow() for CANCELLING flows, but cancelFlow rejects
+    CANCELLING status.
+    
+    FIX NEEDED: cancelFlow must accept CANCELLING as a valid state to
+    re-run cancellation. Or recoverStuckCompensation should call
+    runCancellation() directly instead of cancelFlow().
+  VIOLATION: Saga cancellation stuck. Recovery attempts to re-run but
+    cancelFlow rejects CANCELLING status.
+  RECOVERY: recoverStuckCompensation is PRESENT but BROKEN for CANCELLING.
+  SEVERITY: DEGRADED — recovery exists but doesn't work for CANCELLING.
+
+SCENARIO S6: Crash during child flow notification on parent failure
+  File: FlowOrchestrator.java:595-622 (notifyParentOnCompletion)
+  Context: When a flow permanently fails, notifyParentOnCompletion is NOT
+    called from handlePermanentFailure. It's only called from:
+    - advanceToNextStep → flow completion (line 933)
+    - cancelFlow → runCancellation → line 723
+    This means: if parent flow has one child that permanently fails, the
+    parent is NEVER notified of the failure. The parent's awaitChildren
+    will eventually timeout (expiry), but the parent could have been
+    notified immediately.
+  VIOLATION: Parent notification delayed (waits for expiry instead of
+    immediate notification on child failure).
+  RECOVERY: Parent's awaitChildren will detect FAILED child status on next
+    scheduler poll and proceed. Delay = pollInterval (default 30s).
+  SEVERITY: DEGRADED — delayed but eventually correct.
+
+================================================================================
+11.4 RETRY ARCHITECTURE CRASH SCENARIOS
+================================================================================
+
+Spring Kafka non-blocking retry routes RetryableStepExceptions to
+retry-0, retry-1, retry-2 topics, then to DLT. Each retry has the same
+eventId payload but different Kafka offset.
+
+SCENARIO R1: Crash during retry topic delivery
+  File: N/A (Spring Kafka managed)
+  Path: Consumer reads from retry-0 → executeStep → throws
+        RetryableStepException → CRASH before Spring Kafka routes to retry-1
+  Analysis:
+    Spring Kafka manages retry offsets internally. The retry-0 offset was
+    NOT committed (consumer crashed before successful return).
+    On restart: consumer resumes from last committed offset on retry-0.
+    Message re-delivered from retry-0 (not skipped to retry-1).
+    Effective result: one EXTRA retry at the retry-0 delay.
+  VIOLATION: None. Retry discipline slightly delayed but correct.
+  RECOVERY: Automatic via Spring Kafka offset management.
+  SEVERITY: OK.
+
+SCENARIO R2: Crash after all retries exhausted, before DLT processing
+  File: N/A (Spring Kafka managed)
+  Path: All retry topics exhausted → message routed to DLT → CRASH before
+        DLT consumer processes it
+  Analysis:
+    Kafka message is in the DLT topic. Spring Kafka committed the last
+    retry offset, so the consumer won't re-deliver from retry topics.
+    On restart: DLT consumer picks up the DLT message → onDlt runs →
+    marks flow as FAILED + runs compensation.
+  VIOLATION: None.
+  RECOVERY: Automatic via DLT consumer.
+  SEVERITY: OK.
+
+SCENARIO R3: Crash DURING DLT processing
+  File: OrchestratorKafkaConsumer.java:106-118
+  Path: onDlt → markDeadLettered → runCompensation → CRASH during compensation
+  Analysis:
+    Same as S1/S2 — compensation crash scenarios apply.
+    Additionally: eventId is tryProcess'd at line 114 AFTER markDeadLettered.
+    If crash before tryProcess: on DLT redelivery, isProcessed returns
+    false → markDeadLettered runs again. markDeadLettered checks if flow
+    already FAILED (line 374 — it reads, doesn't check status). So
+    runCompensation runs AGAIN on already FAILED flow!
+    
+    Looking at markDeadLettered more carefully (line 365-390):
+    1. Finds flow by ID (line 366)
+    2. Sets status=FAILED, errorMessage, updatedAt (lines 378-379)
+    3. saveFlow (line 382)
+    4. logStep (lines 384-386)
+    5. runCompensation (line 389)
+    
+    If crash after step 3 but before step 5: flow is FAILED, compensation
+    never ran. On DLT redelivery: finds flow (now FAILED), sets FAILED
+    again (idempotent), calls runCompensation. But runCompensation at line
+    732 gets completedStepsBefore(flow.getCurrentStep()) — this returns the
+    same list every time. So compensation re-runs all steps.
+    If handlers are idempotent, this is safe but wasteful.
+  VIOLATION: Same as S1/S2 (compensation guarantees).
+  RECOVERY: DLT redelivery re-triggers compensation.
+  SEVERITY: DEGRADED — compensation may run multiple times, but if handlers
+    are idempotent, the end state is correct.
+
+SCENARIO R4: Crash after handleRetryableFailure saves WAITING_RETRY status — [FIXED]
+  File: FlowOrchestrator.java:1186-1208 (handleRetryableFailure), 187-195 (guard)
+  (Same scenario as I3, analyzed from retry perspective)
+  PREVIOUS: backoff bypassed, effective retry count inflated.
+  CURRENT: New WAITING_RETRY guard at lines 187-195 skips immediate execution
+    when nextRetryAt is in the future. Scheduler respects backoff timing. ✓
+  VIOLATION: None.
+  RECOVERY: Scheduler handles re-delivery at correct backoff time. ✓
+  SEVERITY: OK — FIXED.
+
+================================================================================
+11.5 FAILOVER RECOVERY CRASH SCENARIOS
+================================================================================
+
+The StaleFlowRecoveryService uses atomic batch claiming (updateMulti) to
+ensure each flow is recovered by exactly one pod in a multi-pod deployment.
+Claim TTL protects against crashed pods holding claims forever.
+
+SCENARIO F1: Crash after claim, before Kafka publish
+  File: StaleFlowRecoveryService.java:143-150,189-200
+  Path: Claim flows (updateMulti sets claimedBy, claimedAt) →
+        CRASH before kafkaTemplate.send().get()
+  Analysis:
+    Flow claimed by podId with claimedAt timestamp. ✓
+    No Kafka message sent. ✗
+    On restart (same pod or different pod):
+    - Same pod: recovery scanner runs again. Candidate query excludes
+      flows with claimedBy != null. This flow is STILL claimed by the
+      OLD (now-dead) pod instance. But — the podId is based on HOSTNAME
+      (line 68-69), so on the same host, it's the same podId! The query
+      "claimedBy.is(null)" excludes it. The flow is NOT re-claimed.
+    - Different pod: same problem. The flow is claimed by the old podId.
+    
+    Resolution: releaseOrphanedClaims (line 101-113) runs at the start of
+    each recovery cycle. It queries for claimedBy != null AND
+    claimedAt < (now - claimTtlMinutes). If the crash pod doesn't restart
+    within claimTtlMinutes, the claim is released and the flow is reclaimed.
+  VIOLATION: Recovery delayed by up to claimTtlMinutes (default varies).
+  RECOVERY: Automatic via orphaned claim cleanup after claimTtlMinutes.
+  SEVERITY: DEGRADED — delayed recovery (claimTtlMinutes), but self-healing.
+
+SCENARIO F2: Crash after Kafka publish, before claim release
+  File: StaleFlowRecoveryService.java:199-210
+  Path: kafkaTemplate.send().get() succeeds → CRASH before
+        mongoTemplate.updateFirst (release claim)
+  Analysis:
+    Step command published to Kafka. ✓
+    Claim NOT released. ✗
+    Flow still has claimedBy=podId, claimedAt set.
+    Kafka consumer processes the message → step executes normally. ✓
+    Same pod on next recovery cycle: excluded by claim (same podId).
+    Different pod: excluded by claim.
+    After claimTtlMinutes: orphaned claim released. Next recovery cycle
+    may re-claim and re-publish (duplicate).
+    Duplicate handled by idempotency at consumer level. ✓
+  VIOLATION: None. Duplicate prevention handled by idempotency.
+  RECOVERY: Kafka message delivered, flow progresses. Claim eventually
+    released by orphan cleanup.
+  SEVERITY: OK.
+
+SCENARIO F3: Crash during releaseClaim
+  File: StaleFlowRecoveryService.java:392-398
+  Path: Exception caught at line 214 → releaseClaim at line 216 →
+        CRASH during releaseClaim's updateFirst
+  Analysis:
+    releaseClaim does mongoTemplate.updateFirst to unset claimedBy/claimedAt.
+    If this fails (MongoDB down, crash), the claim remains.
+    Orphaned claim cleanup eventually picks it up (after claimTtlMinutes).
+    But if MongoDB was down, the claim might not have been saved either.
+    In practice, if MongoDB is down, the recovery service can't operate
+    at all, so this scenario is about a transient MongoDB error after
+    the claim was already set.
+  VIOLATION: Claim remains set longer than needed.
+  RECOVERY: Orphaned claim cleanup after claimTtlMinutes.
+  SEVERITY: DEGRADED but self-healing.
+
+SCENARIO F4: Crash during expireWaitingFlows claim
+  File: StaleFlowRecoveryService.java:338-389
+  Path: expireWaitingFlows → claim batch → CRASH before marking FAILED
+  Analysis:
+    Flows claimed by podId. Expired flows not yet marked FAILED.
+    On restart: releaseOrphanedClaims runs first. If claimTtl has NOT
+    elapsed, the claims remain and expireWaitingFlows skips them (claimedBy
+    != null). If claimTtl HAS elapsed, claims released → re-claimed →
+    expiry applies correctly.
+  VIOLATION: Expired flows may not be marked FAILED for up to
+    claimTtlMinutes.
+  RECOVERY: Automatic after claimTtlMinutes.
+  SEVERITY: DEGRADED — delayed but self-healing.
+
+SCENARIO F5: Flow marked FAILED by recovery but compensation never runs
+  File: StaleFlowRecoveryService.java:173-187
+  Path: Flow exceeds maxRecoveryAttempts → marked FAILED directly via
+        updateFirst → CRASH after marking
+  Analysis:
+    Flow status = FAILED in MongoDB. ✓
+    runCompensation is NOT called for recovery-marked FAILED flows!
+    The recovery service just marks FAILED and moves on (line 186: continue).
+    This is the SAME problem as S1: FAILED without compensation.
+    
+    The reasoning might be: recovery-attempt-exhausted flows have already
+    had their steps completed (they were recovered multiple times), so
+    compensation should still run for those completed steps.
+  VIOLATION: Saga compensation guarantee BROKEN for recovery-exhausted flows.
+  RECOVERY: None. No compensation runs.
+  SEVERITY: BROKEN — recovery exhaustion skips compensation entirely.
+
+SCENARIO F6: Crash during redeliverPollingFlows — flow with PARKED status
+  File: StaleFlowRecoveryService.java:228-246
+  Path: Candidate query finds WAITING_RETRY and PARKED flows with
+        nextRetryAt < now → republishBatch
+  Analysis:
+    republishBatch at lines 270-330 uses the generic batch logic with
+    claim → publish → release.
+    PARKED with nextRetryAt indicates a sleeping step (sleep/sleepUntil).
+    republishBatch at line 282: if expectedStatus is null (redeliverPollingAlows
+    at line 244 passes null), the claim query only checks
+    claimedBy.is(null) — NOT the status!
+    This means between the candidate query and the claim, a PARKED flow
+    could become COMPLETED/FAILED, and the claim still succeeds.
+    The sleep check at line 128-129 in FlowDefinition.sleepUntil handles
+    this (if sleepUntil has passed, returns normally).
+    But if the flow was CANCELLED between candidate and claim, the claim
+    succeeds and a step command is published to a cancelled flow.
+    doExecuteStepInner at line 183 checks CANCELLED/CANCELLING → returns.
+    So the published command is a no-op (but wastes Kafka resources).
+  VIOLATION: Edge case — cancelled flow gets unnecessary step command.
+  RECOVERY: Step execution skips cancelled flows. No state corruption.
+  SEVERITY: OK (wasteful but correct).
+
+================================================================================
+11.6 WEBHOOK PROCESSING CRASH SCENARIOS
+================================================================================
+
+Webhooks from Enigio trigger state updates and flow reactivation. The critical
+invariant: webhook MUST return 200 even if internal processing fails, or the
+vendor retries indefinitely.
+
+SCENARIO W1: Crash between findAndModify and notification (PartiallySignedHandler)
+  File: PartiallySignedHandler.java:39-57
+  Path: findAndModify increments signaturesReceived and sets PARTIALLY_SIGNED →
+        CRASH before notificationPublisher.notifyPhaseComplete
+  Analysis:
+    signaturesReceived incremented in MongoDB atomically. ✓
+    signingStatus set to PARTIALLY_SIGNED. ✓
+    Notification NOT sent. ✗
+    Downstream system unaware of this signature event.
+    
+    Recovery: Next PARTIALLY_SIGNED webhook (for next signer) will call
+    notifyPhaseComplete with the updated count. Or FULLY_SIGNED webhook
+    (when all sign) will send the ALL_SIGNATURES_COMPLETE notification.
+    
+    EDGE CASE — LAST signature arrives, crash before notification and
+    reactivation:
+    findAndModify at line 39-47: increments signaturesReceived, which now
+    triggers the $expr $lt guard (signaturesReceived < signaturesRequired).
+    If this was the LAST signature: $expr fails (equal, not less than!) →
+    findAndModify returns NULL (line 49) → handler returns early.
+    The last signature is DROPPED!
+    
+    Wait, re-reading: the guard is $lt (strictly less than). If
+    signaturesReceived was N-1 and signaturesRequired is N, then after
+    increment it's N ≥ N → $lt is false → returns null.
+    But findAndModify with the guard checks BEFORE the update. So at the
+    time of query: signaturesReceived (N-1) < signaturesRequired (N) →
+    $lt is true → update applies → returns old doc (signaturesReceived=N-1).
+    After the update: signaturesReceived = N.
+    
+    If crash before notification and reactivation: flow has signaturesReceived=N,
+    signingStatus=PARTIALLY_SIGNED, no notification, no reactivation.
+    
+    Next webhook: if vendor sends PARTIALLY_SIGNED for a different signer
+    (impossible — all signers are done) → $lt guard fails → returns null.
+    If vendor sends FULLY_SIGNED: FullySignedHandler at line 37-41 uses
+    findAndModify with signingStatus != SIGNED guard → succeeds → marks
+    SIGNED → reactivates → ✓ RECOVERS via FULLY_SIGNED webhook.
+    
+    BUT: if the vendor does NOT send FULLY_SIGNED (e.g., PARTIALLY_SIGNED
+    was the last event), the flow is stuck at PARTIALLY_SIGNED with all
+    signatures received. The awaitSignatures polling step (line 265:
+    enigioClient.getSigningStatus) will detect SIGNED and advance.
+  VIOLATION: None if FULLY_SIGNED webhook or polling eventually delivers.
+    If neither arrives, flow is stuck.
+  RECOVERY: Eventual via FULLY_SIGNED webhook or awaitSignatures poll fallback.
+  SEVERITY: DEGRADED — relies on vendor sending FULLY_SIGNED or polling fallback.
+
+SCENARIO W2: Crash after marking SIGNED, before reactivation
+  File: PartiallySignedHandler.java:61-73
+  Path: Last signature detected (line 61-62) → updateFirst marks SIGNED (line 64)
+        → CRASH before flowReactivator.reactivate (line 72)
+  Analysis:
+    signingStatus = SIGNED in MongoDB. ✓
+    No step command published to Kafka. ✗
+    Flow is PARKED/WAITING_RETRY with SIGNED status.
+    On next scheduler poll: redeliverParkedSafetyNet re-publishes the step.
+    awaitSignatures at line 218: checks signingStatus == SIGNED → returns
+    immediately → flow advances normally. ✓
+  VIOLATION: None. Flow advances on re-delivery.
+  RECOVERY: Automatic via parked safety net or polling scheduler.
+  SEVERITY: DEGRADED — delayed (up to staleThresholdMinutes), but self-healing.
+
+SCENARIO W3: Webhook returns 500 to Enigio on internal failure — [FIXED]
+  File: WebhookController.java:117-124
+  Path: handler.handle() throws RuntimeException → NOW CAUGHT by try-catch
+  Analysis:
+    PREVIOUSLY: exception propagated uncaught → HTTP 500 → vendor retry storm.
+    NOW: try-catch wraps handler.handle() at line 117-124. Always returns
+    ResponseEntity.ok() regardless of handler success/failure.
+    Internal failures are logged; recovery/outbox handles delayed delivery.
+    This is the correct webhook pattern: acknowledge first, process later.
+  VIOLATION: None. Webhook idempotency pattern is now correct.
+  RECOVERY: N/A — always returns 200.
+  SEVERITY: OK — FIXED.
+
+SCENARIO W4: Crash during FlowReactivator outbox fallback
+  File: FlowReactivator.java:52-73
+  Path: kafkaTemplate.send().get() fails → outboxRepository.save starts →
+        CRASH during save
+  Analysis:
+    Kafka publish failed. ✗
+    Outbox save failed. ✗
+    Flow stuck in PARKED.
+    Recovery: redeliverParkedSafetyNet re-publishes after staleThresholdMinutes. ✓
+  VIOLATION: None.
+  RECOVERY: Automatic via parked safety net.
+  SEVERITY: DEGRADED — delayed, but self-healing.
+
+================================================================================
+11.7 SIGNAL PROCESSING CRASH SCENARIOS
+================================================================================
+
+Signals are Temporal-style: if flow is PARKED/WAITING_RETRY, execute handler
+immediately; if IN_PROGRESS, queue as pendingSignal for drain after step.
+
+CRITICAL ARCHITECTURAL BUG — Signal loss via saveFlow overwrite — [FIXED]
+  The previous execution order in doExecuteStepInner was:
+    1. markStepCompleted (line 255) — in-memory only
+    2. saveFlowWithRetry (line 256) — persists in-memory flow to MongoDB
+    3. drainPendingSignals (line 259) — atomically drains from MongoDB
+  
+  If a signal was $pushed to MongoDB between the flow load and
+  saveFlowWithRetry, the signal existed in MongoDB but NOT in the in-memory
+  flow. saveFlowWithRetry overwrote the $pushed signal with stale
+  pendingSignals from the in-memory flow. Signal permanently LOST.
+  
+  FIX: The order is now REVERSED at lines 262-264:
+    1. drainPendingSignals(flow) — atomically drains & applies signals
+    2. markStepCompleted(flow, stepName)
+    3. saveFlowWithRetry(flow, flowId)
+  
+  Signals are drained from MongoDB BEFORE the in-memory flow is persisted.
+  The drained signals are applied to the in-memory flow, and then the
+  updated flow (with applied signals + marked step + null pendingSignals)
+  is saved atomically. No overwrite window exists.
+  
+  REMAINING GAP (G2): drainPendingSignals uses findAndModify
+  (read-and-clear atomically, then process). If crash during processing,
+  signals cleared from MongoDB but not applied to flow. Still a gap
+  but the deterministic overwrite is fixed.
+
+SCENARIO G1: Crash between signal handler invoke and saveFlow
+  File: FlowOrchestrator.java:433-434 (PARKED/WAITING_RETRY path)
+  Path: handler.invoke(flow, typedPayload) modifies flow in-memory →
+        CRASH before saveFlow(flow)
+  Analysis:
+    Signal handler executed (e.g., updatePriority). ✓
+    Flow state modified in-memory (e.g., priority changed). ✓
+    CRASH before saveFlow → modifications LOST. ✗
+    On next step re-delivery: flow loaded from MongoDB with ORIGINAL
+    (pre-signal) state. Signal effect gone.
+    
+    If the signal handler performed a side effect (API call, notification),
+    that side effect IS persisted but the flow state reflecting it is NOT.
+    This creates an inconsistency between external state and flow state.
+    
+    In practice for EnigioInstrumentFlow signals:
+    - updatePriority: sets flow.setPriority() → lost → priority unchanged
+    - requestCancellation: throws if signed, otherwise no-op → safe to lose
+  VIOLATION: Signal handler side effects not atomically persisted with flow
+    state. External state may diverge from flow state.
+  RECOVERY: None. Signal must be re-sent by the caller.
+  SEVERITY: DEGRADED — signal may need manual re-send.
+
+SCENARIO G2: Crash during drainPendingSignals (atomic clear already done)
+  File: FlowOrchestrator.java:512-527
+  Path: findAndModify atomically reads AND unsets pendingSignals in MongoDB →
+        CRASH during processing of individual signals (line 537-551)
+  Analysis:
+    MongoDB: pendingSignals = null (atomically unset). ✓
+    Old signals read into local variable "pending". ✓
+    CRASH after processing signal 0, before processing signal 1.
+    Signals 1..N are LOST — they were cleared from MongoDB but never
+    processed.
+    
+    The in-memory flow still has its OLD pendingSignals (set to null at
+    line 530 in the else branch, BUT in the mongoTemplate branch, the
+    in-memory flow's pendingSignals is NOT updated).
+    
+    After crash: flow reloaded from MongoDB → pendingSignals = null. No
+    signals to drain. The unprocessed signals are permanently lost.
+    
+    For EnigioInstrumentFlow signals:
+    - updatePriority: lost priority update
+    - requestCancellation: lost cancellation request
+  VIOLATION: Signals can be permanently lost. Violates at-least-once
+    signal delivery semantics.
+  RECOVERY: None. Lost signals require manual re-send.
+  SEVERITY: BROKEN — signals cleared from DB before guaranteed processing.
+
+SCENARIO G3: Crash during signal $push (MongoDB write succeeds, no memory update)
+  File: FlowOrchestrator.java:454-460
+  Path: mongoTemplate.updateFirst $pushes signal → CRASH after MongoDB
+        write but before completing the signal() method
+  Analysis:
+    Signal $pushed to MongoDB atomically. ✓
+    CRASH before the method returns.
+    The caller (REST API) sees an error (connection reset, timeout).
+    The signal is queued in MongoDB but the caller thinks it failed.
+    Caller may retry → duplicate signal → drainPendingSignals processes
+    both copies. Handler should be idempotent.
+  VIOLATION: At-most-once delivery from caller perspective violated.
+    At-least-once delivery to handler maintained (handled as duplicate).
+  RECOVERY: Caller retry causes duplicate. Idempotent handler handles it.
+  SEVERITY: OK (with idempotent signal handlers).
+
+================================================================================
+11.8 OFFSET RECOVERY (CROSS-DC FAILOVER) CRASH SCENARIOS
+================================================================================
+
+MongoDB-backed offset store enables cross-DC consumer offset recovery.
+Offsets are saved AFTER successful message processing.
+
+SCENARIO OR1: Crash after message processing, before offset save
+  File: OrchestratorAutoConfiguration.java:462-487
+  Path: onCommand → consumer.onStepCommand → mongoOffsetStore.saveOffset
+        → CRASH before saveOffset
+  Analysis:
+    Message processed successfully. ✓
+    Kafka offset NOT committed (consumer crashed). ✗
+    MongoDB offset NOT saved. ✗
+    
+    On restart: consumer starts from last committed Kafka offset.
+    If last committed was BEFORE this message: message re-delivered →
+    idempotency skips → re-processed correctly. ✓
+    
+    If last committed was AT or AFTER this message: consumer starts past
+    it → no re-delivery. But MongoDB offset was also not saved. On DC
+    failover: consumer has no offset info for this partition → starts
+    from earliest → re-processes. Idempotency handles duplicates. ✓
+  VIOLATION: None. Idempotency handles re-delivery.
+  RECOVERY: Automatic via idempotency on re-delivery.
+  SEVERITY: OK.
+
+SCENARIO OR2: Crash after offset save, before Kafka offset commit
+  File: OrchestratorAutoConfiguration.java:480-486
+  Path: saveOffset succeeds → CRASH before Kafka auto-commits
+  Analysis:
+    MongoDB offset saved. ✓
+    Kafka offset NOT committed. ✗
+    On restart: Kafka offset missing → consumer starts from last committed.
+    Message re-delivered.
+    First message re-delivered → idempotency skips. ✓
+    Then normal processing continues from the re-delivery point.
+    
+    On DC failover: MongoOffsetRecoveryListener reads MongoDB offset →
+    finds the saved offset → uses offsetsForTimes with the stored
+    messageTimestamp to seek. The timestamp points to the message AFTER
+    the last processed one (since offsetsForTimes returns the first offset
+    at or after the timestamp, and we re-processed it). Idempotency
+    skips the duplicate. ✓
+  VIOLATION: None.
+  RECOVERY: Automatic via offset recovery + idempotency.
+  SEVERITY: OK.
+
+SCENARIO OR3: MongoDB offset store unreachable during offset save
+  File: OrchestratorAutoConfiguration.java:482-485
+  Path: saveOffset throws → empty catch block (line 484-485)
+  Analysis:
+    Message processed successfully. ✓
+    MongoDB offset NOT saved (exception swallowed). ✗
+    Kafka offset commits normally.
+    On DC failover: consumer on standby cluster has no MongoDB offset
+    and no Kafka offset → starts from earliest → re-processes all
+    messages since retention window.
+    Idempotency skips duplicates but re-processing may be very expensive
+    (hours of messages).
+  VIOLATION: None for correctness. Performance degradation on DC failover.
+  RECOVERY: Idempotency handles re-processing but at high cost.
+  SEVERITY: DEGRADED — silent performance degradation. Empty catch block
+    hides the failure from operators.
+
+================================================================================
+11.9 FLOW INITIATION CRASH SCENARIOS
+================================================================================
+
+SCENARIO START1: Crash during startFlow between save and return
+  File: FlowOrchestrator.java:107-132
+  Path: runInTransaction saves flow + writes outbox → CRASH before returning
+  Analysis:
+    Flow saved with status IN_PROGRESS, currentStep = first step. ✓
+    Outbox event written. ✓
+    No Kafka message sent (startFlow delegates to outbox publisher).
+    Caller doesn't receive flow ID → may retry startFlow.
+    Retry creates DUPLICATE flow (new ID) with same business data.
+    
+    For EnigioInstrumentFlow, the start controller is FlowController.startFlow:
+    File: FlowController.java:74-91
+    No correlation ID or idempotency key used at start. Each POST creates
+    a new flow entity with a new MongoDB _id. Duplicate flows possible.
+  VIOLATION: At-least-once start semantics violated if caller retries.
+    No duplicate flow detection at the API layer.
+  RECOVERY: Caller must implement idempotency (e.g., idempotency key header).
+    The outbox event for the first (crashed) startFlow still exists and
+    will be published → first flow executes even though caller didn't
+    get the ID.
+  SEVERITY: DEGRADED — duplicate flows possible on caller retry.
+
+SCENARIO START2: Crash during child flow start (startChildFlowAsync)
+  File: FlowDefinition.java:203-255
+  Path: childOrch.startFlow(child) succeeds → childId added to parent →
+        checkpoint(flow) → CRASH before return
+  Analysis:
+    Child flow created and started (saved to MongoDB, outbox written). ✓
+    Parent flow saved with childId in childFlowIds. ✓
+    If caller retries: startChildFlowAsync at line 231 checks
+    findByCorrelationId → finds existing child → returns existing childId
+    without creating duplicate. ✓
+  VIOLATION: None. Correlation ID prevents duplicate child creation.
+  RECOVERY: Automatic via correlation ID idempotency.
+  SEVERITY: OK.
+
+================================================================================
+11.10 CRASH RESILIENCE SUMMARY TABLE
+================================================================================
+
+SCENARIO  | LAYER          | GUARANTEE AFFECTED        | OUTCOME
+----------|----------------|---------------------------|----------------------------------------
+I1        | Idempotency    | Idempotent execution      | OK (with idempotent handlers)
+I2        | Idempotency    | Idempotent execution      | BROKEN (in-memory/persist gap)
+I3        | Idempotency    | Retry backoff             | OK — FIXED (WAITING_RETRY guard)
+I4        | Idempotency    | (none)                    | OK
+O1        | Outbox         | At-least-once delivery    | OK
+O2        | Outbox         | At-least-once delivery    | DEGRADED (delayed, self-healing)
+O3        | Outbox         | At-least-once delivery    | DEGRADED (delayed, self-healing)
+O4        | Outbox         | At-least-once delivery    | OK
+O5        | Outbox         | Idempotent execution      | OK
+O6        | Outbox         | At-least-once delivery    | OK
+S1        | Saga           | Compensation guarantee    | OK — FIXED (COMPENSATING before compensation)
+S2        | Saga           | Compensation guarantee    | OK — FIXED (recoverStuckCompensation)
+S3        | Saga           | Compensation guarantee    | OK — FIXED (recoverStuckCompensation)
+S4        | Saga           | Compensation guarantee    | OK — FIXED (recoverStuckCompensation)
+S5        | Saga           | Cancellation guarantee    | DEGRADED (recovery exists but cancelFlow rejects CANCELLING)
+S6        | Saga           | Parent notification       | DEGRADED (delayed)
+R1        | Retry          | Retry count               | OK
+R2        | Retry          | DLT processing            | OK
+R3        | Retry          | Compensation guarantee    | DEGRADED (multiple compensation runs)
+R4        | Retry          | Retry backoff             | OK — FIXED (WAITING_RETRY guard)
+F1        | Recovery       | Recovery timeliness       | DEGRADED (delayed by claimTtl)
+F2        | Recovery       | Duplicate prevention      | OK
+F3        | Recovery       | Claim cleanup             | DEGRADED (delayed)
+F4        | Recovery       | Expiry timeliness         | DEGRADED (delayed)
+F5        | Recovery       | Compensation guarantee    | BROKEN (no compensation on recovery exhaustion)
+F6        | Recovery       | Safe status check         | OK
+W1        | Webhooks       | Notification delivery     | DEGRADED (delayed)
+W2        | Webhooks       | Flow reactivation         | DEGRADED (delayed)
+W3        | Webhooks       | Vendor retry storm        | OK — FIXED (always returns 200)
+W4        | Webhooks       | Flow reactivation         | DEGRADED (delayed)
+(SIG-BUG) | Signals        | At-least-once delivery    | OK — FIXED (drain before save)
+G1        | Signals        | Signal state persistence  | DEGRADED (lost on crash)
+G2        | Signals        | At-least-once delivery    | BROKEN (drain-then-process gap)
+G3        | Signals        | Duplicate handling        | OK
+OR1       | Offset         | Offset accuracy           | OK
+OR2       | Offset         | Offset accuracy           | OK
+OR3       | Offset         | Failover performance      | DEGRADED (silent failure)
+START1    | Initiation     | Exactly-once start        | DEGRADED (duplicate flows possible)
+START2    | Initiation     | Exactly-once child start  | OK
+
+TOTALS (v3, updated):
+  BROKEN:   3 scenarios (I2, F5, G2)
+  DEGRADED: 15 scenarios (was 18 — S2/S3/S4 moved to OK, plus W3/I3/R4/SIG-BUG already moved)
+  OK:       18 scenarios (was 12 — 6 scenarios now FIXED)
+
+================================================================================
+11.11 ROOT CAUSE ANALYSIS — WHY DO THESE GAPS EXIST?
+================================================================================
+
+1. IN-MEMORY / PERSISTENCE ATOMICITY GAP (I2, G1, G2 remain)
+   WAS: The library mutated the in-memory flow object and then saved it to
+   MongoDB in a separate step. Signal $push (MongoDB) happened between
+   read and save → overwritten by stale in-memory state.
+   FIXED for signal overwrite by swapping drain before save. The remaining
+   issue is I2: markStepCompleted mutates in-memory (completedSteps.add),
+   then saveFlowWithRetry later. Crash between them loses the step completion.
+   Also G2: drainPendingSignals uses findAndModify (read-and-clear),
+   crash during processing = signals cleared but not applied.
+
+2. COMPENSATION IS NOT RECOVERABLE → [FIXED]
+   WAS: runCompensation and runCancellation set intermediate statuses
+   (COMPENSATING, CANCELLING) but neither the recovery service nor the
+   stale flow scanner handled them.
+   FIXED: Both handlePermanentFailure and markDeadLettered now set
+   COMPENSATING before running compensation. retryCompensation accepts
+   COMPENSATING. recoverStuckCompensation added to recovery scanner.
+   
+   REMAINING GAP: cancelFlow rejects CANCELLING status when
+   recoverStuckCompensation tries to re-run cancellation. See S5 note.
+
+3. MISSING STATUS GUARDS → [FIXED]
+   WAS: doExecuteStepInner checked COMPLETED, CANCELLED, CANCELLING but
+   NOT WAITING_RETRY or PARKED.
+   FIXED: WAITING_RETRY with future nextRetryAt is now guarded (lines 187-195).
+   PARKED status still not explicitly checked — but PARKED flows shouldn't
+   normally receive step commands (they're woken by scheduler via
+   nextRetryAt, which uses WAITING_RETRY semantics).
+
+4. SIGNAL PROCESSING ORDERING → [PARTIALLY FIXED]
+   WAS: drainPendingSignals ran AFTER saveFlowWithRetry, causing signal loss.
+   FIXED: drainPendingSignals now runs BEFORE saveFlowWithRetry.
+   REMAINING: drainPendingSignals clears all signals from MongoDB atomically
+   (findAndModify) before processing. Crash during processing loses unprocessed
+   signals (G2). Should process-then-clear per signal.
+
+5. WEBHOOK ERROR PROPAGATION → [FIXED in revision 2]
+   WAS: Webhook handlers threw exceptions → HTTP 500 → vendor retry storms.
+   FIXED: WebhookController wraps handler.handle() in try-catch, always
+   returns 200.
+
+================================================================================
+11.12 RECOMMENDED FIXES FOR CRASH RESILIENCE
+================================================================================
+
+1. **Make markStepCompleted + saveFlow atomic** (fixes I2):
+   Move saveFlow into markStepCompleted. Use MongoDB $addToSet for
+   completedSteps (idempotent) and $set for retry/reset fields in a single
+   atomic update. Never rely on in-memory state across save boundaries.
+
+2. **Swap drainPendingSignals and saveFlowWithRetry order** (fixes SIG-BUG, G2):
+   Currently: saveFlowWithRetry → drainPendingSignals
+   Should be: drainPendingSignals → saveFlowWithRetry
+   This ensures signals are drained atomically from MongoDB BEFORE the
+   in-memory flow is persisted. The drained signals are applied to the
+   in-memory flow, and then the updated flow is saved.
+
+3. **Process-then-clear for signal draining** (fixes G2):
+   Instead of findAndModify (read-and-clear), read all pending signals,
+   process them one at a time, and remove each from MongoDB after successful
+   processing. Use $pull for individual signal removal.
+
+4. **Add COMPENSATING/CANCELLING to recovery scanner** (fixes S1-S5):
+   The StaleFlowRecoveryService should also handle flows stuck in
+   COMPENSATING or CANCELLING status for longer than staleThresholdMinutes.
+   Re-run runCompensation or runCancellation (handlers must be idempotent).
+
+5. **Run compensation BEFORE marking FAILED** (fixes S1):
+   In handlePermanentFailure and markDeadLettered, run runCompensation()
+   FIRST, then only mark FAILED after compensation completes (or
+   COMPENSATION_FAILED if compensation fails).
+
+6. **Add WAITING_RETRY/PARKED guard to doExecuteStepInner** (fixes I3, R4):
+   Similarly to CANCELLED/CANCELLING, check for WAITING_RETRY and PARKED
+   and return early with a log message.
+
+7. **Add error boundary in WebhookController** (fixes W3):
+   Wrap handler.handle() in try-catch. Log the error. Always return 200.
+   Use outbox/dead-letter for failed notifications.
+
+8. **Add idempotency key to startFlow API** (fixes START1):
+   Accept an optional idempotency key header in FlowController.startFlow.
+   Check if a flow with that key already exists before creating a new one.
+
+9. **Log offset save failures** (fixes OR3):
+   Replace empty catch block with at least a debug log. Add a failure
+   counter metric so operators can detect persistent offset store issues.
+
+10. **Reconcile save order in doExecuteStepInner** (fixes multiple):
+    The correct order should be:
+    a. Execute step handler (produces results in in-memory flow)
+    b. drainPendingSignals (atomically from MongoDB, apply to in-memory)
+    c. markStepCompleted + saveFlowWithRetry (persist everything atomically)
+    d. publishReply / advanceToNextStep (Kafka publish for next step)
+
+================================================================================
+
