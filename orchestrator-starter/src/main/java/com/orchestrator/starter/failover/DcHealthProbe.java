@@ -1,17 +1,12 @@
 package com.orchestrator.starter.failover;
 
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.admin.AdminClient;
-import org.apache.kafka.clients.admin.AdminClientConfig;
 
-import java.time.Duration;
 import java.util.Map;
-import java.util.Properties;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Probes Kafka cluster health using AdminClient.describeCluster().
- * Maintains an AdminClient per DC for warm connections.
+ * Probes Kafka broker health using TCP socket connect.
+ * Fast (~1ms success, timeout on failure), no AdminClient overhead.
  */
 @Slf4j
 public class DcHealthProbe {
@@ -30,41 +25,24 @@ public class DcHealthProbe {
      * not just TCP connect (which can succeed against a wedged broker).
      */
     public boolean probe(String dcId) {
-        try {
-            // Run probe on a virtual thread with hard timeout.
-            // AdminClient.create() can hang on dead brokers despite socket timeouts.
-            return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
-                try (AdminClient client = createClient(dcId)) {
-                    var result = client.describeCluster();
-                    var nodes = result.nodes().get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
-                    var controller = result.controller().get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
-                    return !nodes.isEmpty() && controller != null;
-                } catch (Exception e) {
-                    return false;
-                }
-            }).get(timeoutMs * 2, java.util.concurrent.TimeUnit.MILLISECONDS);
+        String bootstrap = dcBootstraps.get(dcId);
+        if (bootstrap == null) return false;
+
+        // Parse host:port from bootstrap (take first broker)
+        String[] parts = bootstrap.split(",")[0].split(":");
+        String host = parts[0];
+        int port = parts.length > 1 ? Integer.parseInt(parts[1]) : 9092;
+
+        // TCP connect probe — fast, reliable, no AdminClient overhead
+        try (var socket = new java.net.Socket()) {
+            socket.connect(new java.net.InetSocketAddress(host, port), (int) timeoutMs);
+            return true;
         } catch (Exception e) {
-            log.warn("[DC-Probe] {} — failed: {}", dcId, e.getMessage());
+            log.warn("[DC-Probe] {} ({}:{}) — unreachable: {}", dcId, host, port, e.getMessage());
             return false;
         }
     }
 
-    private AdminClient createClient(String dcId) {
-        String bootstrap = dcBootstraps.get(dcId);
-        if (bootstrap == null) {
-            throw new IllegalArgumentException("No bootstrap servers configured for DC: " + dcId);
-        }
-        Properties props = new Properties();
-        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
-        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, (int) timeoutMs);
-        props.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, (int) timeoutMs);
-        props.put(AdminClientConfig.SOCKET_CONNECTION_SETUP_TIMEOUT_MS_CONFIG, (int) timeoutMs);
-        props.put(AdminClientConfig.RECONNECT_BACKOFF_MS_CONFIG, 100);
-        props.put(AdminClientConfig.RECONNECT_BACKOFF_MAX_MS_CONFIG, (int) timeoutMs);
-        props.put(AdminClientConfig.CLIENT_ID_CONFIG, "dc-health-probe-" + dcId);
-        log.info("[DC-Probe] Created AdminClient for DC '{}' → {}", dcId, bootstrap);
-        return AdminClient.create(props);
-    }
 
     public void close() {
         // No cached clients to close — each probe creates and closes its own
