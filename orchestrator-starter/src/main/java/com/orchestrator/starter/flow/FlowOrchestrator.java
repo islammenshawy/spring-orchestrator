@@ -266,8 +266,14 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         // overwritten by saveFlowWithRetry), then mark completed and persist.
         drainPendingSignals(flow);
 
-        markStepCompleted(flow, stepName);
-        saveFlowWithRetry(flow, flowId);
+        // Atomic step completion: $addToSet + $set in one MongoDB operation.
+        // If crash after this line, the step IS marked completed in DB — no re-execution.
+        // $addToSet is idempotent (ignores duplicates on Kafka redelivery).
+        markStepCompletedAtomic(flow, stepName);
+        // Fallback save for inline mode (no mongoTemplate) — atomic update already persisted in production
+        if (mongoTemplate == null || entityClass == null) {
+            saveFlow(flow);
+        }
 
         metrics.stepExecution(flowType, stepName, StepOutcome.COMPLETED.name(),
                 Duration.between(startedAt, Instant.now()));
@@ -512,35 +518,30 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     /**
      * Execute all pending signals after a step completes, before advancing.
+     *
+     * Process-then-clear pattern (crash-safe):
+     * 1. READ signals from MongoDB (don't clear yet)
+     * 2. PROCESS each signal handler
+     * 3. CLEAR signals from MongoDB only after all succeed
+     * If crash during step 2: signals remain in MongoDB, re-drained on next step.
      */
     @SuppressWarnings("unchecked")
     private void drainPendingSignals(F flow) {
         if (signalRegistry == null) return;
 
-        // Atomic read-and-clear: findAndModify returns the OLD pendingSignals
-        // and unsets them in a single MongoDB operation. Zero race window:
-        // - Signals $pushed BEFORE this → in the returned list → drained
-        // - Signals $pushed AFTER this → create a new array → survive for next drain
         java.util.List<com.orchestrator.starter.domain.PendingSignal> pending;
         if (mongoTemplate != null && entityClass != null) {
+            // Step 1: READ signals without clearing — crash-safe
             try {
-                F snapshot = (F) mongoTemplate.findAndModify(
-                        org.springframework.data.mongodb.core.query.Query.query(
-                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flow.getId())
-                                        .and("pendingSignals").ne(null)),
-                        new org.springframework.data.mongodb.core.query.Update().unset("pendingSignals"),
-                        org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(false),
-                        entityClass);
+                F snapshot = (F) mongoTemplate.findById(flow.getId(), entityClass);
                 pending = snapshot != null ? snapshot.getPendingSignals() : null;
             } catch (Exception e) {
-                // findAndModify failed — signals stay in MongoDB, will be drained on next step
-                log.warn("[Signal] Drain findAndModify failed for flow {} — signals preserved for next drain: {}",
+                log.warn("[Signal] Failed to read pendingSignals for flow {}: {}",
                         flow.getId(), e.getMessage());
                 return;
             }
         } else {
             pending = flow.getPendingSignals();
-            flow.setPendingSignals(null);
         }
 
         if (pending == null || pending.isEmpty()) return;
@@ -566,6 +567,23 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                         ps.getSignalName(), flow.getId(), e.getMessage());
             }
         }
+
+        // Step 3: CLEAR signals from MongoDB only after all processed.
+        // If crash before here: signals remain in DB, re-drained on next step (safe).
+        // If crash after here: signals processed AND cleared (clean).
+        if (mongoTemplate != null && entityClass != null) {
+            try {
+                mongoTemplate.updateFirst(
+                        org.springframework.data.mongodb.core.query.Query.query(
+                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flow.getId())),
+                        new org.springframework.data.mongodb.core.query.Update().unset("pendingSignals"),
+                        entityClass);
+            } catch (Exception e) {
+                log.warn("[Signal] Failed to clear pendingSignals for flow {}: {}",
+                        flow.getId(), e.getMessage());
+            }
+        }
+        flow.setPendingSignals(null);
     }
 
     /** Convert payload to the handler's expected type via Jackson. */
@@ -1083,8 +1101,32 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      * POLLING: flow waits for nextRetryAt (status=WAITING_RETRY). Scheduler
      *          re-delivers when the poll interval elapses.
      */
-    /** Mark step as completed and clear all retry/recovery state. */
-    private void markStepCompleted(F flow, String stepName) {
+    /**
+     * Atomic step completion — persists completedSteps + resets retry state in one MongoDB operation.
+     * Uses $addToSet (idempotent) so Kafka redelivery doesn't double-add.
+     * Crash-safe: if this succeeds, the step IS completed in DB regardless of JVM state.
+     */
+    private void markStepCompletedAtomic(F flow, String stepName) {
+        Instant now = Instant.now();
+        if (mongoTemplate != null && entityClass != null) {
+            mongoTemplate.updateFirst(
+                    org.springframework.data.mongodb.core.query.Query.query(
+                            org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flow.getId())),
+                    new org.springframework.data.mongodb.core.query.Update()
+                            .addToSet("completedSteps", stepName)
+                            .set("retryCount", 0)
+                            .set("backoffSeconds", 0)
+                            .set("nextRetryAt", null)
+                            .set("errorMessage", null)
+                            .set("recoveryCount", 0)
+                            .set("waitingSince", null)
+                            .set("expiresAt", null)
+                            .set("sleepUntil", null)
+                            .set("updatedAt", now)
+                            .inc("version", 1),
+                    entityClass);
+        }
+        // Update in-memory state to match (for subsequent code that reads flow fields)
         flow.getCompletedSteps().add(stepName);
         flow.setRetryCount(0);
         flow.setBackoffSeconds(0);
@@ -1094,7 +1136,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setWaitingSince(null);
         flow.setExpiresAt(null);
         flow.setSleepUntil(null);
-        flow.setUpdatedAt(Instant.now());
+        flow.setUpdatedAt(now);
     }
 
     /** Save flow with 3-attempt optimistic lock retry + full $set fallback. */
