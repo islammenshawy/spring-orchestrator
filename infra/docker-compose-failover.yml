@@ -87,12 +87,13 @@ services:
         condition: service_healthy
     volumes:
       - ./mm2-config.properties:/etc/kafka/mm2.properties:ro
+      - ./mm2-log4j.properties:/etc/kafka/mm2-log4j.properties:ro
     command: >
       bash -c "
         echo 'Waiting for clusters...' &&
         sleep 10 &&
         echo 'Starting MirrorMaker 2...' &&
-        /usr/bin/connect-mirror-maker /etc/kafka/mm2.properties
+        KAFKA_LOG4J_OPTS='-Dlog4j.configuration=file:/etc/kafka/mm2-log4j.properties' /usr/bin/connect-mirror-maker /etc/kafka/mm2.properties
       "
     healthcheck:
       test: ps aux | grep -q MirrorMaker || exit 1
