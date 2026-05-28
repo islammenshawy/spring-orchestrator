@@ -465,6 +465,48 @@ public class OrchestratorAutoConfiguration {
 
     // ========== Command topic @KafkaListener (non-blocking retry topics) ==========
 
+    /**
+     * Command topics to subscribe to. Single-cluster: just the command topic.
+     * Multi-DC PREFIXED: both local and prefixed topics (messages may come from either DC).
+     */
+    @Bean
+    public String[] orchestratorCommandTopics(OrchestratorProperties props) {
+        String commandTopic = props.getKafka().getCommandTopic();
+        var failover = props.getFailover();
+        if (failover.isEnabled()
+                && failover.getReplicationPolicy() == OrchestratorProperties.ReplicationPolicy.PREFIXED) {
+            // Subscribe to BOTH local and all prefixed variants
+            var topics = new java.util.ArrayList<String>();
+            topics.add(commandTopic); // local topic
+            failover.getDcs().values().forEach(dc -> {
+                if (dc.getSourceAlias() != null) {
+                    topics.add(dc.getSourceAlias() + "." + commandTopic);
+                }
+            });
+            log.info("Command topics (PREFIXED failover): {}", topics);
+            return topics.toArray(new String[0]);
+        }
+        return new String[]{commandTopic};
+    }
+
+    @Bean
+    public String[] orchestratorCommandDltTopics(OrchestratorProperties props) {
+        String dltTopic = props.getKafka().getCommandTopic() + "-dlt";
+        var failover = props.getFailover();
+        if (failover.isEnabled()
+                && failover.getReplicationPolicy() == OrchestratorProperties.ReplicationPolicy.PREFIXED) {
+            var topics = new java.util.ArrayList<String>();
+            topics.add(dltTopic);
+            failover.getDcs().values().forEach(dc -> {
+                if (dc.getSourceAlias() != null) {
+                    topics.add(dc.getSourceAlias() + "." + dltTopic);
+                }
+            });
+            return topics.toArray(new String[0]);
+        }
+        return new String[]{dltTopic};
+    }
+
     @Bean
     public OrchestratorCommandListener orchestratorCommandListener(
             OrchestratorKafkaConsumer<?> consumer,
@@ -494,7 +536,7 @@ public class OrchestratorAutoConfiguration {
         }
 
         @org.springframework.kafka.annotation.KafkaListener(
-                topics = "${orchestrator.kafka.command-topic}",
+                topics = "#{@orchestratorCommandTopics}",
                 groupId = "${spring.application.name:orchestrator}-executor")
         public void onCommand(String payload,
                               @org.springframework.messaging.handler.annotation.Header(
@@ -522,7 +564,7 @@ public class OrchestratorAutoConfiguration {
         }
 
         @org.springframework.kafka.annotation.KafkaListener(
-                topics = "${orchestrator.kafka.command-topic}-dlt",
+                topics = "#{@orchestratorCommandDltTopics}",
                 groupId = "${spring.application.name:orchestrator}-dlt")
         public void onCommandDlt(String payload,
                                  @org.springframework.messaging.handler.annotation.Header(
@@ -550,17 +592,30 @@ public class OrchestratorAutoConfiguration {
         backoff.setMaxInterval(retry.getMaxIntervalMs());
         backoff.setJitterFactor(retry.getJitterFactor());
 
-        return RetryTopicConfigurationBuilder
+        var builder = RetryTopicConfigurationBuilder
                 .newInstance()
                 .customBackoff(backoff)
                 .maxAttempts(retry.getMaxAttempts())
-                .includeTopic(props.getKafka().getCommandTopic())
                 .retryTopicSuffix("-retry")
                 .dltSuffix("-dlt")
                 .setTopicSuffixingStrategy(TopicSuffixingStrategy.SUFFIX_WITH_INDEX_VALUE)
                 .dltProcessingFailureStrategy(DltStrategy.FAIL_ON_ERROR)
-                .retryOn(RetryableStepException.class)
-                .create(template);
+                .retryOn(RetryableStepException.class);
+
+        // Include all command topics (local + prefixed variants for PREFIXED failover)
+        String commandTopic = props.getKafka().getCommandTopic();
+        builder.includeTopic(commandTopic);
+        var failover = props.getFailover();
+        if (failover.isEnabled()
+                && failover.getReplicationPolicy() == OrchestratorProperties.ReplicationPolicy.PREFIXED) {
+            failover.getDcs().values().forEach(dc -> {
+                if (dc.getSourceAlias() != null) {
+                    builder.includeTopic(dc.getSourceAlias() + "." + commandTopic);
+                }
+            });
+        }
+
+        return builder.create(template);
     }
 
     // ========== Health Indicator ==========
