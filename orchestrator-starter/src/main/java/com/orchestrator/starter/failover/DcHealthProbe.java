@@ -31,21 +31,18 @@ public class DcHealthProbe {
      */
     public boolean probe(String dcId) {
         try {
-            // Create a fresh AdminClient each probe — cached clients hang on dead brokers
-            // because the internal connection pool retries indefinitely.
-            // AdminClient creation is cheap (~5ms); the probe timeout bounds total cost.
-            try (AdminClient client = createClient(dcId)) {
-                var result = client.describeCluster();
-                var nodes = result.nodes().get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
-                var controller = result.controller().get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
-
-                boolean healthy = !nodes.isEmpty() && controller != null;
-                if (!healthy) {
-                    log.warn("[DC-Probe] {} — {} nodes, controller={}", dcId, nodes.size(),
-                            controller != null ? controller.id() : "NONE");
+            // Run probe on a virtual thread with hard timeout.
+            // AdminClient.create() can hang on dead brokers despite socket timeouts.
+            return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                try (AdminClient client = createClient(dcId)) {
+                    var result = client.describeCluster();
+                    var nodes = result.nodes().get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    var controller = result.controller().get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    return !nodes.isEmpty() && controller != null;
+                } catch (Exception e) {
+                    return false;
                 }
-                return healthy;
-            }
+            }).get(timeoutMs * 2, java.util.concurrent.TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             log.warn("[DC-Probe] {} — failed: {}", dcId, e.getMessage());
             return false;
