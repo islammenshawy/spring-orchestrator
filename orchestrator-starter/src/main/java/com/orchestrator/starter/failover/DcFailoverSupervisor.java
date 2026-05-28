@@ -74,6 +74,9 @@ public class DcFailoverSupervisor {
             consecutiveSuccesses++;
             consecutiveFailures = 0;
 
+            if (state == DcState.DEGRADED && consecutiveSuccesses >= config.getDegradedThreshold()) {
+                transition(DcState.HEALTHY, consecutiveSuccesses + " consecutive successes — recovered");
+            }
             if (state == DcState.COOLDOWN
                     && Instant.now().isAfter(lastTransitionAt.plusSeconds(config.getDwellTimeSeconds()))) {
                 transition(DcState.HEALTHY, "dwell period elapsed, DC stable");
