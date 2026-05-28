@@ -1,0 +1,180 @@
+version: '3.8'
+
+# Two-cluster Kafka setup with MirrorMaker 2 for DC failover testing.
+# Cluster A: zk-a + kafka-a (DC-A, active)
+# Cluster B: zk-b + kafka-b (DC-B, standby)
+# MM2: replicates topics from A → B using default prefix policy
+
+services:
+
+  # ========== Cluster A (DC-A) ==========
+  zk-a:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: echo ruok | nc localhost 2181 || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  kafka-a:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      zk-a:
+        condition: service_healthy
+    ports:
+      - "29092:29092"
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zk-a:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-a:29092,EXTERNAL://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_MESSAGE_TIMESTAMP_TYPE: CreateTime
+    healthcheck:
+      test: kafka-topics --bootstrap-server kafka-a:29092 --list >/dev/null 2>&1 || exit 1
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
+  # ========== Cluster B (DC-B) ==========
+  zk-b:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: echo ruok | nc localhost 2181 || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  kafka-b:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      zk-b:
+        condition: service_healthy
+    ports:
+      - "29093:29093"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zk-b:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-b:29093,EXTERNAL://localhost:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_MESSAGE_TIMESTAMP_TYPE: CreateTime
+    healthcheck:
+      test: kafka-topics --bootstrap-server kafka-b:29093 --list >/dev/null 2>&1 || exit 1
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
+  # ========== MirrorMaker 2 (A → B replication) ==========
+  mirror-maker:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      kafka-a:
+        condition: service_healthy
+      kafka-b:
+        condition: service_healthy
+    volumes:
+      - ./mm2-config.properties:/etc/kafka/mm2.properties:ro
+    command: >
+      bash -c "
+        echo 'Waiting for clusters...' &&
+        sleep 10 &&
+        echo 'Starting MirrorMaker 2...' &&
+        /usr/bin/connect-mirror-maker /etc/kafka/mm2.properties
+      "
+    healthcheck:
+      test: ps aux | grep -q MirrorMaker || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ========== Shared MongoDB ==========
+  mongodb:
+    image: mongo:7.0
+    ports:
+      - "27117:27017"
+    volumes:
+      - mongo-failover-data:/data/db
+    healthcheck:
+      test: mongosh --eval "db.adminCommand('ping')" --quiet
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ========== Mock Vendor ==========
+  mock-vendor:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      args:
+        JAR_FILE: mock-vendor/target/mock-vendor-0.0.1-SNAPSHOT.jar
+    ports:
+      - "8081:8081"
+    environment:
+      MOCK_WEBHOOK_DEFAULT_URL: http://dis-failover:8087/webhooks/enigio
+    healthcheck:
+      test: wget -qO- http://localhost:8081/actuator/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ========== DIS with failover enabled ==========
+  dis-failover:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      args:
+        JAR_FILE: digital-instrument-service/target/digital-instrument-service-0.0.1-SNAPSHOT.jar
+    ports:
+      - "8087:8087"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka-a:
+        condition: service_healthy
+      kafka-b:
+        condition: service_healthy
+      mock-vendor:
+        condition: service_healthy
+    environment:
+      SPRING_MONGODB_URI: mongodb://mongodb:27017/digital_instrument_service
+      # Boot on DC-A cluster
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-a:29092
+      VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
+      DIS_AUTH_API_KEY: soak-test-key
+      # Failover config
+      ORCHESTRATOR_FAILOVER_ENABLED: "true"
+      ORCHESTRATOR_FAILOVER_ACTIVE_DC: dc-a
+      ORCHESTRATOR_FAILOVER_REPLICATION_POLICY: PREFIXED
+      ORCHESTRATOR_FAILOVER_DCS_DC_A_BOOTSTRAP: kafka-a:29092
+      ORCHESTRATOR_FAILOVER_DCS_DC_A_SOURCE_ALIAS: dc-a
+      ORCHESTRATOR_FAILOVER_DCS_DC_B_BOOTSTRAP: kafka-b:29093
+      ORCHESTRATOR_FAILOVER_DCS_DC_B_SOURCE_ALIAS: dc-b
+      ORCHESTRATOR_FAILOVER_DEGRADED_THRESHOLD: 3
+      ORCHESTRATOR_FAILOVER_FAILOVER_THRESHOLD: 6
+      ORCHESTRATOR_FAILOVER_DWELL_TIME_SECONDS: 30
+      ORCHESTRATOR_KAFKA_CLUSTER_ID: dc-a
+      # Recovery tuning
+      ORCHESTRATOR_RECOVERY_STALE_THRESHOLD_MINUTES: 2
+      ORCHESTRATOR_RECOVERY_SCAN_INTERVAL_MS: 10000
+    healthcheck:
+      test: wget -qO- http://localhost:8087/actuator/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+
+volumes:
+  mongo-failover-data:

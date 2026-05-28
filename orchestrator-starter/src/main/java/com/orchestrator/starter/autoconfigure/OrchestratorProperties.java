@@ -29,6 +29,7 @@ public class OrchestratorProperties {
      *  Only set fields override — null fields fall back to global config. */
     private Map<String, FlowConfig> flows = new LinkedHashMap<>();
     private AuditConfig audit = new AuditConfig();
+    private FailoverConfig failover = new FailoverConfig();
 
     @Data
     public static class KafkaConfig {
@@ -191,5 +192,42 @@ public class OrchestratorProperties {
         private String dltTopic;
         /** Reply topic override. Null = use standard {topic}.replies suffix. */
         private String replyTopic;
+    }
+
+    @Data
+    public static class FailoverConfig {
+        /** Enable multi-DC failover. Default: false (single-cluster mode). */
+        private boolean enabled = false;
+        /** Which DC is currently active. Must match a key in the dcs map. */
+        private String activeDc = "dc-a";
+        /** Replication policy: IDENTITY (same topic names) or PREFIXED (MM2 default: {source-alias}.{topic}). */
+        private ReplicationPolicy replicationPolicy = ReplicationPolicy.IDENTITY;
+        /** Per-DC configuration. Key = DC identifier (e.g., "dc-a", "dc-b"). */
+        private Map<String, DcConfig> dcs = new LinkedHashMap<>();
+        /** Consecutive probe failures before entering DEGRADED state. */
+        private int degradedThreshold = 3;
+        /** Consecutive probe failures before triggering failover. */
+        private int failoverThreshold = 6;
+        /** Minimum time between DC transitions (prevents flapping). */
+        private int dwellTimeSeconds = 300;
+        /** Health probe interval in milliseconds. */
+        private long probeIntervalMs = 5000;
+        /** Health probe timeout in milliseconds. */
+        private long probeTimeoutMs = 2000;
+    }
+
+    public enum ReplicationPolicy {
+        /** IdentityReplicationPolicy — same topic and group names on both DCs. */
+        IDENTITY,
+        /** DefaultReplicationPolicy — topics prefixed with {source-alias}. on target DC. */
+        PREFIXED
+    }
+
+    @Data
+    public static class DcConfig {
+        /** Kafka bootstrap servers for this DC. */
+        private String bootstrap;
+        /** Source alias used by MirrorMaker 2. Only needed when replicationPolicy=PREFIXED. */
+        private String sourceAlias;
     }
 }
