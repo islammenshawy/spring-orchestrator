@@ -55,4 +55,13 @@ public class FailoverAutoConfiguration {
                                                       OrchestratorProperties props) {
         return new DcFailoverSupervisor(probe, kafkaManager, mongoTemplate, props.getFailover());
     }
+
+    @Bean
+    public DcHealthEndpoint dcHealthEndpoint(DcFailoverSupervisor supervisor,
+                                              DcHealthProbe probe,
+                                              DcAwareKafkaManager kafkaManager,
+                                              TopicResolver topicResolver,
+                                              OrchestratorProperties props) {
+        return new DcHealthEndpoint(supervisor, probe, kafkaManager, topicResolver, props.getFailover());
+    }
 }
