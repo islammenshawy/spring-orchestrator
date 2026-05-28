@@ -16,7 +16,6 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 public class DcHealthProbe {
 
-    private final Map<String, AdminClient> clients = new ConcurrentHashMap<>();
     private final Map<String, String> dcBootstraps;
     private final long timeoutMs;
 
@@ -32,17 +31,21 @@ public class DcHealthProbe {
      */
     public boolean probe(String dcId) {
         try {
-            AdminClient client = clients.computeIfAbsent(dcId, this::createClient);
-            var result = client.describeCluster();
-            var nodes = result.nodes().get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
-            var controller = result.controller().get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            // Create a fresh AdminClient each probe — cached clients hang on dead brokers
+            // because the internal connection pool retries indefinitely.
+            // AdminClient creation is cheap (~5ms); the probe timeout bounds total cost.
+            try (AdminClient client = createClient(dcId)) {
+                var result = client.describeCluster();
+                var nodes = result.nodes().get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                var controller = result.controller().get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
 
-            boolean healthy = !nodes.isEmpty() && controller != null;
-            if (!healthy) {
-                log.warn("[DC-Probe] {} — {} nodes, controller={}", dcId, nodes.size(),
-                        controller != null ? controller.id() : "NONE");
+                boolean healthy = !nodes.isEmpty() && controller != null;
+                if (!healthy) {
+                    log.warn("[DC-Probe] {} — {} nodes, controller={}", dcId, nodes.size(),
+                            controller != null ? controller.id() : "NONE");
+                }
+                return healthy;
             }
-            return healthy;
         } catch (Exception e) {
             log.warn("[DC-Probe] {} — failed: {}", dcId, e.getMessage());
             return false;
@@ -58,15 +61,15 @@ public class DcHealthProbe {
         props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
         props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, (int) timeoutMs);
         props.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, (int) timeoutMs);
+        props.put(AdminClientConfig.SOCKET_CONNECTION_SETUP_TIMEOUT_MS_CONFIG, (int) timeoutMs);
+        props.put(AdminClientConfig.RECONNECT_BACKOFF_MS_CONFIG, 100);
+        props.put(AdminClientConfig.RECONNECT_BACKOFF_MAX_MS_CONFIG, (int) timeoutMs);
         props.put(AdminClientConfig.CLIENT_ID_CONFIG, "dc-health-probe-" + dcId);
         log.info("[DC-Probe] Created AdminClient for DC '{}' → {}", dcId, bootstrap);
         return AdminClient.create(props);
     }
 
     public void close() {
-        clients.values().forEach(c -> {
-            try { c.close(Duration.ofSeconds(5)); } catch (Exception ignored) {}
-        });
-        clients.clear();
+        // No cached clients to close — each probe creates and closes its own
     }
 }
