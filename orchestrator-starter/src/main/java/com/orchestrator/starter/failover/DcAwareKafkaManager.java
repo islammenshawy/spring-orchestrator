@@ -38,6 +38,8 @@ public class DcAwareKafkaManager {
 
     /** Set by FailoverAutoConfiguration after context is ready. */
     @Setter private DcAwareListenerManager listenerManager;
+    /** Registry for @KafkaListener containers (command topic + retry topics). */
+    @Setter private org.springframework.kafka.config.KafkaListenerEndpointRegistry kafkaListenerRegistry;
 
     public DcAwareKafkaManager(OrchestratorProperties.FailoverConfig config, TopicResolver topicResolver) {
         this.config = config;
@@ -68,13 +70,29 @@ public class DcAwareKafkaManager {
         this.originatingDc = previousDc;
         this.activeDc = newActiveDc;
 
-        // Switch listener containers: stop old DC's, start new DC's (pre-created warm standby)
+        // Switch programmatic listener containers (reply + DLT): stop old DC's, start new DC's
         if (listenerManager != null) {
             listenerManager.switchDc(previousDc, newActiveDc);
         }
 
+        // Restart @KafkaListener containers (command topic + retry topics).
+        // DcAwareConsumerFactory is @Primary — restarted containers create consumers from new DC.
+        if (kafkaListenerRegistry != null) {
+            log.info("[DC-Kafka] Restarting @KafkaListener containers for DC switch...");
+            kafkaListenerRegistry.getListenerContainers().forEach(container -> {
+                try {
+                    String id = container.getListenerId();
+                    container.stop();
+                    container.start();
+                    log.info("[DC-Kafka] Restarted @KafkaListener: {}", id);
+                } catch (Exception e) {
+                    log.warn("[DC-Kafka] Failed to restart container: {}", e.getMessage());
+                }
+            });
+        }
+
         // Producer swap is immediate — DcAwareKafkaTemplate reads activeDc on each send()
-        log.info("[DC-Kafka] Switched active DC: {} → {} (producer instant, consumers swapped)", previousDc, newActiveDc);
+        log.info("[DC-Kafka] Switched active DC: {} → {} (producer + all consumers)", previousDc, newActiveDc);
     }
 
     /** Get the active KafkaTemplate for producing messages. */

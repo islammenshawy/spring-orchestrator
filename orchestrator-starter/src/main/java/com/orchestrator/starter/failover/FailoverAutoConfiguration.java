@@ -52,9 +52,11 @@ public class FailoverAutoConfiguration {
 
     @Bean
     public DcAwareListenerManager dcAwareListenerManager(DcAwareKafkaManager kafkaManager,
-                                                          TopicResolver topicResolver) {
+                                                          TopicResolver topicResolver,
+                                                          org.springframework.kafka.config.KafkaListenerEndpointRegistry registry) {
         var manager = new DcAwareListenerManager(kafkaManager, topicResolver);
         kafkaManager.setListenerManager(manager);
+        kafkaManager.setKafkaListenerRegistry(registry);
         return manager;
     }
 
