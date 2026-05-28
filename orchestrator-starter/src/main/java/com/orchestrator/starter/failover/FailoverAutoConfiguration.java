@@ -5,7 +5,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 import java.util.HashMap;
@@ -49,11 +51,43 @@ public class FailoverAutoConfiguration {
     }
 
     @Bean
+    public DcAwareListenerManager dcAwareListenerManager(DcAwareKafkaManager kafkaManager,
+                                                          TopicResolver topicResolver) {
+        var manager = new DcAwareListenerManager(kafkaManager, topicResolver);
+        kafkaManager.setListenerManager(manager);
+        return manager;
+    }
+
+    @Bean
     public DcFailoverSupervisor dcFailoverSupervisor(DcHealthProbe probe,
                                                       DcAwareKafkaManager kafkaManager,
                                                       MongoTemplate mongoTemplate,
                                                       OrchestratorProperties props) {
         return new DcFailoverSupervisor(probe, kafkaManager, mongoTemplate, props.getFailover());
+    }
+
+    /**
+     * DC-aware KafkaTemplate — replaces the default KafkaTemplate bean.
+     * All producers use this, which delegates to the active DC's real template.
+     */
+    @Bean
+    @Primary
+    @SuppressWarnings("rawtypes")
+    public KafkaTemplate dcAwareKafkaTemplate(DcAwareKafkaManager kafkaManager) {
+        log.info("[Failover] DcAwareKafkaTemplate registered as primary KafkaTemplate");
+        return new DcAwareKafkaTemplate(kafkaManager);
+    }
+
+    /**
+     * DC-aware ConsumerFactory — replaces the default ConsumerFactory bean.
+     * When containers restart after failover, new consumers connect to the active DC.
+     */
+    @Bean
+    @Primary
+    @SuppressWarnings("rawtypes")
+    public org.springframework.kafka.core.ConsumerFactory dcAwareConsumerFactory(DcAwareKafkaManager kafkaManager) {
+        log.info("[Failover] DcAwareConsumerFactory registered as primary ConsumerFactory");
+        return new DcAwareConsumerFactory(kafkaManager);
     }
 
     @Bean

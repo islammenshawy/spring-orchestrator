@@ -2,6 +2,7 @@ package com.orchestrator.starter.failover;
 
 import com.orchestrator.starter.autoconfigure.OrchestratorProperties;
 import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -10,6 +11,7 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.*;
 import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
+import org.springframework.kafka.listener.MessageListenerContainer;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -34,6 +36,9 @@ public class DcAwareKafkaManager {
     @Getter private volatile String activeDc;
     private volatile String originatingDc; // DC where messages were originally produced
 
+    /** Set by FailoverAutoConfiguration after context is ready. */
+    @Setter private DcAwareListenerManager listenerManager;
+
     public DcAwareKafkaManager(OrchestratorProperties.FailoverConfig config, TopicResolver topicResolver) {
         this.config = config;
         this.topicResolver = topicResolver;
@@ -51,17 +56,25 @@ public class DcAwareKafkaManager {
     }
 
     /**
-     * Switch the active DC. Caller (supervisor) handles the state machine.
-     * This method just swaps which KafkaTemplate/ConsumerFactory is "active".
+     * Switch the active DC. Stops all Kafka listener containers (they'll reconnect
+     * on next start using the offset recovery listener which reads from MongoDB).
+     * The DcAwareKafkaTemplate automatically routes to the new active template.
      */
     public void switchActiveDc(String newActiveDc) {
         if (!consumerFactories.containsKey(newActiveDc)) {
             throw new IllegalArgumentException("Unknown DC: " + newActiveDc + ". Known: " + consumerFactories.keySet());
         }
         String previousDc = this.activeDc;
-        this.originatingDc = previousDc; // messages originated from the previous active DC
+        this.originatingDc = previousDc;
         this.activeDc = newActiveDc;
-        log.info("[DC-Kafka] Switched active DC: {} → {}", previousDc, newActiveDc);
+
+        // Switch listener containers: stop old DC's, start new DC's (pre-created warm standby)
+        if (listenerManager != null) {
+            listenerManager.switchDc(previousDc, newActiveDc);
+        }
+
+        // Producer swap is immediate — DcAwareKafkaTemplate reads activeDc on each send()
+        log.info("[DC-Kafka] Switched active DC: {} → {} (producer instant, consumers swapped)", previousDc, newActiveDc);
     }
 
     /** Get the active KafkaTemplate for producing messages. */
@@ -82,6 +95,11 @@ public class DcAwareKafkaManager {
     /** Get the ConsumerFactory for a specific DC. */
     public ConsumerFactory<String, String> getConsumerFactory(String dcId) {
         return consumerFactories.get(dcId);
+    }
+
+    /** Get all configured DC identifiers. */
+    public java.util.Set<String> getAllDcIds() {
+        return consumerFactories.keySet();
     }
 
     /**
