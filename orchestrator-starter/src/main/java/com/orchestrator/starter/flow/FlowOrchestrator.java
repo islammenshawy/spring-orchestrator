@@ -118,6 +118,20 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
+        // Duplicate flow detection: if correlationId is set, check for existing flow
+        if (flow.getCorrelationId() != null && mongoTemplate != null && entityClass != null) {
+            var existing = mongoTemplate.findOne(
+                    org.springframework.data.mongodb.core.query.Query.query(
+                            org.springframework.data.mongodb.core.query.Criteria.where("correlationId").is(flow.getCorrelationId())
+                                    .and("flowType").is(flowType)),
+                    entityClass);
+            if (existing != null) {
+                log.info("[Saga] Duplicate flow detected — correlationId={} already exists as {}",
+                        flow.getCorrelationId(), existing.getId());
+                return existing;
+            }
+        }
+
         flow.setCurrentStep(stepRegistry.getFirstStep());
         flow.setStatus(FlowStatus.IN_PROGRESS);
         flow.setUpdatedAt(Instant.now());
