@@ -53,6 +53,17 @@ public class MongoOffsetRecoveryListener implements ConsumerAwareRebalanceListen
     public void onPartitionsAssigned(Consumer<?, ?> consumer, Collection<TopicPartition> partitions) {
         if (partitions.isEmpty()) return;
 
+        try {
+            recoverFromMongoDB(consumer, partitions);
+        } catch (Exception e) {
+            // MongoDB unavailable during startup — fall back to Kafka offsets or timestamp fallback
+            log.warn("[OffsetRecovery] MongoDB unavailable during partition assignment — using Kafka/fallback: {}",
+                    e.getMessage());
+            fallbackListener.onPartitionsAssigned(consumer, partitions);
+        }
+    }
+
+    private void recoverFromMongoDB(Consumer<?, ?> consumer, Collection<TopicPartition> partitions) {
         // Always check MongoDB for every partition — MongoDB is the cross-DC source of truth.
         // Kafka's __consumer_offsets may be stale (from a previous deployment on this cluster)
         // or missing (first time on this cluster). MongoDB offsets are replicated cross-DC.

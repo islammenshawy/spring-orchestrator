@@ -1,3 +1,4 @@
 com.orchestrator.starter.autoconfigure.OrchestratorAutoConfiguration
 com.orchestrator.starter.autoconfigure.MongoTransactionAutoConfiguration
 com.orchestrator.starter.autoconfigure.FlowEndpointAutoConfiguration
+com.orchestrator.starter.failover.FailoverAutoConfiguration
