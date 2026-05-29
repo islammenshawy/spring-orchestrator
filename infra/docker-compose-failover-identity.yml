@@ -1,0 +1,12 @@
+# Override for IDENTITY replication policy.
+# Usage: docker compose -f docker-compose-failover.yml -f docker-compose-failover-identity.yml up -d
+
+services:
+  mirror-maker:
+    volumes:
+      - ./mm2-config-identity.properties:/etc/kafka/mm2.properties:ro
+      - ./mm2-log4j.properties:/etc/kafka/mm2-log4j.properties:ro
+
+  dis-failover:
+    environment:
+      ORCHESTRATOR_FAILOVER_REPLICATION_POLICY: IDENTITY
