@@ -533,12 +533,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     /**
      * Execute all pending signals after a step completes, before advancing.
-     *
-     * Process-then-clear pattern (crash-safe):
-     * 1. READ signals from MongoDB (don't clear yet)
-     * 2. PROCESS each signal handler
-     * 3. CLEAR signals from MongoDB only after all succeed
-     * If crash during step 2: signals remain in MongoDB, re-drained on next step.
+     * Atomic read-and-clear via findAndModify — signals $pushed BEFORE this are drained,
+     * signals $pushed AFTER this create a new array and survive for next drain.
      */
     @SuppressWarnings("unchecked")
     private void drainPendingSignals(F flow) {
@@ -546,17 +542,23 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
         java.util.List<com.orchestrator.starter.domain.PendingSignal> pending;
         if (mongoTemplate != null && entityClass != null) {
-            // Step 1: READ signals without clearing — crash-safe
             try {
-                F snapshot = (F) mongoTemplate.findById(flow.getId(), entityClass);
+                F snapshot = (F) mongoTemplate.findAndModify(
+                        org.springframework.data.mongodb.core.query.Query.query(
+                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flow.getId())
+                                        .and("pendingSignals").ne(null)),
+                        new org.springframework.data.mongodb.core.query.Update().unset("pendingSignals"),
+                        org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(false),
+                        entityClass);
                 pending = snapshot != null ? snapshot.getPendingSignals() : null;
             } catch (Exception e) {
-                log.warn("[Signal] Failed to read pendingSignals for flow {}: {}",
+                log.warn("[Signal] Drain findAndModify failed for flow {} — signals preserved for next drain: {}",
                         flow.getId(), e.getMessage());
                 return;
             }
         } else {
             pending = flow.getPendingSignals();
+            flow.setPendingSignals(null);
         }
 
         if (pending == null || pending.isEmpty()) return;
@@ -583,21 +585,6 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }
 
-        // Step 3: CLEAR signals from MongoDB only after all processed.
-        // If crash before here: signals remain in DB, re-drained on next step (safe).
-        // If crash after here: signals processed AND cleared (clean).
-        if (mongoTemplate != null && entityClass != null) {
-            try {
-                mongoTemplate.updateFirst(
-                        org.springframework.data.mongodb.core.query.Query.query(
-                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flow.getId())),
-                        new org.springframework.data.mongodb.core.query.Update().unset("pendingSignals"),
-                        entityClass);
-            } catch (Exception e) {
-                log.warn("[Signal] Failed to clear pendingSignals for flow {}: {}",
-                        flow.getId(), e.getMessage());
-            }
-        }
         flow.setPendingSignals(null);
     }
 
