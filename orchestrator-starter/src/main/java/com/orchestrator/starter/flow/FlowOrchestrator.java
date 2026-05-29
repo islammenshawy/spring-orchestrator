@@ -1136,6 +1136,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                             .set("waitingSince", null)
                             .set("expiresAt", null)
                             .set("sleepUntil", null)
+                            .set("pollCount", 0)
                             .set("updatedAt", now)
                             .inc("version", 1),
                     entityClass);
@@ -1150,6 +1151,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setWaitingSince(null);
         flow.setExpiresAt(null);
         flow.setSleepUntil(null);
+        flow.setPollCount(0);
         flow.setUpdatedAt(now);
     }
 
@@ -1242,6 +1244,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             // Polling and sleeping: set nextRetryAt so scheduler re-delivers
             if (e.getWaitMode() == WaitingStepException.WaitMode.POLLING && e.getPollInterval() != null) {
                 fields.put("nextRetryAt", now.plus(e.getPollInterval()));
+                fields.put("pollCount", flow.getPollCount() + 1);
             } else if (isSleeping) {
                 fields.put("nextRetryAt", now.plus(e.getExpiry()));
             }
@@ -1258,6 +1261,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
             if (e.getWaitMode() == WaitingStepException.WaitMode.POLLING && e.getPollInterval() != null) {
                 flow.setNextRetryAt(now.plus(e.getPollInterval()));
+                flow.setPollCount(flow.getPollCount() + 1);
             } else if (isSleeping) {
                 flow.setNextRetryAt(now.plus(e.getExpiry()));
             }

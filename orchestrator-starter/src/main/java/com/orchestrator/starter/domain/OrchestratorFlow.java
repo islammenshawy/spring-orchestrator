@@ -73,6 +73,10 @@ public interface OrchestratorFlow {
     default int getRecoveryCount() { return 0; }
     default void setRecoveryCount(int count) {}
 
+    /** Number of poll cycles for the current pollUntil() step. Reset on step advancement. */
+    default int getPollCount() { return 0; }
+    default void setPollCount(int count) {}
+
     /** Error from failed compensation handler (when status=COMPENSATION_FAILED). */
     default String getCompensationError() { return null; }
     default void setCompensationError(String error) {}

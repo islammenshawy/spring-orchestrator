@@ -65,6 +65,9 @@ public abstract class AbstractFlow implements OrchestratorFlow {
     /** Number of times stale recovery has re-published this flow. Reset on step success. */
     private int recoveryCount = 0;
 
+    /** Number of poll cycles for the current pollUntil() step. Reset on step advancement. */
+    private int pollCount = 0;
+
     /** Error message from a failed compensation handler (when status=COMPENSATION_FAILED). */
     private String compensationError;
 
