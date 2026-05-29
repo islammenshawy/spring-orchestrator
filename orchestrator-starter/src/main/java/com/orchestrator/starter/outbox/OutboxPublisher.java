@@ -62,9 +62,16 @@ public class OutboxPublisher {
         // Fire all Kafka sends in parallel
         List<CompletableFuture<Void>> futures = new ArrayList<>(events.size());
         for (OutboxEvent event : events) {
-            @SuppressWarnings("unchecked")
-            CompletableFuture<Object> sendFuture =
-                    (CompletableFuture<Object>) kafkaTemplate.send(event.getTopic(), event.getKey(), event.getPayload());
+            CompletableFuture<Object> sendFuture;
+            try {
+                @SuppressWarnings("unchecked")
+                CompletableFuture<Object> sf =
+                        (CompletableFuture<Object>) kafkaTemplate.send(event.getTopic(), event.getKey(), event.getPayload());
+                sendFuture = sf;
+            } catch (Exception e) {
+                // Synchronous send failure (invalid topic, serialization error) — handle inline
+                sendFuture = CompletableFuture.failedFuture(e);
+            }
             CompletableFuture<Void> future = sendFuture
                     .thenAccept(result -> {
                         event.setPublished(true);
