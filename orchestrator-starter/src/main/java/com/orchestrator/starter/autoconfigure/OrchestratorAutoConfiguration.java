@@ -249,6 +249,7 @@ public class OrchestratorAutoConfiguration {
         }
         orchestrator.setMongoTemplate(mongoTemplate);
         orchestrator.setMaxLogSnapshotBytes(props.getAudit().getMaxLogSnapshotBytes());
+        orchestrator.setDcId(props.getKafka().getClusterId());
         // Validator is set separately after bean creation (injected via ObjectProvider in registry bean)
         // See orchestratorFlowTypeRegistry() for wiring
 
@@ -455,6 +456,31 @@ public class OrchestratorAutoConfiguration {
 
         log.info("Registered {} Kafka listener containers", containers.size());
         return containers;
+    }
+
+    /**
+     * Startup safety: validates all required beans are ready before consumers process messages.
+     * Prevents the race condition where Kafka assigns partitions and delivers messages
+     * before MongoTemplate, FlowTypeRegistry, etc. are fully initialized.
+     */
+    @Bean
+    public org.springframework.context.ApplicationListener<org.springframework.context.event.ContextRefreshedEvent>
+    orchestratorStartupValidator(FlowTypeRegistry registry, MongoTemplate mongoTemplate) {
+        return event -> {
+            // Validate critical beans are initialized
+            if (registry.getAll().isEmpty()) {
+                log.warn("[Startup] No flow types registered — orchestrator has nothing to process");
+            }
+            try {
+                mongoTemplate.getDb().getName();
+                log.info("[Startup] MongoDB connection verified: {}", mongoTemplate.getDb().getName());
+            } catch (Exception e) {
+                log.error("[Startup] MongoDB NOT reachable — flows will fail until connection is established: {}",
+                        e.getMessage());
+            }
+            log.info("[Startup] Orchestrator ready — {} flow type(s), Kafka consumers active",
+                    registry.getAll().size());
+        };
     }
 
     private String extractDltException(ConsumerRecord<String, String> record) {

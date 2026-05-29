@@ -1,0 +1,209 @@
+# ============================================================================
+# Spring Orchestrator — Complete Configuration Reference
+# ============================================================================
+# Copy the properties you need into your application.yml.
+# All values shown are DEFAULTS — only override what you need to change.
+#
+# Required Spring properties (not managed by orchestrator):
+#   spring.mongodb.uri: mongodb://localhost:27017/your_database
+#   spring.kafka.bootstrap-servers: localhost:9092
+# ============================================================================
+
+orchestrator:
+
+  # --------------------------------------------------------------------------
+  # Kafka topics
+  # --------------------------------------------------------------------------
+  kafka:
+    # Main command topic — all step commands are published here.
+    command-topic: orchestrator.commands
+
+    # Reply topic — step results published here in reply mode.
+    # Set to "" (empty string) to disable reply mode (inline execution).
+    # Default: {command-topic}.replies
+    reply-topic:
+
+    # Number of partitions for auto-created topics.
+    # Must be >= number of app instances for even partition distribution.
+    partitions: 6
+
+    # Kafka cluster identifier for multi-DC offset isolation.
+    # Each DC must have a unique ID. Offsets stored per-cluster in MongoDB.
+    # "default" = single-cluster mode (backward-compatible key format).
+    cluster-id: default
+
+  # --------------------------------------------------------------------------
+  # Non-blocking retry (Kafka retry topics)
+  # --------------------------------------------------------------------------
+  retry:
+    # Total attempts (including first try). 4 = 1 original + 3 retries.
+    max-attempts: 4
+    # Initial backoff delay before first retry.
+    initial-interval-ms: 2000
+    # Backoff multiplier. 2.0 = 2s → 4s → 8s.
+    multiplier: 2.0
+    # Maximum backoff delay cap.
+    max-interval-ms: 30000
+    # Jitter factor (0.0-1.0). 0.5 = ±50% randomization to prevent thundering herd.
+    jitter-factor: 0.5
+
+  # --------------------------------------------------------------------------
+  # Stale flow recovery (crash recovery + polling/expiry scanner)
+  # --------------------------------------------------------------------------
+  recovery:
+    # How often the recovery scanner runs (ms).
+    scan-interval-ms: 30000
+
+    # How long a flow must be IN_PROGRESS without updates before recovery claims it.
+    # Must exceed retry budget: max-attempts × max-interval-ms.
+    # Example: 4 attempts × 30s = 2min. Set threshold > 2min.
+    stale-threshold-minutes: 15
+
+    # Max recovery attempts before marking a stuck flow FAILED + running compensation.
+    max-recovery-attempts: 10
+
+    # Number of flows to claim per batch in recovery/expiry scans.
+    batch-size: 100
+
+    # Minutes before an orphaned claim is released (crashed pod cleanup).
+    claim-ttl-minutes: 5
+
+    # Where to store consumer offsets for cross-cluster failover.
+    # MONGO: MongoDB (replicated cross-DC) — recommended for multi-cluster.
+    # KAFKA: __consumer_offsets only — single-cluster.
+    offset-store: MONGO
+
+    # Fallback when offset not found in Kafka or MongoDB.
+    # TIMESTAMP: seek to (now - offset-fallback-hours) via offsetsForTimes().
+    # EARLIEST: replay from beginning (safe but expensive).
+    # LATEST: skip to end (fast but may miss in-flight messages).
+    offset-fallback: TIMESTAMP
+
+    # Hours to look back when using TIMESTAMP fallback.
+    offset-fallback-hours: 24
+
+  # --------------------------------------------------------------------------
+  # Transactional outbox (guaranteed Kafka delivery)
+  # --------------------------------------------------------------------------
+  outbox:
+    # How often the outbox publisher polls for unpublished events (ms).
+    # Lower = faster step transitions. Higher = less CPU.
+    poll-interval-ms: 500
+
+    # Max publish retries before dead-lettering an outbox event.
+    max-publish-retries: 5
+
+    # Events to send in parallel per poll cycle.
+    # Smaller = fewer duplicates on crash. Larger = higher throughput.
+    batch-size: 50
+
+  # --------------------------------------------------------------------------
+  # Step execution
+  # --------------------------------------------------------------------------
+  step:
+    # Timeout in seconds for step execution. 0 = disabled.
+    # Exceeding this throws RetryableStepException → Kafka retry topics.
+    timeout-seconds: 60
+
+  # --------------------------------------------------------------------------
+  # REST API endpoints (/flows/{flowType}/...)
+  # --------------------------------------------------------------------------
+  endpoints:
+    # Enable REST API for flow management (search, signal, replay, cancel).
+    enabled: true
+    # Base path for flow endpoints.
+    base-path: /flows
+
+  # --------------------------------------------------------------------------
+  # Data retention (MongoDB TTL indexes)
+  # --------------------------------------------------------------------------
+  retention:
+    # Auto-delete published outbox events after N days.
+    outbox-days: 7
+    # Auto-delete idempotency records after N days.
+    processed-events-days: 30
+    # Auto-delete step audit logs after N days. 0 = keep forever.
+    step-log-days: 90
+    # Kafka DLT topic retention in hours.
+    dlt-retention-hours: 24
+
+  # --------------------------------------------------------------------------
+  # Health indicator
+  # --------------------------------------------------------------------------
+  health:
+    # Outbox pending event threshold. Health goes DOWN if exceeded.
+    outbox-threshold: 100
+
+  # --------------------------------------------------------------------------
+  # Audit / step logging
+  # --------------------------------------------------------------------------
+  audit:
+    # Include full flow state JSON (before/after) in step logs.
+    # OFF: ~500 bytes/step. ON: ~4KB/step. Disable for high-volume production.
+    include-flow-state: false
+    # Max size (bytes) for flow state snapshots. Larger entities are skipped.
+    max-log-snapshot-bytes: 32768
+
+  # --------------------------------------------------------------------------
+  # Per-flow overrides (optional)
+  # --------------------------------------------------------------------------
+  # flows:
+  #   payment:
+  #     dlt-topic: payment.critical-dlt    # custom DLT topic
+  #     reply-topic: payment.replies       # custom reply topic
+
+  # --------------------------------------------------------------------------
+  # Multi-DC failover (disabled by default — zero overhead when off)
+  # --------------------------------------------------------------------------
+  failover:
+    # Enable multi-DC failover supervisor. When false, no failover beans are created.
+    enabled: false
+
+    # Which DC is currently active at startup. Must match a key in the dcs map.
+    active-dc: dca
+
+    # How MirrorMaker 2 replicates topics between DCs:
+    #   IDENTITY: same topic names on both DCs (requires IdentityReplicationPolicy in MM2).
+    #   PREFIXED: MM2 default — topics prefixed with {source-alias}. on target DC.
+    replication-policy: IDENTITY
+
+    # Per-DC configuration. Key = DC identifier (no hyphens for env var binding).
+    # dcs:
+    #   dca:
+    #     bootstrap: kafka-a-1:9092,kafka-a-2:9092
+    #     source-alias: dc-a       # MM2 source alias (PREFIXED mode only)
+    #   dcb:
+    #     bootstrap: kafka-b-1:9092,kafka-b-2:9092
+    #     source-alias: dc-b
+
+    # Consecutive probe failures before entering DEGRADED state (alerting, no action).
+    degraded-threshold: 3
+
+    # Consecutive probe failures before triggering failover to standby DC.
+    failover-threshold: 6
+
+    # Minimum seconds between DC transitions (prevents flapping on network blips).
+    dwell-time-seconds: 300
+
+    # Health probe interval (ms). Each probe is a TCP socket connect to the broker.
+    probe-interval-ms: 5000
+
+    # Health probe timeout (ms). If broker doesn't respond within this, probe fails.
+    probe-timeout-ms: 2000
+
+# ============================================================================
+# Required Spring properties for the orchestrator
+# ============================================================================
+# spring:
+#   mongodb:
+#     uri: mongodb://localhost:27017/your_database
+#   kafka:
+#     bootstrap-servers: localhost:9092
+#     consumer:
+#       auto-offset-reset: earliest
+#
+# For multi-DC failover, also set:
+#   spring.task.scheduling.pool-size: 3   # multi-threaded scheduler
+#
+# Actuator endpoint for DC health (failover mode):
+#   management.endpoints.web.exposure.include: health,metrics,dc-health

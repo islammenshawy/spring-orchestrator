@@ -63,6 +63,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     @Setter private Class<F> entityClass;
     @Setter private org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
     @Setter private jakarta.validation.Validator validator;
+    /** DC identifier for cross-DC log correlation. Set from kafka.cluster-id config. */
+    @Setter private String dcId;
 
     @Builder
     public FlowOrchestrator(
@@ -174,12 +176,15 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         MDC.put("flowId", flowId);
         MDC.put("flowType", flowType != null ? flowType : DEFAULT_FLOW_TYPE);
         if (stepName != null) MDC.put("stepName", stepName);
+        // DC identifier for cross-DC log correlation
+        if (dcId != null) MDC.put("dcId", dcId);
         try {
         doExecuteStepInner(flowId, stepName);
         } finally {
             MDC.remove("flowId");
             MDC.remove("flowType");
             MDC.remove("stepName");
+            MDC.remove("dcId");
             MDC.remove("parentFlowId");
             MDC.remove("parentFlowType");
         }
