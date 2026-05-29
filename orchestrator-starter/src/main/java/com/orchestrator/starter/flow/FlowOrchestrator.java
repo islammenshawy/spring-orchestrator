@@ -285,14 +285,10 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         // overwritten by saveFlowWithRetry), then mark completed and persist.
         drainPendingSignals(flow);
 
-        // Atomic step completion: $addToSet + $set in one MongoDB operation.
-        // If crash after this line, the step IS marked completed in DB — no re-execution.
-        // $addToSet is idempotent (ignores duplicates on Kafka redelivery).
-        markStepCompletedAtomic(flow, stepName);
-        // Fallback save for inline mode (no mongoTemplate) — atomic update already persisted in production
-        if (mongoTemplate == null || entityClass == null) {
-            saveFlow(flow);
-        }
+        // Complete step: mark completed + persist entire flow in one call.
+        // flowRepository.save() is atomic at MongoDB level (single document replace).
+        // Domain fields + completedSteps + reset fields all saved together.
+        completeStep(flow, flowId, stepName);
 
         metrics.stepExecution(flowType, stepName, StepOutcome.COMPLETED.name(),
                 Duration.between(startedAt, Instant.now()));
@@ -1121,32 +1117,11 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      *          re-delivers when the poll interval elapses.
      */
     /**
-     * Atomic step completion — persists completedSteps + resets retry state in one MongoDB operation.
-     * Uses $addToSet (idempotent) so Kafka redelivery doesn't double-add.
-     * Crash-safe: if this succeeds, the step IS completed in DB regardless of JVM state.
+     * Complete a step: mark as completed + persist entire flow in one call.
+     * Uses flowRepository.save() which is atomic at MongoDB level (single document replace).
+     * Domain fields + completedSteps + reset fields all saved together — no inconsistent state.
      */
-    private void markStepCompletedAtomic(F flow, String stepName) {
-        Instant now = Instant.now();
-        if (mongoTemplate != null && entityClass != null) {
-            mongoTemplate.updateFirst(
-                    org.springframework.data.mongodb.core.query.Query.query(
-                            org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flow.getId())),
-                    new org.springframework.data.mongodb.core.query.Update()
-                            .addToSet("completedSteps", stepName)
-                            .set("retryCount", 0)
-                            .set("backoffSeconds", 0)
-                            .set("nextRetryAt", null)
-                            .set("errorMessage", null)
-                            .set("recoveryCount", 0)
-                            .set("waitingSince", null)
-                            .set("expiresAt", null)
-                            .set("sleepUntil", null)
-                            .set("pollCount", 0)
-                            .set("updatedAt", now)
-                            .inc("version", 1),
-                    entityClass);
-        }
-        // Update in-memory state to match (for subsequent code that reads flow fields)
+    private void completeStep(F flow, String flowId, String stepName) {
         flow.getCompletedSteps().add(stepName);
         flow.setRetryCount(0);
         flow.setBackoffSeconds(0);
@@ -1157,7 +1132,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setExpiresAt(null);
         flow.setSleepUntil(null);
         flow.setPollCount(0);
-        flow.setUpdatedAt(now);
+        flow.setUpdatedAt(Instant.now());
+        saveFlowWithRetry(flow, flowId);
     }
 
     /** Save flow with 3-attempt optimistic lock retry + full $set fallback. */
