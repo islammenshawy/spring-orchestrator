@@ -250,6 +250,9 @@ public class OrchestratorAutoConfiguration {
         orchestrator.setMongoTemplate(mongoTemplate);
         orchestrator.setMaxLogSnapshotBytes(props.getAudit().getMaxLogSnapshotBytes());
         orchestrator.setDcId(props.getKafka().getClusterId());
+        String hostname = System.getenv("HOSTNAME");
+        orchestrator.setPodId(hostname != null && !hostname.isBlank()
+                ? hostname : "pod-" + Integer.toHexString(System.identityHashCode(orchestrator)));
         // Validator is set separately after bean creation (injected via ObjectProvider in registry bean)
         // See orchestratorFlowTypeRegistry() for wiring
 

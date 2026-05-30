@@ -30,6 +30,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -69,6 +70,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     @Setter private jakarta.validation.Validator validator;
     /** DC identifier for cross-DC log correlation. Set from kafka.cluster-id config. */
     @Setter private String dcId;
+    /** Pod/instance ID for step execution claim. Prevents concurrent step execution on rebalance. */
+    @Setter private String podId;
 
     @Builder
     public FlowOrchestrator(
@@ -227,8 +230,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         if (handler instanceof MethodStepAdapter<?> adapter && adapter.isJoinPoint()) {
             String group = adapter.getJoinOnGroup();
             List<StepHandler<F>> parallelSteps = stepRegistry.getParallelGroup(group);
+            Set<String> completed = flow.getCompletedSteps();
             boolean allDone = parallelSteps.stream()
-                    .allMatch(ps -> flow.getCompletedSteps().contains(ps.getStepName()));
+                    .allMatch(ps -> completed.contains(ps.getStepName()));
             if (!allDone) {
                 log.info("[Saga] Join {} waiting — not all parallel steps in group '{}' completed",
                         stepName, group);
@@ -249,11 +253,40 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             // Fall through to execute — step handlers are idempotent.
         }
 
-        flow.setStatus(FlowStatus.IN_PROGRESS);
+        // Atomic claim: prevent concurrent consumers from executing the same step.
+        // On Kafka rebalance, two consumers may receive the same message. The first to
+        // claim wins; the second sees modifiedCount=0 and skips.
+        // Gate re-activation (step in completedSteps but currentStep matches) skips the
+        // claim check — the step handler is idempotent for these cases.
+        if (mongoTemplate != null && entityClass != null
+                && !flow.getCompletedSteps().contains(stepName)) {
+            long claimed = mongoTemplate.updateFirst(
+                    Query.query(Criteria.where("_id").is(flowId)
+                            .and("executingStep").is(null)
+                            .and("completedSteps").nin(stepName)),
+                    new Update()
+                            .set("executingStep", stepName)
+                            .set("executingPod", podId)
+                            .set("status", FlowStatus.IN_PROGRESS.name())
+                            .set("updatedAt", Instant.now())
+                            .inc("version", 1),
+                    entityClass).getModifiedCount();
+            if (claimed == 0) {
+                log.info("[Saga] Step {} already claimed on flow {} — skipping (rebalance duplicate)",
+                        stepName, flowId);
+                return;
+            }
+            // Re-read to get updated version after claim
+            flow = flowRepository.findById(flowId)
+                    .orElseThrow(() -> new NonRetryableStepException("Flow not found after claim: " + flowId));
+        } else {
+            flow.setStatus(FlowStatus.IN_PROGRESS);
+        }
+
         String flowBefore = includeFlowStateInLogs ? serializeForLog(flow) : null;
         Instant startedAt = Instant.now();
 
-        log.info("[Saga] Executing step {} for flow {}", stepName, flowId);
+        log.info("[Saga] Executing step {} for flow {} (pod: {})", stepName, flowId, podId);
 
         try {
             executeWithTimeout(handler, flow, stepName);
@@ -1177,6 +1210,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setExpiresAt(null);
         flow.setSleepUntil(null);
         flow.setPollCount(0);
+        // Release execution claim — allows recovery scanner to detect stale claims
+        flow.setExecutingStep(null);
+        flow.setExecutingPod(null);
         flow.setUpdatedAt(Instant.now());
         saveFlowWithRetry(flow, flowId);
     }
@@ -1271,6 +1307,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             var fields = new java.util.LinkedHashMap<String, Object>();
             fields.put("status", targetStatus.name());
             fields.put("errorMessage", errorMsg);
+            fields.put("executingStep", null);
+            fields.put("executingPod", null);
             fields.put("updatedAt", now);
             // Set waitingSince and expiresAt only on first entry — don't reset on re-activation
             if (flow.getWaitingSince() == null) {
@@ -1315,19 +1353,24 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         String errorMsg = e.getMessage() != null ? e.getMessage() : "retryable error";
         // Use $set to avoid @Version conflict
         if (mongoTemplate != null && entityClass != null) {
-            updateFlowPartial(flow.getId(), java.util.Map.of(
-                    "retryCount", retryCount,
-                    "backoffSeconds", backoff,
-                    "nextRetryAt", nextRetry,
-                    "status", FlowStatus.WAITING_RETRY.name(),
-                    "errorMessage", errorMsg,
-                    "updatedAt", Instant.now()));
+            var fields = new java.util.LinkedHashMap<String, Object>();
+            fields.put("retryCount", retryCount);
+            fields.put("backoffSeconds", backoff);
+            fields.put("nextRetryAt", nextRetry);
+            fields.put("status", FlowStatus.WAITING_RETRY.name());
+            fields.put("errorMessage", errorMsg);
+            fields.put("executingStep", null);
+            fields.put("executingPod", null);
+            fields.put("updatedAt", Instant.now());
+            updateFlowPartial(flow.getId(), fields);
         } else {
             flow.setRetryCount(retryCount);
             flow.setBackoffSeconds(backoff);
             flow.setNextRetryAt(nextRetry);
             flow.setStatus(FlowStatus.WAITING_RETRY);
             flow.setErrorMessage(errorMsg);
+            flow.setExecutingStep(null);
+            flow.setExecutingPod(null);
             flow.setUpdatedAt(Instant.now());
             saveFlow(flow);
         }
@@ -1341,12 +1384,17 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         // recovery scanner will detect COMPENSATING and re-run (Fix S1/S5)
         flow.setStatus(FlowStatus.COMPENSATING);
         flow.setErrorMessage(errorMsg);
+        flow.setExecutingStep(null);
+        flow.setExecutingPod(null);
         flow.setUpdatedAt(Instant.now());
         if (mongoTemplate != null && entityClass != null) {
-            updateFlowPartial(flow.getId(), java.util.Map.of(
-                    "status", FlowStatus.COMPENSATING.name(),
-                    "errorMessage", errorMsg,
-                    "updatedAt", Instant.now()));
+            var fields = new java.util.LinkedHashMap<String, Object>();
+            fields.put("status", FlowStatus.COMPENSATING.name());
+            fields.put("errorMessage", errorMsg);
+            fields.put("executingStep", null);
+            fields.put("executingPod", null);
+            fields.put("updatedAt", Instant.now());
+            updateFlowPartial(flow.getId(), fields);
         } else {
             saveFlow(flow);
         }

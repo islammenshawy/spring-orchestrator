@@ -95,6 +95,13 @@ public abstract class AbstractFlow implements OrchestratorFlow {
     /** Parent step name — which step to re-publish when child completes. */
     private String parentStepName;
 
+    /** Step currently being executed. Set atomically before execution, cleared on completion.
+     *  Prevents concurrent consumers (e.g. Kafka rebalance) from executing the same step. */
+    private String executingStep;
+
+    /** Pod/instance ID executing the current step. For diagnostics and stale claim detection. */
+    private String executingPod;
+
     /** Pod ID that claimed this flow for recovery processing. Null = unclaimed. */
     private String claimedBy;
 

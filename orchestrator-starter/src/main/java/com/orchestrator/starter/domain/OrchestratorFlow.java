@@ -129,4 +129,12 @@ public interface OrchestratorFlow {
     /** When this flow was claimed for recovery. Used for orphan TTL. */
     default Instant getClaimedAt() { return null; }
     default void setClaimedAt(Instant claimedAt) {}
+
+    /** Step currently being executed (claim guard). Null = no active execution. */
+    default String getExecutingStep() { return null; }
+    default void setExecutingStep(String step) {}
+
+    /** Pod/instance executing the current step. For diagnostics. */
+    default String getExecutingPod() { return null; }
+    default void setExecutingPod(String pod) {}
 }
