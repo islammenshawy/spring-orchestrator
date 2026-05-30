@@ -6,7 +6,7 @@ WAVE_SIZE=${WAVE_SIZE:-10}
 WAVE_INTERVAL=${WAVE_INTERVAL:-15}
 DIS_URL=${DIS_URL:-http://localhost:8090}
 API_KEY=${API_KEY:-soak-test-key}
-DRAIN_TIMEOUT=120
+DRAIN_TIMEOUT=${DRAIN_TIMEOUT:-300}
 CHAOS=${CHAOS:-0}           # Set CHAOS=1 to enable chaos scenarios
 POD_KILL_WAVE=${POD_KILL_WAVE:-0}  # Wave number to kill DIS-1 (0=auto at 40%)
 DEDUP_INTERVAL=${DEDUP_INTERVAL:-5} # Inject duplicates every N waves
