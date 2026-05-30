@@ -511,10 +511,11 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         FlowStatus status = flow.getStatus();
 
         if (status == FlowStatus.PARKED || status == FlowStatus.WAITING_RETRY) {
-            // Safe to execute immediately — nothing else is running
+            // Execute immediately — use saveFlowWithRetry to detect concurrent advancement
+            // (scheduler may wake the flow between our read and save)
             Object typedPayload = convertPayload(handler, payload);
             handler.invoke(flow, typedPayload);
-            saveFlow(flow);
+            saveFlowWithRetry(flow, flowId);
             log.info("[Signal] Executed '{}' on flow {} (was {})", signalName, flowId, status);
 
             // Re-publish current step so waitUntil/pollUntil re-evaluates
@@ -555,7 +556,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                             || freshFlow.getStatus() == FlowStatus.WAITING_RETRY)) {
                         Object typedPayload = convertPayload(handler, payload);
                         handler.invoke(freshFlow, typedPayload);
-                        saveFlow(freshFlow);
+                        saveFlowWithRetry(freshFlow, flowId);
                         try {
                             String pk = freshFlow.getCorrelationId() != null
                                     ? freshFlow.getCorrelationId() : freshFlow.getId();
@@ -1310,14 +1311,6 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             fields.put("executingStep", null);
             fields.put("executingPod", null);
             fields.put("updatedAt", now);
-            // Set waitingSince and expiresAt only on first entry — don't reset on re-activation
-            if (flow.getWaitingSince() == null) {
-                fields.put("waitingSince", now);
-                // SLEEPING has no expiry — the sleep IS the intended wait
-                if (!isSleeping) {
-                    fields.put("expiresAt", now.plus(e.getExpiry()));
-                }
-            }
             // Polling and sleeping: set nextRetryAt so scheduler re-delivers
             if (e.getWaitMode() == WaitingStepException.WaitMode.POLLING && e.getPollInterval() != null) {
                 fields.put("nextRetryAt", now.plus(e.getPollInterval()));
@@ -1326,6 +1319,18 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 fields.put("nextRetryAt", now.plus(e.getExpiry()));
             }
             updateFlowPartial(flow.getId(), fields);
+
+            // Atomic CAS: set waitingSince/expiresAt only if not already set in DB.
+            // Prevents concurrent re-entry from resetting the original expiry deadline.
+            Update firstEntryUpdate = new Update()
+                    .set("waitingSince", now);
+            if (!isSleeping) {
+                firstEntryUpdate.set("expiresAt", now.plus(e.getExpiry()));
+            }
+            mongoTemplate.updateFirst(
+                    Query.query(Criteria.where("_id").is(flow.getId())
+                            .and("waitingSince").is(null)),
+                    firstEntryUpdate, entityClass);
         } else {
             flow.setStatus(targetStatus);
             flow.setErrorMessage(errorMsg);
@@ -1411,25 +1416,48 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         markParallelStepCompleted(flow, stepName, handler, stepName);
     }
 
+    @SuppressWarnings("unchecked")
     private void markParallelStepCompleted(F flow, String stepName, StepHandler<F> handler,
                                             String completedStep) {
         if (handler instanceof MethodStepAdapter<?> adapter && adapter.isParallel()) {
-            java.util.Set<String> completed = new java.util.HashSet<>(flow.getCompletedParallelSteps());
-            completed.add(stepName);
-            flow.setCompletedParallelSteps(completed);
-            flow.setUpdatedAt(Instant.now());
-            saveFlow(flow);
+            // Atomic $addToSet — prevents race where two parallel steps save independently
+            // and neither sees the other's completion in their in-memory set.
+            if (mongoTemplate != null && entityClass != null) {
+                mongoTemplate.updateFirst(
+                        Query.query(Criteria.where("_id").is(flow.getId())),
+                        new Update()
+                                .addToSet("completedParallelSteps", stepName)
+                                .set("updatedAt", Instant.now())
+                                .inc("version", 1),
+                        entityClass);
+                // Re-read from DB to get the authoritative set (includes other threads' additions)
+                F fresh = flowRepository.findById(flow.getId()).orElse(null);
+                if (fresh == null) return;
+                Set<String> completed = fresh.getCompletedParallelSteps();
+                List<StepHandler<F>> siblings = stepRegistry.getParallelGroup(adapter.getParallelGroup());
+                boolean allDone = siblings.stream().allMatch(s -> completed.contains(s.getStepName()));
 
-            List<StepHandler<F>> siblings = stepRegistry.getParallelGroup(adapter.getParallelGroup());
-            boolean allDone = siblings.stream().allMatch(s -> completed.contains(s.getStepName()));
-
-            if (allDone) {
-                log.info("[Saga] All parallel steps in group '{}' completed for flow {}",
-                        adapter.getParallelGroup(), flow.getId());
-                advanceToNextStep(flow, completedStep);
+                if (allDone) {
+                    log.info("[Saga] All parallel steps in group '{}' completed for flow {}",
+                            adapter.getParallelGroup(), flow.getId());
+                    advanceToNextStep(flow, completedStep);
+                } else {
+                    log.info("[Saga] Parallel step {} done, waiting for siblings in group '{}'",
+                            stepName, adapter.getParallelGroup());
+                }
             } else {
-                log.info("[Saga] Parallel step {} done, waiting for siblings in group '{}'",
-                        stepName, adapter.getParallelGroup());
+                // Fallback for inline mode
+                java.util.Set<String> completed = new java.util.HashSet<>(flow.getCompletedParallelSteps());
+                completed.add(stepName);
+                flow.setCompletedParallelSteps(completed);
+                flow.setUpdatedAt(Instant.now());
+                saveFlow(flow);
+
+                List<StepHandler<F>> siblings = stepRegistry.getParallelGroup(adapter.getParallelGroup());
+                boolean allDone = siblings.stream().allMatch(s -> completed.contains(s.getStepName()));
+                if (allDone) {
+                    advanceToNextStep(flow, completedStep);
+                }
             }
         } else {
             // Sequential step — advance using the completed step name for correct next-step resolution
