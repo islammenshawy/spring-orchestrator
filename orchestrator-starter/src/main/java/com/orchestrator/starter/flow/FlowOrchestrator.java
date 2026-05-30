@@ -29,7 +29,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -130,7 +132,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         // Duplicate flow detection: if correlationId is set, check for existing flow
         if (flow.getCorrelationId() != null && mongoTemplate != null && entityClass != null) {
             var existing = mongoTemplate.findOne(
-                    org.springframework.data.mongodb.core.query.Query.query(
+                    Query.query(
                             Criteria.where("correlationId").is(flow.getCorrelationId())
                                     .and("flowType").is(flowType)),
                     entityClass);
@@ -387,34 +389,20 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      */
     private void publishReply(String flowId, String stepName, String status,
                               String error, String flowSnapshot) {
+        StepReplyMessage reply = StepReplyMessage.builder()
+                .flowId(flowId).stepName(stepName)
+                .eventId(UUID.randomUUID().toString())
+                .status(status).errorMessage(error)
+                .flowType(flowType).flowSnapshot(flowSnapshot).build();
         try {
-            StepReplyMessage reply = StepReplyMessage.builder()
-                    .flowId(flowId)
-                    .stepName(stepName)
-                    .eventId(UUID.randomUUID().toString())
-                    .status(status)
-                    .errorMessage(error)
-                    .flowType(flowType)
-                    .flowSnapshot(flowSnapshot)
-                    .build();
-            // Reply uses flowId as key — reply consumer always runs on same instance
             kafkaTemplate.send(replyTopic, flowId, objectMapper.writeValueAsString(reply)).get();
         } catch (Exception e) {
             log.error("[Saga] Reply publish failed for flow {} step {} — writing outbox fallback: {}",
                     flowId, stepName, e.getMessage());
-            // Fallback: write reply as outbox event so it gets retried
             try {
-                String partitionKey = flowId;
-                StepReplyMessage reply = StepReplyMessage.builder()
-                        .flowId(flowId).stepName(stepName)
-                        .eventId(UUID.randomUUID().toString())
-                        .status(status).errorMessage(error)
-                        .flowType(flowType).flowSnapshot(flowSnapshot).build();
-                outboxRepository.save(com.orchestrator.starter.outbox.OutboxEvent.builder()
+                outboxRepository.save(OutboxEvent.builder()
                         .id(UUID.randomUUID().toString())
-                        .flowId(flowId)
-                        .topic(replyTopic)
-                        .key(partitionKey)
+                        .flowId(flowId).topic(replyTopic).key(flowId)
                         .payload(objectMapper.writeValueAsString(reply))
                         .build());
             } catch (Exception ex) {
@@ -438,12 +426,12 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
         // CAS: only transition to COMPENSATING from non-terminal states.
         // Prevents double compensation if two DLT handlers or recovery scanner race.
-        java.util.List<String> compensatable = java.util.List.of(
+        List<String> compensatable = List.of(
                 FlowStatus.IN_PROGRESS.name(), FlowStatus.WAITING_RETRY.name(),
                 FlowStatus.PARKED.name(), FlowStatus.PENDING.name());
 
         F flow = casUpdateStatus(flowId, compensatable, FlowStatus.COMPENSATING,
-                java.util.Map.of("errorMessage", errorDetail));
+                Map.of("errorMessage", errorDetail));
         if (flow == null) {
             F existing = flowRepository.findById(flowId).orElse(null);
             if (existing == null) {
@@ -574,7 +562,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             } else {
                 var signals = flow.getPendingSignals();
                 if (signals == null) {
-                    signals = new java.util.ArrayList<>();
+                    signals = new ArrayList<>();
                     flow.setPendingSignals(signals);
                 }
                 signals.add(pending);
@@ -601,7 +589,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     private void drainPendingSignals(F flow) {
         if (signalRegistry == null) return;
 
-        java.util.List<com.orchestrator.starter.domain.PendingSignal> pending;
+        List<com.orchestrator.starter.domain.PendingSignal> pending;
         if (mongoTemplate != null && entityClass != null) {
             try {
                 F snapshot = (F) mongoTemplate.findById(flow.getId(), entityClass);
@@ -754,12 +742,12 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      */
     public F cancelFlow(String flowId, String reason) {
         String errorMsg = "CANCELLED: " + (reason != null ? reason : "user requested");
-        java.util.List<String> cancellable = java.util.List.of(
+        List<String> cancellable = List.of(
                 FlowStatus.IN_PROGRESS.name(), FlowStatus.WAITING_RETRY.name(),
                 FlowStatus.PARKED.name(), FlowStatus.PENDING.name(), FlowStatus.CANCELLING.name());
 
         F flow = casUpdateStatus(flowId, cancellable, FlowStatus.CANCELLING,
-                java.util.Map.of("errorMessage", errorMsg));
+                Map.of("errorMessage", errorMsg));
         if (flow == null) {
             // CAS failed or no mongoTemplate — try fallback for inline mode
             flow = flowRepository.findById(flowId).orElse(null);
@@ -925,7 +913,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
 
         // Only terminal states can be replayed
-        java.util.List<String> replayable = new java.util.ArrayList<>(java.util.List.of(
+        List<String> replayable = new ArrayList<>(List.of(
                 FlowStatus.FAILED.name(), FlowStatus.CANCELLED.name(),
                 FlowStatus.COMPENSATION_FAILED.name()));
         if (options.isAllowCompleted()) replayable.add(FlowStatus.COMPLETED.name());
@@ -950,16 +938,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             flow.getCompletedSteps().removeAll(stepsToRemove);
         }
 
-        var replayFields = new java.util.LinkedHashMap<String, Object>();
-        replayFields.put("retryCount", 0);
-        replayFields.put("backoffSeconds", 0);
-        replayFields.put("nextRetryAt", null);
-        replayFields.put("errorMessage", null);
-        replayFields.put("recoveryCount", 0);
-        replayFields.put("waitingSince", null);
-        replayFields.put("expiresAt", null);
-        replayFields.put("sleepUntil", null);
-        replayFields.put("compensationError", null);
+        var replayFields = resetOrchestrationFields();
         replayFields.put("currentStep", flow.getCurrentStep());
         replayFields.put("completedSteps", flow.getCompletedSteps());
 
@@ -975,16 +954,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
             flow = fresh;
             flow.setStatus(FlowStatus.IN_PROGRESS);
-            flow.setRetryCount(0);
-            flow.setBackoffSeconds(0);
-            flow.setNextRetryAt(null);
-            flow.setErrorMessage(null);
-            flow.setRecoveryCount(0);
-            flow.setWaitingSince(null);
-            flow.setExpiresAt(null);
-            flow.setSleepUntil(null);
-            flow.setCompensationError(null);
-            flow.setUpdatedAt(Instant.now());
+            resetOrchestrationState(flow);
             saveFlow(flow);
         }
 
@@ -1004,33 +974,33 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     }
 
     /** Batch replay — returns per-flow results. */
-    public List<java.util.Map<String, String>> replayFlows(List<String> flowIds, ReplayOptions options) {
-        List<java.util.Map<String, String>> results = new java.util.ArrayList<>();
+    public List<Map<String, String>> replayFlows(List<String> flowIds, ReplayOptions options) {
+        List<Map<String, String>> results = new ArrayList<>();
         for (String flowId : flowIds) {
             try {
                 replayFlow(flowId, options);
-                results.add(java.util.Map.of("flowId", flowId, "status", "replayed"));
+                results.add(Map.of("flowId", flowId, "status", "replayed"));
             } catch (Exception e) {
-                results.add(java.util.Map.of("flowId", flowId, "status", "error", "error", e.getMessage()));
+                results.add(Map.of("flowId", flowId, "status", "error", "error", e.getMessage()));
             }
         }
         return results;
     }
 
     /** Batch cancel — returns per-flow results. */
-    public List<java.util.Map<String, String>> cancelFlows(List<String> flowIds, String reason) {
-        List<java.util.Map<String, String>> results = new java.util.ArrayList<>();
+    public List<Map<String, String>> cancelFlows(List<String> flowIds, String reason) {
+        List<Map<String, String>> results = new ArrayList<>();
         for (String flowId : flowIds) {
             try {
                 F cancelled = cancelFlow(flowId, reason);
                 if (cancelled != null) {
-                    results.add(java.util.Map.of("flowId", flowId, "status", "cancelled"));
+                    results.add(Map.of("flowId", flowId, "status", "cancelled"));
                 } else {
-                    results.add(java.util.Map.of("flowId", flowId, "status", "error",
+                    results.add(Map.of("flowId", flowId, "status", "error",
                             "error", "Flow not in cancellable state"));
                 }
             } catch (Exception e) {
-                results.add(java.util.Map.of("flowId", flowId, "status", "error", "error", e.getMessage()));
+                results.add(Map.of("flowId", flowId, "status", "error", "error", e.getMessage()));
             }
         }
         return results;
@@ -1056,15 +1026,15 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                         new Update()
                                 .set("status", FlowStatus.COMPLETED.name())
                                 .set("updatedAt", Instant.now())
-                                .set("completedParallelSteps", java.util.List.of()),
+                                .set("completedParallelSteps", List.of()),
                         entityClass
                 ).getModifiedCount();
                 if (mod == 0) return; // Already completed by another consumer
             } else {
-                updateFlowPartial(flow.getId(), java.util.Map.of(
+                updateFlowPartial(flow.getId(), Map.of(
                         "status", FlowStatus.COMPLETED.name(),
                         "updatedAt", Instant.now(),
-                        "completedParallelSteps", java.util.List.of()));
+                        "completedParallelSteps", List.of()));
             }
             metrics.flowCompleted(flowType);
             log.info("[Saga] Flow {} completed", flow.getId());
@@ -1078,7 +1048,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         long modified = 0;
         if (mongoTemplate != null && entityClass != null) {
             modified = mongoTemplate.updateFirst(
-                    org.springframework.data.mongodb.core.query.Query.query(
+                    Query.query(
                             Criteria
                                     .where("_id").is(flow.getId())
                                     .and("currentStep").is(completedStep)),
@@ -1089,7 +1059,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             ).getModifiedCount();
         } else {
             // Fallback for tests without MongoDB
-            updateFlowPartial(flow.getId(), java.util.Map.of(
+            updateFlowPartial(flow.getId(), Map.of(
                     "currentStep", nextStep, "updatedAt", Instant.now()));
             modified = 1;
         }
@@ -1164,13 +1134,13 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      * Bypasses @Version check, preserves domain fields.
      * Used by the reply consumer to avoid conflicts with the command consumer.
      */
-    private void updateFlowPartial(String flowId, java.util.Map<String, Object> fields) {
+    private void updateFlowPartial(String flowId, Map<String, Object> fields) {
         if (mongoTemplate != null && entityClass != null) {
             var update = new Update();
             fields.forEach(update::set);
             update.inc("version", 1);
             mongoTemplate.updateFirst(
-                    org.springframework.data.mongodb.core.query.Query.query(
+                    Query.query(
                             Criteria.where("_id").is(flowId)),
                     update, entityClass);
         } else {
@@ -1187,21 +1157,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
     }
 
-    /**
-     * Gate/polling step — parks flow without incrementing retryCount.
-     *
-     * PARKED: flow sleeps in MongoDB (status=PARKED). No Kafka re-delivery.
-     *         Woken by external trigger (webhook/API re-publishes step command).
-     * POLLING: flow waits for nextRetryAt (status=WAITING_RETRY). Scheduler
-     *          re-delivers when the poll interval elapses.
-     */
-    /**
-     * Complete a step: mark as completed + persist entire flow in one call.
-     * Uses flowRepository.save() which is atomic at MongoDB level (single document replace).
-     * Domain fields + completedSteps + reset fields all saved together — no inconsistent state.
-     */
-    private void completeStep(F flow, String flowId, String stepName) {
-        flow.getCompletedSteps().add(stepName);
+    /** Reset all orchestration tracking fields and release execution claim. */
+    private void resetOrchestrationState(F flow) {
         flow.setRetryCount(0);
         flow.setBackoffSeconds(0);
         flow.setNextRetryAt(null);
@@ -1211,10 +1168,38 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setExpiresAt(null);
         flow.setSleepUntil(null);
         flow.setPollCount(0);
-        // Release execution claim — allows recovery scanner to detect stale claims
+        flow.setCompensationError(null);
         flow.setExecutingStep(null);
         flow.setExecutingPod(null);
         flow.setUpdatedAt(Instant.now());
+    }
+
+    /** Returns a field map matching resetOrchestrationState for use with CAS/partial updates. */
+    private Map<String, Object> resetOrchestrationFields() {
+        var fields = new LinkedHashMap<String, Object>();
+        fields.put("retryCount", 0);
+        fields.put("backoffSeconds", 0);
+        fields.put("nextRetryAt", null);
+        fields.put("errorMessage", null);
+        fields.put("recoveryCount", 0);
+        fields.put("waitingSince", null);
+        fields.put("expiresAt", null);
+        fields.put("sleepUntil", null);
+        fields.put("pollCount", 0);
+        fields.put("compensationError", null);
+        fields.put("executingStep", null);
+        fields.put("executingPod", null);
+        return fields;
+    }
+
+    /**
+     * Complete a step: mark as completed + persist entire flow in one call.
+     * Uses flowRepository.save() which is atomic at MongoDB level (single document replace).
+     * Domain fields + completedSteps + reset fields all saved together — no inconsistent state.
+     */
+    private void completeStep(F flow, String flowId, String stepName) {
+        flow.getCompletedSteps().add(stepName);
+        resetOrchestrationState(flow);
         saveFlowWithRetry(flow, flowId);
     }
 
@@ -1253,7 +1238,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         if (!saved && mongoTemplate != null && entityClass != null) {
             log.error("[Saga] Version conflict persisted after 3 attempts for flow {} — full partial update", flowId);
             try {
-                java.util.Map<String, Object> flowMap = objectMapper.convertValue(flow, java.util.Map.class);
+                Map<String, Object> flowMap = objectMapper.convertValue(flow, Map.class);
                 flowMap.remove("_id");
                 flowMap.remove("id");
                 flowMap.remove("version");
@@ -1305,7 +1290,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         Instant now = Instant.now();
 
         if (mongoTemplate != null && entityClass != null) {
-            var fields = new java.util.LinkedHashMap<String, Object>();
+            var fields = new LinkedHashMap<String, Object>();
             fields.put("status", targetStatus.name());
             fields.put("errorMessage", errorMsg);
             fields.put("executingStep", null);
@@ -1356,17 +1341,16 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         int backoff = (int) Math.min(Math.pow(2, retryCount), 60);
         Instant nextRetry = Instant.now().plusSeconds(backoff);
         String errorMsg = e.getMessage() != null ? e.getMessage() : "retryable error";
-        // Use $set to avoid @Version conflict
+        var fields = new LinkedHashMap<String, Object>();
+        fields.put("retryCount", retryCount);
+        fields.put("backoffSeconds", backoff);
+        fields.put("nextRetryAt", nextRetry);
+        fields.put("status", FlowStatus.WAITING_RETRY.name());
+        fields.put("errorMessage", errorMsg);
+        fields.put("executingStep", null);
+        fields.put("executingPod", null);
+        fields.put("updatedAt", Instant.now());
         if (mongoTemplate != null && entityClass != null) {
-            var fields = new java.util.LinkedHashMap<String, Object>();
-            fields.put("retryCount", retryCount);
-            fields.put("backoffSeconds", backoff);
-            fields.put("nextRetryAt", nextRetry);
-            fields.put("status", FlowStatus.WAITING_RETRY.name());
-            fields.put("errorMessage", errorMsg);
-            fields.put("executingStep", null);
-            fields.put("executingPod", null);
-            fields.put("updatedAt", Instant.now());
             updateFlowPartial(flow.getId(), fields);
         } else {
             flow.setRetryCount(retryCount);
@@ -1393,7 +1377,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         flow.setExecutingPod(null);
         flow.setUpdatedAt(Instant.now());
         if (mongoTemplate != null && entityClass != null) {
-            var fields = new java.util.LinkedHashMap<String, Object>();
+            var fields = new LinkedHashMap<String, Object>();
             fields.put("status", FlowStatus.COMPENSATING.name());
             fields.put("errorMessage", errorMsg);
             fields.put("executingStep", null);
@@ -1447,7 +1431,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 }
             } else {
                 // Fallback for inline mode
-                java.util.Set<String> completed = new java.util.HashSet<>(flow.getCompletedParallelSteps());
+                Set<String> completed = new java.util.HashSet<>(flow.getCompletedParallelSteps());
                 completed.add(stepName);
                 flow.setCompletedParallelSteps(completed);
                 flow.setUpdatedAt(Instant.now());
@@ -1542,8 +1526,8 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      * @param extraFields additional fields to $set atomically with the status change (may be null)
      */
     @SuppressWarnings("unchecked")
-    private F casUpdateStatus(String flowId, java.util.List<String> fromStatuses,
-                               FlowStatus toStatus, java.util.Map<String, Object> extraFields) {
+    private F casUpdateStatus(String flowId, List<String> fromStatuses,
+                               FlowStatus toStatus, Map<String, Object> extraFields) {
         if (mongoTemplate == null || entityClass == null) return null;
         Update update = new Update()
                 .set("status", toStatus.name())
@@ -1614,7 +1598,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      * Search flows by @SearchAttribute fields.
      * Builds a MongoDB query from the provided key-value pairs.
      */
-    public List<F> findFlows(java.util.Map<String, Object> searchAttributes) {
+    public List<F> findFlows(Map<String, Object> searchAttributes) {
         if (mongoTemplate == null || entityClass == null) {
             log.warn("[Search] findFlows called but mongoTemplate/entityClass not configured — returning empty");
             return List.of();
@@ -1626,7 +1610,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         var criteriaList = new java.util.ArrayList<Criteria>();
         searchAttributes.forEach((k, v) ->
                 criteriaList.add(Criteria.where(k).is(v)));
-        var query = org.springframework.data.mongodb.core.query.Query.query(
+        var query = Query.query(
                 new Criteria().andOperator(
                         criteriaList.toArray(new Criteria[0])));
         query.limit(100);
