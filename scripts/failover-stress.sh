@@ -122,18 +122,21 @@ log "Kafka offsets reset"
 
 capture_metrics "BASELINE"
 POLICY=$(curl -sf "$DIS_URL/actuator/dc-health" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('replicationPolicy','?'))" 2>/dev/null)
+CYCLE_INTERVAL=${CYCLE_INTERVAL:-5}  # minutes between kill/restart cycles
+KILL_COUNT=0
+
 log "=========================================="
 log "Starting ${DURATION}m failover stress test"
 log "Mode: $POLICY | Wave: $WAVE_SIZE flows every ${WAVE_INTERVAL}s"
-log "DC-A kill at ${FAILOVER_AT_PCT}% through test"
+log "Failover cycle every ${CYCLE_INTERVAL}m (kill → wait → restart → repeat)"
 log "=========================================="
 
 END=$((SECONDS + DURATION * 60))
 WAVE=0
 TOTAL_SUBMITTED=0
 TOTAL_WAVES=$(( DURATION * 60 / WAVE_INTERVAL ))
-KILL_WAVE=$(( TOTAL_WAVES * FAILOVER_AT_PCT / 100 ))
-DC_KILLED=0
+DC_A_DOWN=0
+NEXT_CYCLE=$((SECONDS + CYCLE_INTERVAL * 60))
 
 while [ $SECONDS -lt $END ]; do
   WAVE=$((WAVE + 1))
@@ -155,28 +158,35 @@ while [ $SECONDS -lt $END ]; do
     capture_metrics "WAVE-$WAVE"
   fi
 
-  # Kill DC-A at configured wave
-  if [ "$WAVE" -eq "$KILL_WAVE" ] && [ "$DC_KILLED" -eq 0 ]; then
-    DC_KILLED=1
-    log "=========================================="
-    log "KILLING DC-A (kafka-a) at wave $WAVE/$TOTAL_WAVES"
-    capture_metrics "PRE-KILL"
-    docker stop infra-kafka-a-1 >/dev/null 2>&1
-    log "kafka-a stopped — waiting for failover detection..."
-
-    # Wait for DIS to detect and fail over
-    for i in $(seq 1 60); do
-      state=$(curl -sf "$DIS_URL/actuator/dc-health" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('supervisorState','?'))" 2>/dev/null || echo "unreachable")
-      active=$(curl -sf "$DIS_URL/actuator/dc-health" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('activeDc','?'))" 2>/dev/null || echo "?")
-      log "  Failover detection: state=$state active=$active (${i}s)"
-      if [ "$active" = "dcb" ]; then
-        log "FAILOVER COMPLETE — now on DC-B"
-        break
-      fi
-      sleep 2
-    done
-    capture_metrics "POST-FAILOVER"
-    log "=========================================="
+  # Failover cycling: every CYCLE_INTERVAL minutes, toggle DC-A up/down
+  if [ $SECONDS -ge $NEXT_CYCLE ]; then
+    NEXT_CYCLE=$((SECONDS + CYCLE_INTERVAL * 60))
+    if [ "$DC_A_DOWN" -eq 0 ]; then
+      DC_A_DOWN=1
+      KILL_COUNT=$((KILL_COUNT + 1))
+      log "=========================================="
+      log "CYCLE $KILL_COUNT: KILLING DC-A (kafka-a) at wave $WAVE"
+      capture_metrics "PRE-KILL-$KILL_COUNT"
+      docker stop infra-kafka-a-1 >/dev/null 2>&1
+      log "kafka-a stopped — waiting for failover..."
+      for i in $(seq 1 60); do
+        active=$(curl -sf "$DIS_URL/actuator/dc-health" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('activeDc','?'))" 2>/dev/null || echo "?")
+        state=$(curl -sf "$DIS_URL/actuator/dc-health" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('supervisorState','?'))" 2>/dev/null || echo "?")
+        [ "$active" = "dcb" ] && { log "FAILOVER → DC-B (state=$state, ${i}s)"; break; }
+        sleep 2
+      done
+      capture_metrics "POST-KILL-$KILL_COUNT"
+      log "=========================================="
+    else
+      DC_A_DOWN=0
+      log "=========================================="
+      log "CYCLE $KILL_COUNT: RESTARTING DC-A (kafka-a) at wave $WAVE"
+      docker start infra-kafka-a-1 >/dev/null 2>&1
+      sleep 30  # Let kafka-a rejoin cluster
+      capture_metrics "POST-RESTART-$KILL_COUNT"
+      log "DC-A back online"
+      log "=========================================="
+    fi
   fi
 
   sleep $WAVE_INTERVAL
@@ -223,8 +233,8 @@ TOTAL=$(count_total)
 log "Final: $COMPLETED completed, $FAILED failed out of $TOTAL total"
 log "Success rate: $(( COMPLETED * 100 / TOTAL ))%"
 
-# Restart kafka-a if killed
-if [ "$DC_KILLED" -eq 1 ]; then
+# Restart kafka-a if still down
+if [ "$DC_A_DOWN" -eq 1 ]; then
   log "Restarting kafka-a..."
   docker start infra-kafka-a-1 >/dev/null 2>&1
 fi

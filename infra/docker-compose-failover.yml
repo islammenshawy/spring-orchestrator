@@ -155,6 +155,7 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-a:29092
       VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
       DIS_AUTH_API_KEY: soak-test-key
+      SPRING_KAFKA_LISTENER_CONCURRENCY: 2
       # Failover config
       ORCHESTRATOR_FAILOVER_ENABLED: "true"
       ORCHESTRATOR_FAILOVER_ACTIVE_DC: dca
