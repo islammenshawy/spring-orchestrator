@@ -229,6 +229,7 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-1:29092,kafka-2:29093,kafka-3:29094
       VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
       DIS_AUTH_API_KEY: soak-test-key
+      SPRING_KAFKA_LISTENER_CONCURRENCY: 2
       # Batch claiming config — small batches so both pods engage
       ORCHESTRATOR_RECOVERY_BATCH_SIZE: 5
       ORCHESTRATOR_RECOVERY_SCAN_INTERVAL_MS: 10000
@@ -283,6 +284,7 @@ services:
       VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
       DIS_BASE_URL: http://digital-instrument-service-2:8087
       DIS_AUTH_API_KEY: soak-test-key
+      SPRING_KAFKA_LISTENER_CONCURRENCY: 2
       # Batch claiming config — small batches so both pods engage
       ORCHESTRATOR_RECOVERY_BATCH_SIZE: 5
       ORCHESTRATOR_RECOVERY_SCAN_INTERVAL_MS: 10000

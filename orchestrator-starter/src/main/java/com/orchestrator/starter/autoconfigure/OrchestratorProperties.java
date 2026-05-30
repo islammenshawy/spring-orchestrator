@@ -53,6 +53,11 @@ public class OrchestratorProperties {
          *  (e.g. 18) to match PREFIXED throughput. See failover-stress test results. */
         private int partitions = 6;
 
+        /** Consumer concurrency is controlled by spring.kafka.listener.concurrency (standard
+         *  Spring Boot property). Set to partitions/pods for optimal throughput.
+         *  Safe to increase: partition key guarantees per-flow ordering, executingStep claim
+         *  prevents duplicate execution on rebalance. Applied to all containers automatically. */
+
         /** Resolve reply topic — defaults to commandTopic + ".replies" if not explicitly set. */
         public String getReplyTopic() {
             if (replyTopic == null) return commandTopic + ".replies";

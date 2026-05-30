@@ -418,6 +418,7 @@ public class OrchestratorAutoConfiguration {
                 container.getContainerProperties().setGroupId(groupId);
                 container.getContainerProperties().setConsumerRebalanceListener(rebalanceListener);
                 container.getContainerProperties().setMessageListener(replyListener);
+                // Reply containers inherit concurrency from spring.kafka.listener.concurrency
                 container.setBeanName("orchestrator-reply-" + topic.replace(".", "-"));
                 container.start();
                 containers.add(container);
