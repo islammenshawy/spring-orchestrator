@@ -1,0 +1,40 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  # DIS Spring Actuator (Prometheus format)
+  - job_name: dis
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['digital-instrument-service:8087']
+        labels:
+          service: dis
+          dc: dc-a
+    # Failover mode — DIS might be on different compose
+    scrape_interval: 5s
+
+  # DIS failover instance
+  - job_name: dis-failover
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['dis-failover:8087']
+        labels:
+          service: dis
+          dc: failover
+    scrape_interval: 5s
+
+  # Kafka JMX via kafka-exporter
+  - job_name: kafka
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+        labels:
+          service: kafka
+
+  # Mock vendor
+  - job_name: mock-vendor
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['mock-vendor:8081']
+        labels:
+          service: vendor

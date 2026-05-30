@@ -1,0 +1,87 @@
+# Observability stack — overlay on top of any docker-compose.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose-observability.yml up -d
+#   Open Grafana: http://localhost:3000 (admin/admin)
+#
+# Provides:
+#   - Loki: log aggregation from ALL containers via Promtail
+#   - Prometheus: metrics from DIS actuator + Kafka exporter
+#   - Grafana: dashboards for flows, errors, Kafka topics, failover
+#   - kafka-exporter: Kafka topic/consumer group metrics for Prometheus
+
+services:
+
+  # ========== Loki (log storage) ==========
+  loki:
+    image: grafana/loki:3.0.0
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    healthcheck:
+      test: wget -qO- http://localhost:3100/ready || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ========== Promtail (log collector — scrapes ALL Docker containers) ==========
+  promtail:
+    image: grafana/promtail:3.0.0
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      loki:
+        condition: service_healthy
+
+  # ========== Prometheus (metrics scraper) ==========
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=7d'
+
+  # ========== Kafka Exporter (topic + consumer group metrics) ==========
+  # Kafka exporter — connects to brokers defined in KAFKA_BROKERS env.
+  # Default: single-cluster (kafka-1). Override for multi-DC or failover.
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    command:
+      - '--kafka.server=${KAFKA_EXPORTER_BROKERS:-kafka-1:29092}'
+      - '--topic.filter=dis\\..*'
+      - '--group.filter=digital-instrument-service.*'
+    ports:
+      - "9308:9308"
+
+  # ========== Grafana (dashboards + alerting) ==========
+  grafana:
+    image: grafana/grafana:11.0.0
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/dis-overview.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      loki:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+
+volumes:
+  loki-data:
+  prometheus-data:
+  grafana-data:

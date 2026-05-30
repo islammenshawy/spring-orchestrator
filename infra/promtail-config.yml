@@ -1,0 +1,38 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Scrape ALL Docker container logs via the Docker socket
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Use container name as the label
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      # Add compose service name
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: service
+      # Add compose project
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: project
+    pipeline_stages:
+      # Extract log level from Spring Boot logs (e.g. "2026-05-30T19:48:06.842Z  INFO")
+      - regex:
+          expression: '^\S+\s+(?P<level>TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\s+'
+      - labels:
+          level:
+      # Extract orchestrator tags from structured logs
+      - regex:
+          expression: '\[(?P<tag>Saga|DLT|Outbox|Signal|Failover|Recovery|DC-Kafka|DC-Listener|Replay|Child|webhook)\]'
+      - labels:
+          tag:

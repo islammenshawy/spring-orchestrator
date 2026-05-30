@@ -1,0 +1,186 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "🔴 Critical Errors",
+      "type": "logs",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 0 },
+      "datasource": "Loki",
+      "targets": [{
+        "expr": "{service=~\".+\"} |~ \"(DLT|Dead-letter|COMPENSATION_FAILED|Both DCs unhealthy|Failover failed|Full partial update also failed|CANNOT CANCEL)\"",
+        "refId": "A"
+      }],
+      "options": { "showTime": true, "sortOrder": "Descending", "enableLogDetails": true }
+    },
+    {
+      "title": "Flow Status (Live)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 6 },
+      "datasource": "Loki",
+      "targets": [{
+        "expr": "count_over_time({service=~\"dis.*\"} |~ \"\\[Saga\\] Flow .* completed\" [5m])",
+        "legendFormat": "Completed",
+        "refId": "A"
+      }]
+    },
+    {
+      "title": "Flows Failed",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 6 },
+      "datasource": "Loki",
+      "targets": [{
+        "expr": "count_over_time({service=~\"dis.*\"} |~ \"\\[DLT\\]\" [5m])",
+        "legendFormat": "DLT",
+        "refId": "A"
+      }]
+    },
+    {
+      "title": "DC Failover State",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 6 },
+      "datasource": "Loki",
+      "targets": [{
+        "expr": "count_over_time({service=~\"dis.*\"} |~ \"\\[Failover\\] State:\" [5m])",
+        "legendFormat": "Transitions",
+        "refId": "A"
+      }]
+    },
+    {
+      "title": "Outbox Errors",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 6 },
+      "datasource": "Loki",
+      "targets": [{
+        "expr": "count_over_time({service=~\"dis.*\"} |~ \"\\[Outbox\\] (Dead-lettering|Failed)\" [5m])",
+        "legendFormat": "Outbox Errors",
+        "refId": "A"
+      }]
+    },
+    {
+      "title": "Step Executions Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "datasource": "Loki",
+      "targets": [{
+        "expr": "sum(count_over_time({service=~\"dis.*\"} |~ \"\\[Saga\\] Executing step\" [1m])) by (service)",
+        "legendFormat": "{{service}}",
+        "refId": "A"
+      }]
+    },
+    {
+      "title": "Errors by Category",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "datasource": "Loki",
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service=~\"dis.*\"} |~ \"\\[DLT\\]\" [1m]))",
+          "legendFormat": "DLT",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(count_over_time({service=~\"dis.*\"} |~ \"\\[Outbox\\] Failed\" [1m]))",
+          "legendFormat": "Outbox Failures",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(count_over_time({service=~\"dis.*\"} |~ \"Compensation failed\" [1m]))",
+          "legendFormat": "Compensation Failed",
+          "refId": "C"
+        },
+        {
+          "expr": "sum(count_over_time({service=~\"dis.*\"} |~ \"Infrastructure error\" [1m]))",
+          "legendFormat": "Infrastructure",
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "title": "Vendor Errors",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "datasource": "Loki",
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service=~\"dis.*\"} |~ \"RetryableStepException|RETRYING\" [1m]))",
+          "legendFormat": "Retryable",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(count_over_time({service=~\"dis.*\"} |~ \"NonRetryableStepException|FAILED\" [1m]))",
+          "legendFormat": "Non-Retryable",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(count_over_time({service=~\"dis.*\"} |~ \"Signing expired|Transfer REJECTED|Transfer expired\" [1m]))",
+          "legendFormat": "Business Failures",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "title": "Failover Timeline",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "datasource": "Loki",
+      "targets": [{
+        "expr": "{service=~\"dis.*\"} |~ \"\\[Failover\\]\"",
+        "refId": "A"
+      }],
+      "options": { "showTime": true, "sortOrder": "Descending" }
+    },
+    {
+      "title": "Recovery Scanner Activity",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "datasource": "Loki",
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service=~\"dis.*\"} |~ \"\\[Recovery\\] Claimed\" [1m]))",
+          "legendFormat": "Claimed",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(count_over_time({service=~\"dis.*\"} |~ \"orphaned claims\" [1m]))",
+          "legendFormat": "Orphaned",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "title": "Signals",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "datasource": "Loki",
+      "targets": [
+        {
+          "expr": "sum(count_over_time({service=~\"dis.*\"} |~ \"\\[Signal\\] Executed\" [1m]))",
+          "legendFormat": "Executed",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(count_over_time({service=~\"dis.*\"} |~ \"\\[Signal\\] Queued\" [1m]))",
+          "legendFormat": "Queued",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(count_over_time({service=~\"dis.*\"} |~ \"\\[Signal\\].*failed\" [1m]))",
+          "legendFormat": "Failed",
+          "refId": "C"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["dis", "orchestrator"],
+  "templating": { "list": [] },
+  "time": { "from": "now-30m", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "DIS Overview",
+  "uid": "dis-overview"
+}
