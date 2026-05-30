@@ -62,39 +62,18 @@ public class OutboxPublisher {
         // Fire all Kafka sends in parallel
         List<CompletableFuture<Void>> futures = new ArrayList<>(events.size());
         for (OutboxEvent event : events) {
-            CompletableFuture<Object> sendFuture;
+            CompletableFuture<Void> future;
             try {
                 @SuppressWarnings("unchecked")
                 CompletableFuture<Object> sf =
                         (CompletableFuture<Object>) kafkaTemplate.send(event.getTopic(), event.getKey(), event.getPayload());
-                sendFuture = sf;
-            } catch (Exception e) {
-                // Synchronous send failure (invalid topic, serialization error) — handle inline
-                sendFuture = CompletableFuture.failedFuture(e);
+                future = sf.thenAccept(result -> markPublished(event))
+                           .exceptionally(ex -> { recordFailure(event, ex); return null; });
+            } catch (Throwable e) {
+                // Synchronous send failure (invalid topic, serialization error)
+                recordFailure(event, e);
+                future = CompletableFuture.completedFuture(null);
             }
-            CompletableFuture<Void> future = sendFuture
-                    .thenAccept(result -> {
-                        event.setPublished(true);
-                        event.setPublishedAt(Instant.now());
-                        event.setFailureCount(0);
-                        metrics.outboxPublished();
-                        log.debug("[Outbox] Published event {} to {}", event.getId(), event.getTopic());
-                    })
-                    .exceptionally(ex -> {
-                        int failures = event.getFailureCount() + 1;
-                        event.setFailureCount(failures);
-                        if (failures >= maxPublishRetries) {
-                            event.setDeadLettered(true);
-                            event.setPublishedAt(Instant.now());
-                            metrics.outboxDeadLettered();
-                            log.error("[Outbox] Dead-lettering event {} after {} failures (flow: {}, topic: {}): {}",
-                                    event.getId(), failures, event.getFlowId(), event.getTopic(), ex.getMessage());
-                        } else {
-                            log.warn("[Outbox] Failed to publish event {} (attempt {}/{}): {}",
-                                    event.getId(), failures, maxPublishRetries, ex.getMessage());
-                        }
-                        return null;
-                    });
             futures.add(future);
         }
 
@@ -108,5 +87,29 @@ public class OutboxPublisher {
 
         // Batch save all events in one MongoDB round-trip
         repository.saveAll(events);
+    }
+
+    private void markPublished(OutboxEvent event) {
+        event.setPublished(true);
+        event.setPublishedAt(Instant.now());
+        event.setFailureCount(0);
+        metrics.outboxPublished();
+        log.debug("[Outbox] Published event {} to {}", event.getId(), event.getTopic());
+    }
+
+    private void recordFailure(OutboxEvent event, Throwable ex) {
+        Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+        int failures = event.getFailureCount() + 1;
+        event.setFailureCount(failures);
+        if (failures >= maxPublishRetries) {
+            event.setDeadLettered(true);
+            event.setPublishedAt(Instant.now());
+            metrics.outboxDeadLettered();
+            log.error("[Outbox] Dead-lettering event {} after {} failures (flow: {}, topic: {}): {}",
+                    event.getId(), failures, event.getFlowId(), event.getTopic(), cause.getMessage());
+        } else {
+            log.warn("[Outbox] Failed to publish event {} (attempt {}/{}): {}",
+                    event.getId(), failures, maxPublishRetries, cause.getMessage());
+        }
     }
 }

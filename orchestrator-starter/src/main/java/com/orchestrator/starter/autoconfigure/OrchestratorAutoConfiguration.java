@@ -464,10 +464,12 @@ public class OrchestratorAutoConfiguration {
      * before MongoTemplate, FlowTypeRegistry, etc. are fully initialized.
      */
     @Bean
-    public org.springframework.context.ApplicationListener<org.springframework.context.event.ContextRefreshedEvent>
-    orchestratorStartupValidator(FlowTypeRegistry registry, MongoTemplate mongoTemplate) {
-        return event -> {
-            // Validate critical beans are initialized
+    public org.springframework.beans.factory.SmartInitializingSingleton
+    orchestratorStartupValidator(org.springframework.context.ApplicationContext context) {
+        return () -> {
+            // Resolve lazily — avoids circular dependency during bean creation
+            FlowTypeRegistry registry = context.getBean(FlowTypeRegistry.class);
+            MongoTemplate mongoTemplate = context.getBean(MongoTemplate.class);
             if (registry.getAll().isEmpty()) {
                 log.warn("[Startup] No flow types registered — orchestrator has nothing to process");
             }

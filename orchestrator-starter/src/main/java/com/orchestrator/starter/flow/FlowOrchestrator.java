@@ -483,14 +483,19 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                     signalName, payloadJson, Instant.now());
 
             if (mongoTemplate != null && entityClass != null) {
-                // Atomic CAS: only push if flow is still IN_PROGRESS
-                // If flow advanced between our read and this write, modifiedCount=0
+                // Atomic CAS: only push if flow is still IN_PROGRESS.
+                // inc("version") is required because $push bypasses Spring Data's @Version.
+                // Without it, completeStep's flowRepository.save() wouldn't detect the
+                // concurrent push and would silently overwrite the signal with null.
+                // With it, save() throws OptimisticLockingFailureException → retry re-reads
+                // the fresh doc → preserves the new signal → drained on next step.
                 long modified = mongoTemplate.updateFirst(
                         org.springframework.data.mongodb.core.query.Query.query(
                                 org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flowId)
                                         .and("status").is(FlowStatus.IN_PROGRESS.name())),
                         new org.springframework.data.mongodb.core.query.Update()
-                                .push("pendingSignals", pending),
+                                .push("pendingSignals", pending)
+                                .inc("version", 1),
                         entityClass).getModifiedCount();
                 if (modified > 0) {
                     log.info("[Signal] Queued '{}' on flow {} (IN_PROGRESS)", signalName, flowId);
@@ -533,8 +538,14 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     /**
      * Execute all pending signals after a step completes, before advancing.
-     * Atomic read-and-clear via findAndModify — signals $pushed BEFORE this are drained,
-     * signals $pushed AFTER this create a new array and survive for next drain.
+     *
+     * Read-only drain (crash-safe):
+     * 1. READ signals from MongoDB (don't clear — if crash, they survive for re-drain)
+     * 2. PROCESS each signal handler
+     * 3. Set pendingSignals=null in memory — cleared when completeStep saves the flow
+     *
+     * Concurrent safety: signal $push increments @Version, so completeStep's save
+     * detects the conflict and re-reads (preserving newly pushed signals).
      */
     @SuppressWarnings("unchecked")
     private void drainPendingSignals(F flow) {
@@ -543,22 +554,20 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         java.util.List<com.orchestrator.starter.domain.PendingSignal> pending;
         if (mongoTemplate != null && entityClass != null) {
             try {
-                F snapshot = (F) mongoTemplate.findAndModify(
-                        org.springframework.data.mongodb.core.query.Query.query(
-                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flow.getId())
-                                        .and("pendingSignals").ne(null)),
-                        new org.springframework.data.mongodb.core.query.Update().unset("pendingSignals"),
-                        org.springframework.data.mongodb.core.FindAndModifyOptions.options().returnNew(false),
-                        entityClass);
+                F snapshot = (F) mongoTemplate.findById(flow.getId(), entityClass);
                 pending = snapshot != null ? snapshot.getPendingSignals() : null;
+                // Update in-memory version to match DB (signal push may have incremented it)
+                if (snapshot instanceof com.orchestrator.starter.domain.AbstractFlow af
+                        && flow instanceof com.orchestrator.starter.domain.AbstractFlow afFlow) {
+                    afFlow.setVersion(af.getVersion());
+                }
             } catch (Exception e) {
-                log.warn("[Signal] Drain findAndModify failed for flow {} — signals preserved for next drain: {}",
+                log.warn("[Signal] Failed to read pendingSignals for flow {}: {}",
                         flow.getId(), e.getMessage());
                 return;
             }
         } else {
             pending = flow.getPendingSignals();
-            flow.setPendingSignals(null);
         }
 
         if (pending == null || pending.isEmpty()) return;
@@ -1133,12 +1142,25 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 saved = true;
                 break;
             } catch (org.springframework.dao.OptimisticLockingFailureException e) {
+                // Version conflict — typically caused by a concurrent signal $push
+                // that incremented version between our read and this save.
+                //
+                // Re-read fresh doc to get:
+                //   - version: so the next save attempt matches DB
+                //   - currentStep: in case reply consumer advanced
+                //   - pendingSignals: new signals pushed during our step execution
+                //     (if we don't preserve these, save() would overwrite them with null)
                 log.debug("[Saga] Version conflict saving flow {} (attempt {}), retrying", flowId, attempt + 1);
                 F fresh = flowRepository.findById(flowId).orElse(null);
                 if (fresh instanceof com.orchestrator.starter.domain.AbstractFlow af
                         && flow instanceof com.orchestrator.starter.domain.AbstractFlow afFlow) {
                     afFlow.setVersion(af.getVersion());
                     afFlow.setCurrentStep(af.getCurrentStep());
+                    if (af.getPendingSignals() != null && !af.getPendingSignals().isEmpty()) {
+                        afFlow.setPendingSignals(af.getPendingSignals());
+                        log.info("[Saga] Preserved {} new signal(s) from concurrent push for flow {}",
+                                af.getPendingSignals().size(), flowId);
+                    }
                 }
             }
         }

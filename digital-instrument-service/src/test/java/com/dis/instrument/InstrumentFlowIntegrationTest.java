@@ -772,7 +772,7 @@ class InstrumentFlowIntegrationTest {
         // - If flow completed before signal → signal may have been rejected
         // The test validates signal delivery doesn't crash — priority check is best-effort
         if (flow.getPriority() != null) {
-            assertEquals("HIGH", flow.getPriority());
+            assertEquals(com.dis.instrument.model.Priority.HIGH, flow.getPriority());
         }
     }
 
