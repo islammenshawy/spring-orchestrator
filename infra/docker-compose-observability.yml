@@ -50,16 +50,22 @@ services:
       - '--storage.tsdb.retention.time=7d'
 
   # ========== Kafka Exporter (topic + consumer group metrics) ==========
-  # Kafka exporter — connects to brokers defined in KAFKA_BROKERS env.
-  # Default: single-cluster (kafka-1). Override for multi-DC or failover.
+  # Kafka exporter — exposes topic offsets, consumer lag, partition data.
+  # Connects to all brokers in the single-cluster compose.
   kafka-exporter:
     image: danielqsj/kafka-exporter:latest
     command:
-      - '--kafka.server=${KAFKA_EXPORTER_BROKERS:-kafka-1:29092}'
+      - '--kafka.server=kafka-1:29092'
+      - '--kafka.server=kafka-2:29093'
+      - '--kafka.server=kafka-3:29094'
       - '--topic.filter=dis\\..*'
       - '--group.filter=digital-instrument-service.*'
     ports:
       - "9308:9308"
+    restart: on-failure
+    depends_on:
+      kafka-1:
+        condition: service_healthy
 
   # ========== Grafana (dashboards + alerting) ==========
   grafana:

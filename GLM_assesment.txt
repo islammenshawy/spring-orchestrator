@@ -556,5 +556,420 @@ P3 (Low Priority — Tech Debt):
   7. Update Kafka/Zookeeper images to latest
 
 ================================================================================
+SECTION K: KAFKA IMPLEMENTATION ANALYSIS
+================================================================================
+Independent analysis of the full Kafka stack. All findings traced from source
+code, verified line-by-line. No other assessment files were consulted.
+
+ARCHITECTURE OVERVIEW
+---------------------
+The Kafka layer has 5 components:
+  1. COMMAND TOPIC — @KafkaListener on OrchestratorCommandListener + RetryTopicConfiguration
+  2. REPLY TOPIC — Programmatic ConcurrentMessageListenerContainer (no retry topics)
+  3. OUTBOX — OutboxPublisher polls MongoDB, sends to Kafka in parallel batches
+  4. MULTI-DC FAILOVER — DcAwareKafkaTemplate, DcAwareListenerManager, DcFailoverSupervisor
+  5. OFFSET RECOVERY — MongoOffsetStore + MongoOffsetRecoveryListener for cross-cluster offsets
+
+Message flow:
+  startFlow → outbox event → OutboxPublisher → command topic → @KafkaListener
+  → executeStep → markStepCompletedAtomic → publishReply → reply topic →
+  programmatic listener → advanceAfterReply → advanceToNextStep → publishStepDirect → command topic
+
+K.1 BUG: Post-Failover Producer and Consumer Read Different Topics (PREFIXED Policy)
+  Files: DcAwareKafkaManager.java:63-69, DcAwareKafkaTemplate.java:29-33,
+         TopicResolver.java:34-51, DcAwareListenerManager.java:57,124-128
+  Severity: HIGH
+  Analysis:
+    When switchActiveDc() is called (line 63):
+      - Line 68: this.originatingDc = previousDc (e.g., "dc-a")
+      - Line 69: this.activeDc = newActiveDc (e.g., "dc-b")
+    
+    After failover, DcAwareKafkaTemplate.send() (line 30) calls:
+      resolveActiveTopic(topic) → resolve(topic, activeDc="dc-b", originatingDc="dc-a")
+    
+    TopicResolver.resolve() (line 34-51):
+      - targetDc="dc-b" != originatingDc="dc-a" → PREFIXED → "dc-a.topic"
+      - Producer writes to "dc-a.topic" on dc-b's Kafka cluster
+    
+    Meanwhile, DcAwareListenerManager created standby containers at startup
+    (line 57) with resolveTopic() which called:
+      resolve(topic, targetDc="dc-b", activeDc="dc-a")
+      → "dc-a.topic" (correct: reading dc-a's replicated data)
+    
+    After failover, switchDc() (line 93) starts dc-b's containers which
+    subscribe to "dc-a.topic" — correct for reading OLD replicated messages.
+    
+    BUT: New messages produced AFTER failover go to "dc-a.topic" on dc-b.
+    These are NOT replicated data — they're locally produced. The consumer
+    reading "dc-a.topic" will see both old replicated messages and new
+    locally produced ones. This actually WORKS for consumption.
+    
+    The REAL problem: when dc-a comes back and dc-b fails over to dc-a,
+    the containers on dc-a were created at startup with:
+      resolve(topic, targetDc="dc-a", activeDc="dc-a") → "topic" (unprefixed)
+    But NOW originatingDc="dc-b" and activeDc="dc-a":
+      Producer: resolve(topic, activeDc="dc-a", originatingDc="dc-b")
+      → dc-a != dc-b → "dc-b.topic" — WRONG!
+    
+    Producer writes to "dc-b.topic" on dc-a's cluster, but dc-a's consumer
+    reads from "topic" (unprefixed). Messages are NEVER consumed.
+    
+    ROOT CAUSE: originatingDc is set to previousDc at line 68 instead of
+    newActiveDc. This is by design for reading replicated data, but it breaks
+    new message production.
+
+K.2 BUG: DcHealthProbe Uses TCP Socket — Can't Detect Broker Degradation
+  File: DcHealthProbe.java:22-44
+  Severity: HIGH
+  Analysis:
+    The Javadoc at line 23-25 claims:
+      "Uses describeCluster() which exercises the full Kafka protocol —
+       not just TCP connect (which can succeed against a wedged broker)."
+    
+    But the implementation at lines 32-38 creates a raw java.net.Socket
+    and only checks TCP connectivity. This:
+    
+    a) Can't detect a broker that accepts TCP but can't process requests
+       (OOM, disk full, stuck GC, leader election in progress, controller
+       partition reassignment). The probe returns "healthy" and prevents
+       failover when the DC is actually degraded.
+    
+    b) Tests only the FIRST bootstrap server (line 32: split(",")[0]).
+       Multi-broker clusters with one surviving broker appear fully healthy.
+       That one broker may not host all partition leaders → partial availability.
+    
+    c) The Javadoc contradicts the implementation. A developer reading the
+       Javadoc would assume full protocol verification, not a TCP ping.
+    
+    IMPACT: The DcFailoverSupervisor at line 98 uses the SAME probe to verify
+    the standby DC before failing over. If the standby also has a degraded
+    broker that accepts TCP but can't serve requests, the failover proceeds
+    to an equally broken DC — making things worse.
+
+K.3 BUG: publishStepDirect and publishReply Block Consumer Threads Indefinitely
+  Files: FlowOrchestrator.java:1078, FlowOrchestrator.java:363
+  Severity: HIGH
+  Analysis:
+    publishStepDirect() at line 1078:
+      kafkaTemplate.send(commandTopic, partitionKey,
+          objectMapper.writeValueAsString(cmd)).get();
+    
+    publishReply() at line 363:
+      kafkaTemplate.send(replyTopic, flowId,
+          objectMapper.writeValueAsString(reply)).get();
+    
+    Both call .get() without a timeout. The .get() blocks until the broker
+    acknowledges or delivery.timeout.ms expires (default 120s in Kafka 3.x).
+    
+    Both are called from the Kafka consumer thread (doExecuteStepInner at
+    line 296 calls publishReply, advanceToNextStep at line 1035 calls
+    publishStepDirect). If the broker is unreachable:
+    
+    1. Consumer thread blocks for up to 120 seconds
+    2. No more messages from this partition are consumed
+    3. If multiple publishes stall, the consumer exceeds max.poll.interval.ms
+    4. Consumer group rebalances — all partitions reshuffled
+    5. During rebalance, NO messages are consumed → cascading stall
+    
+    publishReply has an outbox fallback (lines 368-381) but it only runs
+    AFTER the .get() throws an exception. The 120-second block happens first.
+    
+    notifyParentOnCompletion() at line 664 has the SAME .get() pattern but
+    with NO outbox fallback. If it fails, the parent flow is stuck until
+    the stale flow recovery scanner picks it up (15+ minutes later).
+
+K.4 BUG: Reply Topic Listener Has No Retry/DLT — Replies Lost on Exception
+  File: OrchestratorAutoConfiguration.java:378-418
+  Severity: HIGH
+  Analysis:
+    The reply topic uses a programmatic ConcurrentMessageListenerContainer
+    (lines 408-416 in single-cluster mode, lines 396-406 in failover mode).
+    This container has NO RetryTopicConfiguration.
+    
+    Only the command topic gets retry configuration (lines 553-563).
+    
+    If onStepReply() throws (e.g., MongoDB unavailable during
+    advanceAfterReply, deserialization failure, flow not found):
+    
+    1. Exception propagates to the container's error handler
+    2. Default error handler for programmatic containers logs and commits
+       the offset → message is DELETED
+    3. Flow stuck: step completed in MongoDB but currentStep never advanced
+    
+    The stale flow recovery scanner will eventually detect the stuck flow
+    and re-publish the current step. But this is a 15+ minute recovery window.
+    
+    COMPARE: The command topic has RetryTopicConfiguration with 4 attempts,
+    exponential backoff, and a DLT. The reply topic has NONE of this.
+
+K.5 BUG: DLT Handler Deserializes All Messages as StepCommandMessage
+  File: OrchestratorKafkaConsumer.java:106-118
+  Severity: MEDIUM
+  Analysis:
+    onDlt() at line 109:
+      StepCommandMessage command = objectMapper.readValue(payload, StepCommandMessage.class);
+    
+    This ALWAYS deserializes as StepCommandMessage. But the DLT is used for
+    both command topics AND reply topics:
+    
+    - Command DLT: @KafkaListener at line 524 → consumer.onDlt() — OK
+    - Reply DLT: programmatic listener at lines 428-432 → consumer.onDlt() — BROKEN
+    
+    Reply DLT messages contain StepReplyMessage JSON (with fields: status,
+    flowSnapshot, errorMessage). Deserializing as StepCommandMessage (with
+    fields: eventId, flowId, stepName, flowType) will either:
+    a) Map wrong fields (flowSnapshot → ignored, status → ignored)
+    b) Leave critical fields null (eventId may be null → NPE at line 114)
+    
+    If deserialization fails entirely, the catch at line 115-116 logs the
+    error and returns. No flow is marked as dead-lettered, no compensation
+    runs. The reply DLT message is silently consumed and lost.
+
+K.6 BUG: Outbox Publisher Batch-Save After Parallel Sends — Crash Loses State
+  File: OutboxPublisher.java:56-104
+  Severity: MEDIUM
+  Analysis:
+    The outbox publisher fires all Kafka sends in parallel (lines 64-91),
+    then waits for all to complete with a 30-second timeout (line 96-97),
+    then batch-saves all events in one MongoDB call (line 103).
+    
+    The .thenAccept() callback (lines 69-74) sets event.published=true in
+    the Java object. The .exceptionally() callback (lines 76-89) sets
+    failureCount. But these mutations are IN MEMORY only until saveAll()
+    at line 103 persists them.
+    
+    CRASH SCENARIO:
+    1. Events fetched from MongoDB (line 58) — all published=false
+    2. Kafka sends fire in parallel — some succeed, callbacks set published=true
+    3. JVM crashes before line 103 (saveAll)
+    4. On restart, OutboxPublisher re-fetches these events — published=false in DB
+    5. All events re-published to Kafka
+    6. Consumer idempotency (eventId) deduplicates — mostly safe
+    
+    But: the batch timeout (30s) means events whose futures haven't completed
+    have published=false. If saveAll runs after the timeout, those events are
+    saved as unpublished despite Kafka having received them (future completed
+    after the timeout but before saveAll). Next poll re-publishes them.
+    
+    This is at-least-once delivery by design, but the blast radius is the
+    entire batch (batchSize=50 default), not individual events.
+
+K.7 BUG: Consumer Idempotency Has TOCTOU Race — Check-Before, Mark-After
+  File: OrchestratorKafkaConsumer.java:41-71
+  Severity: MEDIUM
+  Analysis:
+    onStepCommand() uses a two-step idempotency pattern:
+      1. Line 50: isProcessed(eventId) — READ from MongoDB
+      2. Lines 64-68: execute the step
+      3. Line 70: tryProcess(eventId) — WRITE to MongoDB
+    
+    Between step 1 and step 3, another consumer thread (or pod) processing
+    the same Kafka message (re-delivery after rebalance) can also pass the
+    isProcessed() check because neither has written yet. Both proceed to
+    execute the step (step 2). The first tryProcess() succeeds. The second
+    catches DuplicateKeyException and returns false.
+    
+    BUT: the step handler has ALREADY RUN on both threads.
+    
+    For idempotent step handlers, this is harmless. The doExecuteStepInner
+    method has Layer 2 idempotency (completedSteps check at line 233). But
+    if the step handler calls an external API with side effects (e.g., send
+    email, charge payment), the API is called twice.
+    
+    WINDOW: The time between isProcessed() returning false and tryProcess()
+    writing. Typically 100ms-2s (step execution time). During Kafka consumer
+    group rebalancing, two pods can process the same message simultaneously.
+
+K.8 BUG: RetryTopicConfiguration Only Covers Global Command Topic
+  File: OrchestratorAutoConfiguration.java:553-563
+  Severity: MEDIUM
+  Analysis:
+    The RetryTopicConfiguration at line 557:
+      .includeTopic(props.getKafka().getCommandTopic())
+    
+    This includes ONLY the global command topic. Multi-flow apps that define
+    per-flow command topics via @Flow(topic="...") or YAML flows.<name>.topic
+    get NO retry configuration for those topics.
+    
+    The @KafkaListener at line 497 also uses a single SpEL expression:
+      topics = "${orchestrator.kafka.command-topic}"
+    
+    Per-flow command topics have:
+    - No @KafkaListener (no consumer at all)
+    - No RetryTopicConfiguration (no retry on exceptions)
+    - No DLT handler (no dead-letter processing)
+    
+    Messages on per-flow command topics are never consumed unless the app
+    manually creates listeners for them.
+
+K.9 BUG: MongoOffsetRecoveryListener Compares Offset Numbers Across Clusters
+  File: MongoOffsetRecoveryListener.java:85-98
+  Severity: MEDIUM
+  Analysis:
+    At line 85-86:
+      long kafkaPosition = kafkaOffset.offset();
+      long mongoPosition = stored.getOffset();
+    
+    Line 88: if (mongoPosition > kafkaPosition)
+    
+    This compares RAW OFFSET NUMBERS. In a multi-cluster setup with
+    MirrorMaker 2, offset numbers differ between clusters. Offset 1164 on
+    Cluster A may correspond to offset 1170 on Cluster B.
+    
+    If MongoDB stores offset 1170 from Cluster B, and Kafka has offset 1164
+    on Cluster A, the comparison says "MongoDB ahead" and seeks by timestamp.
+    But this is comparing offsets from DIFFERENT offset spaces — the comparison
+    is meaningless.
+    
+    The seekByStoredTimestamp() method (line 123) correctly uses timestamp
+    (cluster-independent), so the actual seek is correct. But the decision
+    WHETHER to seek is based on a meaningless offset comparison. In the
+    reverse case (MongoDB 1164 < Kafka 1170), the code at line 96 says
+    "Kafka is current" and skips recovery — potentially skipping messages
+    that weren't processed on this cluster.
+
+K.10 BUG: Failover Supervisor Has No Distributed Leadership — All Pods Failover Simultaneously
+  File: DcFailoverSupervisor.java:69-107
+  Severity: MEDIUM
+  Analysis:
+    In a multi-pod deployment, each pod runs its own DcFailoverSupervisor
+    with its own @Scheduled probeAndEvaluate() (line 69). When DC-A goes
+    down, ALL pods detect the failure simultaneously.
+    
+    Race condition:
+    1. All pods transition HEALTHY → DEGRADED → FAILING_OVER simultaneously
+    2. All pods call kafkaManager.switchActiveDc(toDc) at line 116
+    3. All pods call listenerManager.switchDc() at line 73 of DcAwareKafkaManager
+    4. On DC-B, N consumer groups start simultaneously
+    5. Kafka rebalances all partitions → temporary consumption gap
+    
+    The transition events are written to MongoDB (line 141-155) but only
+    for audit — there's no distributed lock or compareAndSet to prevent
+    duplicate failovers.
+    
+    ADDITIONAL: The consecutiveFailures counter (line 34) is per-pod, not
+    shared. Each pod independently counts failures and independently triggers
+    failover. There's no coordination mechanism.
+
+K.11 BUG: DcAwareKafkaTemplate Extends KafkaTemplate With Dummy ProducerFactory
+  File: DcAwareKafkaTemplate.java:23-25
+  Severity: MEDIUM
+  Analysis:
+    Line 24: super(new DefaultKafkaProducerFactory(Map.of()))
+    
+    The superclass KafkaTemplate initializes this producer factory, creates
+    a producer from it, and manages its lifecycle. This dummy factory:
+    1. Has no bootstrap servers → can't connect to any Kafka cluster
+    2. Will be started/stopped by Spring's lifecycle management
+    3. Any KafkaTemplate method NOT overridden by DcAwareKafkaTemplate will
+       use this dummy producer
+    
+    Non-overridden methods include:
+    - sendDefault(topic, data) — NPE or connection refused
+    - partitionsFor(topic) — connection refused
+    - flush() — no-op on broken producer
+    - metrics() — empty or error
+    
+    The OutboxPublisher at line 67 calls kafkaTemplate.send(event.getTopic(),
+    event.getKey(), event.getPayload()). This IS overridden (line 29) so it
+    works. But any code calling non-overridden KafkaTemplate methods will fail.
+
+K.12 BUG: onStepReply Marks ALL Reply Statuses as Processed
+  File: OrchestratorKafkaConsumer.java:95-100
+  Severity: LOW
+  Analysis:
+    Line 95-98: Only COMPLETED/RECOVERED replies trigger advancement.
+    Line 100: tryProcess(reply.getEventId()) marks the eventId as processed
+    for ALL statuses including FAILED.
+    
+    If reply retry were ever added (e.g., a RetryTopicConfiguration for
+    reply topics), FAILED replies would be skipped on retry because their
+    eventId is already in the processed_events collection.
+    
+    Currently moot because reply topics have no retry mechanism. But it's
+    a latent bug that would surface if reply retry is added.
+
+K.13 BUG: notifyParentOnCompletion Blocks Child Step With No Outbox Fallback
+  File: FlowOrchestrator.java:644-671
+  Severity: MEDIUM
+  Analysis:
+    Line 664-665:
+      kafkaTemplate.send(parentDesc.getCommandTopic(), partitionKey,
+          objectMapper.writeValueAsString(cmd)).get();
+    
+    This blocks the child flow's step execution thread. If Kafka is slow
+    or the parent's command topic is unreachable, the child step appears
+    to hang. The catch at line 668 logs the error but there's NO outbox
+    fallback — the parent is never notified.
+    
+    The parent flow stays stuck at the child step until the stale flow
+    recovery scanner re-publishes it (15+ minutes later by default).
+    
+    Compare: publishStepDirect (line 1035) has an outbox fallback (lines
+    1036-1058). publishReply (line 363) has an outbox fallback (lines
+    368-381). notifyParentOnCompletion has NONE.
+
+K.14 BUG: startFlow Doesn't Publish Directly — First Step Has 0-500ms Latency
+  File: FlowOrchestrator.java:109-149
+  Severity: LOW
+  Analysis:
+    startFlow() saves the flow and writes an outbox event (lines 141-145):
+      F f = flowRepository.save(flow);
+      writeOutboxEvent(f);
+    
+    It does NOT call kafkaTemplate.send(). The first step is ONLY delivered
+    when OutboxPublisher polls (every 500ms by default at line 56).
+    
+    Compare: advanceToNextStep calls publishStepDirect() (line 1035) which
+    sends directly to Kafka. startFlow goes through the outbox, adding
+    0-500ms latency to every new flow.
+    
+    The Javadoc at line 101-107 says "The Kafka publish happens synchronously
+    (waits for broker ack)" but this is incorrect — no Kafka publish happens
+    in startFlow. The publish is async via the outbox.
+
+K.15 GAP: Dead-Lettered Outbox Events Accumulate Forever
+  File: OutboxPublisher.java:79-84, OutboxEventRepository.java
+  Severity: LOW
+  Analysis:
+    When an outbox event exceeds maxPublishRetries (default 5), it's marked
+    deadLettered=true (line 80). The query at line 58 excludes dead-lettered
+    events, so they're never retried.
+    
+    But there's no mechanism to:
+    - Clean them up (no TTL index on deadLettered=true)
+    - Alert on them (countByDeadLetteredTrue() exists but is never called)
+    - Retry them (no admin endpoint)
+    
+    A dead-lettered outbox event means the flow's step command was never
+    delivered. The flow is stuck in IN_PROGRESS. The stale flow recovery
+    scanner will re-publish directly to Kafka (bypassing outbox), but the
+    dead-lettered outbox event remains as an orphan forever.
+
+================================================================================
+KAFKA ANALYSIS SUMMARY
+================================================================================
+
+ID    | COMPONENT                    | SEVERITY | DESCRIPTION
+------|------------------------------|----------|------------------------------------
+K.1   | Post-failover topic resolve  | HIGH     | originatingDc=previousDc → producer/consumer read different topics after 2nd failover
+K.2   | DcHealthProbe                | HIGH     | TCP-only probe; misleading Javadoc; can't detect degraded broker; only checks 1st broker
+K.3   | publishStepDirect/Reply .get()| HIGH     | No timeout on .get() blocks consumer thread up to 120s; cascading consumer stall
+K.4   | Reply topic no retry/DLT     | HIGH     | Reply listener has no RetryTopicConfiguration; exceptions commit offset and lose messages
+K.5   | DLT handler message type     | MEDIUM   | onDlt deserializes as StepCommandMessage — breaks for reply DLT messages
+K.6   | Outbox batch save crash      | MEDIUM   | Parallel sends + batch saveAll; crash loses published state for entire batch
+K.7   | Consumer TOCTOU race         | MEDIUM   | isProcessed→execute→tryProcess window allows duplicate step execution
+K.8   | RetryTopic single topic      | MEDIUM   | Only global command topic gets retry; per-flow topics have no retry/listener/DLT
+K.9   | Offset comparison cross-DC   | MEDIUM   | Raw offset numbers compared across clusters (meaningless in MM2 setup)
+K.10  | Failover no leadership       | MEDIUM   | All pods trigger failover simultaneously; no distributed lock or coordination
+K.11  | DcAwareKafkaTemplate dummy   | MEDIUM   | Extends KafkaTemplate with dummy ProducerFactory; non-overridden methods fail
+K.13  | notifyParent no fallback     | MEDIUM   | Blocks child step; no outbox fallback; parent stuck until recovery scanner
+K.12  | Reply marks all processed    | LOW      | FAILED replies marked as processed; latent bug if reply retry is added
+K.14  | startFlow latency            | LOW      | First step goes through outbox (0-500ms) not direct publish
+K.15  | Dead-lettered outbox orphans | LOW      | No cleanup/alert/retry for dead-lettered outbox events
+
+TOTAL: 15 issues (4 HIGH, 8 MEDIUM, 3 LOW)
+
+================================================================================
 END OF ASSESSMENT
 ================================================================================
