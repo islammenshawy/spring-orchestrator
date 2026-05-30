@@ -34,6 +34,7 @@ DIS_URL_1="${DIS_URL_1:-http://localhost:8087}"
 DIS_URL_2="${DIS_URL_2:-http://localhost:8088}"
 DIS_LB="${DIS_LB:-http://localhost:8090}"  # nginx load balancer
 DIS_URL="$DIS_URL_1"   # default for direct queries
+API_KEY="${API_KEY:-soak-test-key}"
 VENDOR_URL="${VENDOR_URL:-http://localhost:8081}"
 MONGO_URI="${MONGO_URI:-mongodb://localhost:27117}"
 DURATION="${DURATION:-3}"                 # minutes
@@ -90,14 +91,15 @@ wait_healthy() {
     echo "FAIL: $2 not healthy" >&2; exit 1
 }
 
-approve() { curl -s -X POST "$DIS_URL_1/flows/enigio-instrument/$1/approve" -H "Content-Type: application/json" -d '{}' -m 2 2>/dev/null || true; }
-get_field() { curl -s "$DIS_URL_1/flows/enigio-instrument/$1" -m 2 2>/dev/null | jq -r ".$2 // empty"; }
+approve() { curl -s -X POST "$DIS_URL_1/flows/enigio-instrument/$1/approve" -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -d '{}' -m 2 2>/dev/null || true; }
+get_field() { curl -s "$DIS_URL_1/flows/enigio-instrument/$1" -H "X-API-Key: $API_KEY" -m 2 2>/dev/null | jq -r ".$2 // empty"; }
 
 start_instrument_flow() {
     local ref=$1 type=$2 extra=${3:-}
     local target=$(submit_url)
     curl -s -X POST "$target/flows/enigio-instrument" \
         -H "Content-Type: application/json" \
+        -H "X-API-Key: $API_KEY" \
         -d "{
             \"reference\":\"$ref\",
             \"title\":\"$type — Load Test $ref\",
@@ -229,13 +231,13 @@ auto_approve_loop() {
         while read fid; do
             grep -q "^$fid " "$DONE_FIDS" 2>/dev/null && continue
             (
-                resp=$(curl -s "$DIS_URL_1/flows/enigio-instrument/$fid" -m 2 2>/dev/null)
+                resp=$(curl -s "$DIS_URL_1/flows/enigio-instrument/$fid" -H "X-API-Key: $API_KEY" -m 2 2>/dev/null)
                 fstatus=$(echo "$resp" | jq -r '.status // empty')
                 fstep=$(echo "$resp" | jq -r '.currentStep // empty')
                 case "$fstatus" in COMPLETED|FAILED|CANCELLED) echo "$fid $(now_ms) $fstatus" >> "$DONE_FIDS" ;; esac
                 case "$fstep" in AWAIT_PREPARATION_APPROVAL|AWAIT_DELIVERY_APPROVAL)
                     curl -s -X POST "$DIS_URL_1/flows/enigio-instrument/$fid/approve" \
-                        -H "Content-Type: application/json" -d '{}' -m 2 > /dev/null 2>&1 ;;
+                        -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -d '{}' -m 2 > /dev/null 2>&1 ;;
                 esac
             ) &
             batch=$((batch + 1))
@@ -332,7 +334,7 @@ while [ "$(date +%s)" -lt "$END_EPOCH" ]; do
             6)
                 # 10% — With additional documents (upload first, then start flow)
                 UP_RESULT=$(curl -s -X POST "$DIS_URL/documents/additional" \
-                    -H "Content-Type: application/json" \
+                    -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
                     -d "{\"filename\":\"compliance-$SEQ.pdf\",\"contentType\":\"application/pdf\",\"data\":\"Y29tcGxpYW5jZSByZXBvcnQ=\"}")
                 DOC_ID=$(echo "$UP_RESULT" | jq -r '.id // empty')
                 if [ -n "$DOC_ID" ]; then
@@ -354,7 +356,7 @@ while [ "$(date +%s)" -lt "$END_EPOCH" ]; do
                             s=$(get_field "$fid" "currentStep")
                             if [ "$s" = "AWAIT_PREPARATION_APPROVAL" ]; then
                                 curl -s -X POST "$DIS_URL/flows/enigio-instrument/$fid/cancel" \
-                                    -H "Content-Type: application/json" -d '{"reason":"Load test cancel at Gate 1"}' > /dev/null 2>&1
+                                    -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" -d '{"reason":"Load test cancel at Gate 1"}' > /dev/null 2>&1
                                 break
                             fi
                             sleep 1
@@ -393,7 +395,7 @@ while [ "$(date +%s)" -lt "$END_EPOCH" ]; do
         (
             S=$(now_ms)
             curl -s -X POST "$DIS_URL/documents/additional" \
-                -H "Content-Type: application/json" \
+                -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
                 -d "{\"filename\":\"wave${WAVE_NUM}-doc${j}.pdf\",\"contentType\":\"application/pdf\",\"data\":\"Y29tcGxpYW5jZQ==\"}" > /dev/null 2>&1
             echo "upload_additional,$(($(now_ms) - S))" >> "$ENDPOINT_LOG"
         ) &
@@ -407,12 +409,12 @@ while [ "$(date +%s)" -lt "$END_EPOCH" ]; do
             if [ -n "$TID" ]; then
                 # Default sync (metadata + technicalDetails)
                 S=$(now_ms)
-                curl -s "$DIS_URL/vendor/enigio/documents/$TID" > /dev/null 2>&1
+                curl -s "$DIS_URL/vendor/enigio/documents/$TID" -H "X-API-Key: $API_KEY" > /dev/null 2>&1
                 echo "vendor_sync_default,$(($(now_ms) - S))" >> "$ENDPOINT_LOG"
 
                 # Full sync (all 4 sections)
                 S=$(now_ms)
-                curl -s "$DIS_URL/vendor/enigio/documents/$TID?include=metadata,technicalDetails,requiredSignatures,document" > /dev/null 2>&1
+                curl -s "$DIS_URL/vendor/enigio/documents/$TID?include=metadata,technicalDetails,requiredSignatures,document" -H "X-API-Key: $API_KEY" > /dev/null 2>&1
                 echo "vendor_sync_all,$(($(now_ms) - S))" >> "$ENDPOINT_LOG"
             fi
         ) &
@@ -423,7 +425,7 @@ while [ "$(date +%s)" -lt "$END_EPOCH" ]; do
     if [ -n "${SAMPLE_FID:-}" ]; then
         (
             S=$(now_ms)
-            curl -s "$DIS_URL/documents/additional/instrument/$SAMPLE_FID" > /dev/null 2>&1
+            curl -s "$DIS_URL/documents/additional/instrument/$SAMPLE_FID" -H "X-API-Key: $API_KEY" > /dev/null 2>&1
             echo "list_additional,$(($(now_ms) - S))" >> "$ENDPOINT_LOG"
         ) &
     fi
