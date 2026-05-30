@@ -45,7 +45,12 @@ public class OrchestratorProperties {
         /** Number of partitions for auto-created topics. Default 6.
          *  More partitions = more consumers can process in parallel.
          *  Must be >= number of DIS instances for even distribution.
-         *  Use even numbers for balanced assignment across N instances. */
+         *  Use even numbers for balanced assignment across N instances.
+         *
+         *  Multi-DC note: In PREFIXED mode, the consumer subscribes to N topics
+         *  (local + prefixed per DC), so effective parallelism = partitions × N.
+         *  In IDENTITY mode, only 1 topic is subscribed — set partitions higher
+         *  (e.g. 18) to match PREFIXED throughput. See failover-stress test results. */
         private int partitions = 6;
 
         /** Resolve reply topic — defaults to commandTopic + ".replies" if not explicitly set. */

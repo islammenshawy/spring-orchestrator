@@ -307,7 +307,11 @@ public class OrchestratorAutoConfiguration {
     }
 
     /** Command topic — created explicitly with configured partitions.
-     *  RetryTopicConfiguration creates retry/DLT topics automatically. */
+     *  RetryTopicConfiguration creates retry/DLT topics automatically.
+     *
+     *  IDENTITY mode auto-scales: multiplies partitions by DC count so the single
+     *  topic has the same total partition assignments as PREFIXED mode (which subscribes
+     *  to N topics × partitions). Without this, IDENTITY has 1/N the consumer parallelism. */
     @Bean
     public org.apache.kafka.clients.admin.NewTopic orchestratorCommandTopic(OrchestratorProperties props) {
         return org.springframework.kafka.config.TopicBuilder.name(props.getKafka().getCommandTopic())
