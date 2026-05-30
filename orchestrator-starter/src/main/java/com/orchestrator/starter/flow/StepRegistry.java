@@ -21,7 +21,8 @@ public class StepRegistry<F extends OrchestratorFlow> {
         this.steps = new LinkedHashMap<>();
         List<StepHandler<F>> typed = (List<StepHandler<F>>) handlers;
         typed.stream()
-                .sorted(Comparator.comparingInt(StepHandler::getOrder))
+                .sorted(Comparator.<StepHandler<F>>comparingInt(StepHandler::getOrder)
+                        .thenComparing(StepHandler::getStepName))
                 .forEach(h -> steps.put(h.getStepName(), h));
 
         this.orderedStepNames = List.copyOf(steps.keySet());

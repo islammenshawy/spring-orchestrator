@@ -19,6 +19,10 @@ import lombok.Builder;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -124,7 +128,7 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         if (flow.getCorrelationId() != null && mongoTemplate != null && entityClass != null) {
             var existing = mongoTemplate.findOne(
                     org.springframework.data.mongodb.core.query.Query.query(
-                            org.springframework.data.mongodb.core.query.Criteria.where("correlationId").is(flow.getCorrelationId())
+                            Criteria.where("correlationId").is(flow.getCorrelationId())
                                     .and("flowType").is(flowType)),
                     entityClass);
             if (existing != null) {
@@ -395,25 +399,37 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     }
 
     public void markDeadLettered(String flowId, String stepName, String exceptionMessage) {
-        var optFlow = flowRepository.findById(flowId);
-        if (optFlow.isEmpty()) {
-            log.warn("[DLT] Flow {} not found in database — orphaned Kafka message", flowId);
-            logStep(flowId, stepName != null ? stepName : "UNKNOWN", StepOutcome.DEAD_LETTERED.name(), 0,
-                    null, null, "[DLT] Flow not found: " + (exceptionMessage != null ? exceptionMessage : "orphaned message"), Instant.now());
-            return;
-        }
-
-        F flow = optFlow.get();
         String errorDetail = exceptionMessage != null
                 ? "[DLT] " + exceptionMessage
                 : "[DLT] Exhausted all retry attempts";
 
-        // Mark COMPENSATING first — crash-safe: recovery scanner handles stuck COMPENSATING
-        flow.setStatus(FlowStatus.COMPENSATING);
-        flow.setErrorMessage(errorDetail);
-        flow.setUpdatedAt(Instant.now());
+        // CAS: only transition to COMPENSATING from non-terminal states.
+        // Prevents double compensation if two DLT handlers or recovery scanner race.
+        java.util.List<String> compensatable = java.util.List.of(
+                FlowStatus.IN_PROGRESS.name(), FlowStatus.WAITING_RETRY.name(),
+                FlowStatus.PARKED.name(), FlowStatus.PENDING.name());
+
+        F flow = casUpdateStatus(flowId, compensatable, FlowStatus.COMPENSATING,
+                java.util.Map.of("errorMessage", errorDetail));
+        if (flow == null) {
+            F existing = flowRepository.findById(flowId).orElse(null);
+            if (existing == null) {
+                log.warn("[DLT] Flow {} not found in database — orphaned Kafka message", flowId);
+                logStep(flowId, stepName != null ? stepName : "UNKNOWN", StepOutcome.DEAD_LETTERED.name(), 0,
+                        null, null, "[DLT] Flow not found: " + errorDetail, Instant.now());
+            } else if (compensatable.contains(existing.getStatus().name())) {
+                // Fallback for inline mode (no mongoTemplate)
+                existing.setStatus(FlowStatus.COMPENSATING);
+                existing.setErrorMessage(errorDetail);
+                existing.setUpdatedAt(Instant.now());
+                saveFlow(existing);
+                flow = existing;
+            } else {
+                log.info("[DLT] Flow {} already in {} — skipping duplicate compensation", flowId, existing.getStatus());
+            }
+            if (flow == null) return;
+        }
         metrics.flowFailed(flowType);
-        saveFlow(flow);
 
         logStep(flowId, stepName != null ? stepName : flow.getCurrentStep(),
                 StepOutcome.DEAD_LETTERED.name(), flow.getRetryCount(),
@@ -490,10 +506,10 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 // With it, save() throws OptimisticLockingFailureException → retry re-reads
                 // the fresh doc → preserves the new signal → drained on next step.
                 long modified = mongoTemplate.updateFirst(
-                        org.springframework.data.mongodb.core.query.Query.query(
-                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flowId)
+                        Query.query(
+                                Criteria.where("_id").is(flowId)
                                         .and("status").is(FlowStatus.IN_PROGRESS.name())),
-                        new org.springframework.data.mongodb.core.query.Update()
+                        new Update()
                                 .push("pendingSignals", pending)
                                 .inc("version", 1),
                         entityClass).getModifiedCount();
@@ -703,24 +719,29 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      * Returns the cancelled flow, or null if cancellation not allowed.
      */
     public F cancelFlow(String flowId, String reason) {
-        F flow = flowRepository.findById(flowId).orElse(null);
-        if (flow == null) return null;
+        String errorMsg = "CANCELLED: " + (reason != null ? reason : "user requested");
+        java.util.List<String> cancellable = java.util.List.of(
+                FlowStatus.IN_PROGRESS.name(), FlowStatus.WAITING_RETRY.name(),
+                FlowStatus.PARKED.name(), FlowStatus.PENDING.name(), FlowStatus.CANCELLING.name());
 
-        FlowStatus status = flow.getStatus();
-        if (status != FlowStatus.IN_PROGRESS && status != FlowStatus.WAITING_RETRY
-                && status != FlowStatus.PARKED && status != FlowStatus.PENDING
-                && status != FlowStatus.CANCELLING) {
-            log.warn("[Saga] Cannot cancel flow {} — status is {}", flowId, status);
-            return null;
+        F flow = casUpdateStatus(flowId, cancellable, FlowStatus.CANCELLING,
+                java.util.Map.of("errorMessage", errorMsg));
+        if (flow == null) {
+            // CAS failed or no mongoTemplate — try fallback for inline mode
+            flow = flowRepository.findById(flowId).orElse(null);
+            if (flow == null || !cancellable.contains(flow.getStatus().name())) {
+                log.warn("[Saga] Cannot cancel flow {} — status is {}",
+                        flowId, flow != null ? flow.getStatus() : "NOT_FOUND");
+                return null;
+            }
+            flow.setStatus(FlowStatus.CANCELLING);
+            flow.setErrorMessage(errorMsg);
+            flow.setUpdatedAt(Instant.now());
+            saveFlow(flow);
         }
 
         log.info("[Saga] Cancelling flow {} at step {} (reason: {})",
                 flowId, flow.getCurrentStep(), reason);
-
-        flow.setStatus(FlowStatus.CANCELLING);
-        flow.setErrorMessage("CANCELLED: " + (reason != null ? reason : "user requested"));
-        flow.setUpdatedAt(Instant.now());
-        saveFlow(flow);
 
         // Run cancel handlers in reverse for completed steps
         runCancellation(flow);
@@ -870,8 +891,12 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
 
         // Only terminal states can be replayed
-        if (status != FlowStatus.FAILED && status != FlowStatus.CANCELLED
-                && status != FlowStatus.COMPENSATION_FAILED && status != FlowStatus.COMPLETED) {
+        java.util.List<String> replayable = new java.util.ArrayList<>(java.util.List.of(
+                FlowStatus.FAILED.name(), FlowStatus.CANCELLED.name(),
+                FlowStatus.COMPENSATION_FAILED.name()));
+        if (options.isAllowCompleted()) replayable.add(FlowStatus.COMPLETED.name());
+
+        if (!replayable.contains(status.name())) {
             throw new IllegalStateException(
                     "Cannot replay flow " + flowId + " — status is " + status +
                     ". Only FAILED, CANCELLED, COMPENSATION_FAILED, or COMPLETED flows can be replayed.");
@@ -891,19 +916,43 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             flow.getCompletedSteps().removeAll(stepsToRemove);
         }
 
-        // Reset orchestration state
-        flow.setStatus(FlowStatus.IN_PROGRESS);
-        flow.setRetryCount(0);
-        flow.setBackoffSeconds(0);
-        flow.setNextRetryAt(null);
-        flow.setErrorMessage(null);
-        flow.setRecoveryCount(0);
-        flow.setWaitingSince(null);
-        flow.setExpiresAt(null);
-        flow.setSleepUntil(null);
-        flow.setCompensationError(null);
-        flow.setUpdatedAt(Instant.now());
-        saveFlow(flow);
+        var replayFields = new java.util.LinkedHashMap<String, Object>();
+        replayFields.put("retryCount", 0);
+        replayFields.put("backoffSeconds", 0);
+        replayFields.put("nextRetryAt", null);
+        replayFields.put("errorMessage", null);
+        replayFields.put("recoveryCount", 0);
+        replayFields.put("waitingSince", null);
+        replayFields.put("expiresAt", null);
+        replayFields.put("sleepUntil", null);
+        replayFields.put("compensationError", null);
+        replayFields.put("currentStep", flow.getCurrentStep());
+        replayFields.put("completedSteps", flow.getCompletedSteps());
+
+        F updated = casUpdateStatus(flowId, replayable, FlowStatus.IN_PROGRESS, replayFields);
+        if (updated != null) {
+            flow = updated;
+        } else {
+            // CAS failed or no mongoTemplate — fallback
+            F fresh = flowRepository.findById(flowId).orElse(null);
+            if (fresh == null || !replayable.contains(fresh.getStatus().name())) {
+                throw new IllegalStateException("Cannot replay flow " + flowId +
+                        " — status changed to " + (fresh != null ? fresh.getStatus() : "UNKNOWN"));
+            }
+            flow = fresh;
+            flow.setStatus(FlowStatus.IN_PROGRESS);
+            flow.setRetryCount(0);
+            flow.setBackoffSeconds(0);
+            flow.setNextRetryAt(null);
+            flow.setErrorMessage(null);
+            flow.setRecoveryCount(0);
+            flow.setWaitingSince(null);
+            flow.setExpiresAt(null);
+            flow.setSleepUntil(null);
+            flow.setCompensationError(null);
+            flow.setUpdatedAt(Instant.now());
+            saveFlow(flow);
+        }
 
         // Publish step command to Kafka for immediate execution
         try {
@@ -966,11 +1015,11 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             // Flow complete — atomic CAS: only complete if still at the completed step
             if (mongoTemplate != null && entityClass != null) {
                 long mod = mongoTemplate.updateFirst(
-                        org.springframework.data.mongodb.core.query.Query.query(
-                                org.springframework.data.mongodb.core.query.Criteria
+                        Query.query(
+                                Criteria
                                         .where("_id").is(flow.getId())
                                         .and("currentStep").is(completedStep)),
-                        new org.springframework.data.mongodb.core.query.Update()
+                        new Update()
                                 .set("status", FlowStatus.COMPLETED.name())
                                 .set("updatedAt", Instant.now())
                                 .set("completedParallelSteps", java.util.List.of()),
@@ -996,10 +1045,10 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         if (mongoTemplate != null && entityClass != null) {
             modified = mongoTemplate.updateFirst(
                     org.springframework.data.mongodb.core.query.Query.query(
-                            org.springframework.data.mongodb.core.query.Criteria
+                            Criteria
                                     .where("_id").is(flow.getId())
                                     .and("currentStep").is(completedStep)),
-                    new org.springframework.data.mongodb.core.query.Update()
+                    new Update()
                             .set("currentStep", nextStep)
                             .set("updatedAt", Instant.now()),
                     entityClass
@@ -1083,12 +1132,12 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
      */
     private void updateFlowPartial(String flowId, java.util.Map<String, Object> fields) {
         if (mongoTemplate != null && entityClass != null) {
-            var update = new org.springframework.data.mongodb.core.query.Update();
+            var update = new Update();
             fields.forEach(update::set);
             update.inc("version", 1);
             mongoTemplate.updateFirst(
                     org.springframework.data.mongodb.core.query.Query.query(
-                            org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flowId)),
+                            Criteria.where("_id").is(flowId)),
                     update, entityClass);
         } else {
             // Fallback: full save (inline mode or no MongoTemplate)
@@ -1172,12 +1221,12 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 flowMap.remove("id");
                 flowMap.remove("version");
                 flowMap.put("updatedAt", Instant.now());
-                var update = new org.springframework.data.mongodb.core.query.Update();
+                var update = new Update();
                 flowMap.forEach(update::set);
                 update.inc("version", 1);
                 mongoTemplate.updateFirst(
-                        org.springframework.data.mongodb.core.query.Query.query(
-                                org.springframework.data.mongodb.core.query.Criteria.where("_id").is(flowId)),
+                        Query.query(
+                                Criteria.where("_id").is(flowId)),
                         update, entityClass);
             } catch (Exception ex) {
                 log.error("[Saga] Full partial update also failed for flow {}: {}", flowId, ex.getMessage());
@@ -1410,6 +1459,31 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     }
 
     /**
+     * Atomic CAS status transition via MongoDB updateFirst.
+     * Only updates if the current status matches one of {@code fromStatuses}.
+     * Returns the updated flow on success, null if CAS failed (status already changed).
+     *
+     * @param extraFields additional fields to $set atomically with the status change (may be null)
+     */
+    @SuppressWarnings("unchecked")
+    private F casUpdateStatus(String flowId, java.util.List<String> fromStatuses,
+                               FlowStatus toStatus, java.util.Map<String, Object> extraFields) {
+        if (mongoTemplate == null || entityClass == null) return null;
+        Update update = new Update()
+                .set("status", toStatus.name())
+                .set("updatedAt", Instant.now())
+                .inc("version", 1);
+        if (extraFields != null) {
+            extraFields.forEach(update::set);
+        }
+        long modified = mongoTemplate.updateFirst(
+                Query.query(Criteria.where("_id").is(flowId).and("status").in(fromStatuses)),
+                update, entityClass).getModifiedCount();
+        if (modified == 0) return null;
+        return flowRepository.findById(flowId).orElse(null);
+    }
+
+    /**
      * Save with optimistic lock retry (up to 3 attempts).
      * Concurrent reply consumers may increment the version between our read
      * and save. On conflict, re-read the latest version and retry.
@@ -1472,13 +1546,13 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         if (searchAttributes == null || searchAttributes.isEmpty()) {
             return List.of();
         }
-        var criteria = new org.springframework.data.mongodb.core.query.Criteria();
-        var criteriaList = new java.util.ArrayList<org.springframework.data.mongodb.core.query.Criteria>();
+        var criteria = new Criteria();
+        var criteriaList = new java.util.ArrayList<Criteria>();
         searchAttributes.forEach((k, v) ->
-                criteriaList.add(org.springframework.data.mongodb.core.query.Criteria.where(k).is(v)));
+                criteriaList.add(Criteria.where(k).is(v)));
         var query = org.springframework.data.mongodb.core.query.Query.query(
-                new org.springframework.data.mongodb.core.query.Criteria().andOperator(
-                        criteriaList.toArray(new org.springframework.data.mongodb.core.query.Criteria[0])));
+                new Criteria().andOperator(
+                        criteriaList.toArray(new Criteria[0])));
         query.limit(100);
         return mongoTemplate.find(query, entityClass);
     }
