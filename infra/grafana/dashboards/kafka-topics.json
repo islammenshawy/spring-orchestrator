@@ -1,118 +1,79 @@
 {
-  "annotations": { "list": [] },
   "editable": true,
   "panels": [
     {
-      "title": "Consumer Group Lag",
-      "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
-      "datasource": "Prometheus",
-      "targets": [{
-        "expr": "sum(kafka_consumergroup_lag) by (consumergroup, topic)",
-        "legendFormat": "{{consumergroup}} / {{topic}}",
-        "refId": "A"
-      }]
+      "title": "Messages per Topic (total offset)",
+      "type": "bargauge",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{"expr": "sum(kafka_topic_partition_current_offset) by (topic)", "legendFormat": "{{topic}}", "refId": "A", "instant": true}],
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } } },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"] } }
     },
     {
-      "title": "Total Consumer Lag by Group",
+      "title": "Consumer Group Lag Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{"expr": "sum(kafka_consumergroup_lag) by (consumergroup, topic)", "legendFormat": "{{consumergroup}} / {{topic}}", "refId": "A"}]
+    },
+    {
+      "title": "Total Lag per Group",
       "type": "gauge",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
-      "datasource": "Prometheus",
-      "targets": [{
-        "expr": "sum(kafka_consumergroup_lag) by (consumergroup)",
-        "legendFormat": "{{consumergroup}}",
-        "refId": "A"
-      }],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{"expr": "sum(kafka_consumergroup_lag) by (consumergroup)", "legendFormat": "{{consumergroup}}", "refId": "A"}],
       "fieldConfig": {
         "defaults": {
-          "thresholds": {
-            "steps": [
-              { "color": "green", "value": 0 },
-              { "color": "yellow", "value": 50 },
-              { "color": "red", "value": 200 }
-            ]
-          }
+          "thresholds": { "steps": [{ "color": "green", "value": 0 }, { "color": "yellow", "value": 50 }, { "color": "red", "value": 200 }] }
         }
       }
     },
     {
       "title": "Topic Message Rate (msgs/sec)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
-      "datasource": "Prometheus",
-      "targets": [{
-        "expr": "sum(rate(kafka_topic_partition_current_offset[1m])) by (topic)",
-        "legendFormat": "{{topic}}",
-        "refId": "A"
-      }]
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{"expr": "sum(rate(kafka_topic_partition_current_offset[1m])) by (topic)", "legendFormat": "{{topic}}", "refId": "A"}]
     },
     {
-      "title": "Topic Partition Offsets",
+      "title": "DLT Offsets (should be 0)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{"expr": "sum(kafka_topic_partition_current_offset{topic=~\".*-dlt\"}) by (topic)", "legendFormat": "{{topic}}", "refId": "A"}],
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [{ "color": "green", "value": 0 }, { "color": "red", "value": 1 }] } } }
+    },
+    {
+      "title": "Retry Topic Messages",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{"expr": "sum(kafka_topic_partition_current_offset{topic=~\".*-retry-.*\"}) by (topic)", "legendFormat": "{{topic}}", "refId": "A"}]
+    },
+    {
+      "title": "Consumer Group Members",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{"expr": "kafka_consumergroup_members", "legendFormat": "{{consumergroup}}", "refId": "A"}]
+    },
+    {
+      "title": "Partition Offsets by Topic",
       "type": "table",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
-      "datasource": "Prometheus",
-      "targets": [{
-        "expr": "kafka_topic_partition_current_offset",
-        "format": "table",
-        "instant": true,
-        "refId": "A"
-      }],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{"expr": "kafka_topic_partition_current_offset", "format": "table", "instant": true, "refId": "A"}],
       "transformations": [
         { "id": "organize", "options": { "excludeByName": { "__name__": true, "instance": true, "job": true } } }
       ]
     },
     {
-      "title": "Consumer Group Members",
-      "type": "stat",
-      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 24 },
-      "datasource": "Prometheus",
-      "targets": [{
-        "expr": "count(kafka_consumergroup_members) by (consumergroup)",
-        "legendFormat": "{{consumergroup}}",
-        "refId": "A"
-      }]
-    },
-    {
-      "title": "DLT Topic Offsets",
-      "type": "stat",
-      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 24 },
-      "datasource": "Prometheus",
-      "targets": [{
-        "expr": "sum(kafka_topic_partition_current_offset{topic=~\".*-dlt\"}) by (topic)",
-        "legendFormat": "{{topic}}",
-        "refId": "A"
-      }],
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "steps": [
-              { "color": "green", "value": 0 },
-              { "color": "red", "value": 1 }
-            ]
-          }
-        }
-      }
-    },
-    {
-      "title": "Retry Topic Activity",
-      "type": "timeseries",
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 24 },
-      "datasource": "Prometheus",
-      "targets": [{
-        "expr": "sum(rate(kafka_topic_partition_current_offset{topic=~\".*-retry-.*\"}[1m])) by (topic)",
-        "legendFormat": "{{topic}}",
-        "refId": "A"
-      }]
-    },
-    {
-      "title": "Kafka Broker Logs",
+      "title": "Kafka Broker Logs (WARN/ERROR)",
       "type": "logs",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
-      "datasource": "Loki",
-      "targets": [{
-        "expr": "{service=~\"kafka.*\"} |~ \"ERROR|WARN|rebalance|partition|leader\"",
-        "refId": "A"
-      }],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 36 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{"expr": "{service=~\"kafka-.*\"} |~ \"ERROR|WARN|rebalance\"", "refId": "A"}],
       "options": { "showTime": true, "sortOrder": "Descending" }
     }
   ],
@@ -120,5 +81,6 @@
   "tags": ["kafka", "dis"],
   "time": { "from": "now-30m", "to": "now" },
   "title": "Kafka Topics & Consumer Groups",
-  "uid": "kafka-topics"
+  "uid": "kafka-topics",
+  "refresh": "10s"
 }

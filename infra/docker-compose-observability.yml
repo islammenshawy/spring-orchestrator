@@ -58,8 +58,8 @@ services:
       - '--kafka.server=kafka-1:29092'
       - '--kafka.server=kafka-2:29093'
       - '--kafka.server=kafka-3:29094'
-      - '--topic.filter=dis\\..*'
-      - '--group.filter=digital-instrument-service.*'
+      - '--topic.filter=dis\..*'
+      - '--group.filter=.*'
     ports:
       - "9308:9308"
     restart: on-failure
