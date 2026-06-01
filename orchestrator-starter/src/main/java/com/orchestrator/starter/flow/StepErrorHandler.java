@@ -104,14 +104,16 @@ public class StepErrorHandler {
     private static int extractHttpStatus(Throwable ex) {
         Throwable current = ex;
         while (current != null) {
-            String className = current.getClass().getSimpleName();
-            if (className.equals("WebClientResponseException") ||
-                    className.contains("HttpStatusCodeException")) {
-                try {
-                    var statusCode = current.getClass().getMethod("getStatusCode").invoke(current);
-                    return (int) statusCode.getClass().getMethod("value").invoke(statusCode);
-                } catch (Exception ignored) {}
-            }
+            // Check the entire class hierarchy for getStatusCode() — covers:
+            // HttpClientErrorException, HttpServerErrorException, HttpStatusCodeException,
+            // WebClientResponseException, and any subclass (e.g. UnprocessableEntity)
+            try {
+                var method = current.getClass().getMethod("getStatusCode");
+                var statusCode = method.invoke(current);
+                return (int) statusCode.getClass().getMethod("value").invoke(statusCode);
+            } catch (NoSuchMethodException ignored) {
+                // Not an HTTP exception — try cause
+            } catch (Exception ignored) {}
             current = current.getCause();
         }
         return 0;
