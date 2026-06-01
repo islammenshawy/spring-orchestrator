@@ -3,6 +3,8 @@ package com.docuseal.signing.flow;
 import com.docuseal.signing.client.SigningService;
 import com.docuseal.signing.model.SigningFlowEntity;
 import com.orchestrator.starter.annotation.Flow;
+import com.orchestrator.starter.annotation.RecoverAction;
+import com.orchestrator.starter.annotation.RecoverOn;
 import com.orchestrator.starter.annotation.Signal;
 import com.orchestrator.starter.annotation.Step;
 import com.orchestrator.starter.flow.FlowDefinition;
@@ -64,7 +66,15 @@ public class DocuSealSigningFlow extends FlowDefinition<SigningFlowEntity> {
 
     @Step(order = 4)
     public void enrichPartyB(SigningFlowEntity flow) {
-        signingService.enrichPartyB(flow);
+        try {
+            signingService.enrichPartyB(flow);
+        } catch (Exception e) {
+            if (e.getMessage() != null && e.getMessage().contains("already completed")) {
+                log.info("[{}] Party B already signed — skipping enrichment", flow.getId());
+                return; // Skip — Party B signed before we could enrich
+            }
+            throw e;
+        }
     }
 
     @Step(order = 5)
