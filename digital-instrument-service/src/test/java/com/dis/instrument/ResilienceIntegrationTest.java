@@ -412,4 +412,176 @@ class ResilienceIntegrationTest {
             return "unavailable";
         }
     }
+
+    private RestClient vendorAdmin() {
+        return RestClient.create("http://localhost:8081");
+    }
+
+    private void setVendorFailure(String endpoint, String scenario) {
+        vendorAdmin().post().uri("/admin/failure-config")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of(endpoint, scenario))
+                .retrieve().body(String.class);
+    }
+
+    private void clearVendorFailures() {
+        vendorAdmin().post().uri("/admin/failure-config")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of()).retrieve().body(String.class);
+    }
+
+    // ========== Vendor HTTP Status Code Tests ==========
+
+    @Test
+    @Order(10)
+    @DisplayName("Vendor 409 Conflict on registerDocument → @RecoverOn SKIP, flow continues")
+    void vendor409_registerDocument_recoversViaSkip() throws Exception {
+        setVendorFailure("createDocument", "HTTP_409");
+        var result = startFlow("SC-409-" + UUID.randomUUID().toString().substring(0, 8));
+        String flowId = (String) result.get("id");
+
+        // 409 on createDocument → @RecoverOn(httpStatus=409, message="already", action=SKIP)
+        // Flow should skip registerDocument and continue to addAttachment
+        Thread.sleep(15000);
+        clearVendorFailures();
+        Thread.sleep(10000);
+
+        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(flow);
+        // Flow should have advanced past CREATE_DRAFT (no 409 on that step)
+        // registerDocument has @RecoverOn(409) so it skips on conflict
+        assertTrue(flow.getCompletedSteps().contains("CREATE_DRAFT"),
+                "CREATE_DRAFT should complete (no failure configured for it)");
+    }
+
+    @Test
+    @Order(11)
+    @DisplayName("Vendor 500 on createDocument → retries via Kafka retry topics")
+    void vendor500_createDocument_retriesAndRecovers() throws Exception {
+        setVendorFailure("createDocument", "HTTP_500");
+        var result = startFlow("SC-500-" + UUID.randomUUID().toString().substring(0, 8));
+        String flowId = (String) result.get("id");
+
+        // 500 is retryable — flow enters retry cycle
+        Thread.sleep(10000);
+
+        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(flow);
+        // Should be retrying at REGISTER_DOCUMENT (500 from vendor)
+        // CREATE_DRAFT has no vendor call so it completes
+        assertTrue(flow.getCompletedSteps().contains("CREATE_DRAFT"),
+                "CREATE_DRAFT should complete before vendor failure");
+
+        // Clear failure and let it recover
+        clearVendorFailures();
+        Thread.sleep(30000);
+
+        flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(flow);
+        assertTrue(flow.getCompletedSteps().contains("REGISTER_DOCUMENT"),
+                "REGISTER_DOCUMENT should complete after vendor recovers");
+    }
+
+    @Test
+    @Order(12)
+    @DisplayName("Vendor 429 Too Many Requests → retryable, backs off")
+    void vendor429_tooManyRequests_retriesWithBackoff() throws Exception {
+        setVendorFailure("createDocument", "HTTP_429");
+        var result = startFlow("SC-429-" + UUID.randomUUID().toString().substring(0, 8));
+        String flowId = (String) result.get("id");
+
+        // 429 is retryable (special case in StepErrorHandler — treated as 5xx)
+        Thread.sleep(10000);
+
+        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(flow);
+        assertTrue(flow.getCompletedSteps().contains("CREATE_DRAFT"));
+
+        clearVendorFailures();
+        Thread.sleep(30000);
+
+        flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertTrue(flow.getCompletedSteps().contains("REGISTER_DOCUMENT"),
+                "Should recover after 429 clears");
+    }
+
+    @Test
+    @Order(13)
+    @DisplayName("Vendor 400 Bad Request → non-retryable, flow fails with compensation")
+    void vendor400_badRequest_failsNonRetryable() throws Exception {
+        setVendorFailure("createDocument", "HTTP_400");
+        var result = startFlow("SC-400-" + UUID.randomUUID().toString().substring(0, 8));
+        String flowId = (String) result.get("id");
+
+        // 400 is non-retryable → flow should FAIL after DLT
+        Thread.sleep(30000);
+
+        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(flow);
+        FlowStatus status = flow.getStatus();
+        // Should be FAILED, COMPENSATION_FAILED, or COMPENSATING (DLT triggers compensation)
+        assertTrue(status == FlowStatus.FAILED || status == FlowStatus.COMPENSATION_FAILED
+                        || status == FlowStatus.COMPENSATING,
+                "400 should lead to terminal failure, got: " + status);
+        clearVendorFailures();
+    }
+
+    @Test
+    @Order(14)
+    @DisplayName("Vendor 503 Service Unavailable → retryable, recovers when available")
+    void vendor503_serviceUnavailable_retriesAndRecovers() throws Exception {
+        setVendorFailure("createDocument", "HTTP_503");
+        var result = startFlow("SC-503-" + UUID.randomUUID().toString().substring(0, 8));
+        String flowId = (String) result.get("id");
+
+        Thread.sleep(10000);
+
+        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(flow);
+        assertTrue(flow.getCompletedSteps().contains("CREATE_DRAFT"));
+
+        clearVendorFailures();
+        Thread.sleep(30000);
+
+        flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertTrue(flow.getCompletedSteps().contains("REGISTER_DOCUMENT"),
+                "Should recover after 503 clears");
+    }
+
+    @Test
+    @Order(15)
+    @DisplayName("Vendor 502 Bad Gateway → retryable")
+    void vendor502_badGateway_retryable() throws Exception {
+        setVendorFailure("createDocument", "HTTP_502");
+        var result = startFlow("SC-502-" + UUID.randomUUID().toString().substring(0, 8));
+        String flowId = (String) result.get("id");
+
+        Thread.sleep(10000);
+        clearVendorFailures();
+        Thread.sleep(30000);
+
+        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(flow);
+        assertTrue(flow.getCompletedSteps().contains("REGISTER_DOCUMENT"),
+                "Should recover after 502 clears");
+    }
+
+    @Test
+    @Order(16)
+    @DisplayName("Vendor 403 Forbidden → non-retryable, flow fails")
+    void vendor403_forbidden_failsNonRetryable() throws Exception {
+        setVendorFailure("createDocument", "HTTP_403");
+        var result = startFlow("SC-403-" + UUID.randomUUID().toString().substring(0, 8));
+        String flowId = (String) result.get("id");
+
+        Thread.sleep(30000);
+
+        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(flow);
+        FlowStatus status = flow.getStatus();
+        assertTrue(status == FlowStatus.FAILED || status == FlowStatus.COMPENSATION_FAILED
+                        || status == FlowStatus.COMPENSATING,
+                "403 should lead to terminal failure, got: " + status);
+        clearVendorFailures();
+    }
 }

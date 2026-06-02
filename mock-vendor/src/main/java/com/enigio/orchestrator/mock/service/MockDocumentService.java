@@ -479,12 +479,16 @@ public class MockDocumentService {
                 try { Thread.sleep(120_000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
             }
             case HTTP_400 -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Simulated 400 for " + endpoint);
+            case HTTP_401 -> throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Simulated 401 for " + endpoint);
             case HTTP_403 -> throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Simulated 403 for " + endpoint);
+            case HTTP_404 -> throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Simulated 404 for " + endpoint);
             case HTTP_409 -> throw new ResponseStatusException(HttpStatus.CONFLICT, "Resource already exists for " + endpoint);
+            case HTTP_422 -> throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Simulated 422 for " + endpoint);
             case HTTP_429 -> throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Simulated 429 for " + endpoint);
             case HTTP_500 -> throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Simulated 500 for " + endpoint);
             case HTTP_502 -> throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Simulated 502 for " + endpoint);
             case HTTP_503 -> throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Simulated 503 for " + endpoint);
+            case HTTP_504 -> throw new ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT, "Simulated 504 for " + endpoint);
             case FLAKY -> {
                 if (ThreadLocalRandom.current().nextDouble() < failureConfig.getFlakyRate()) {
                     throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Simulated flaky error for " + endpoint);
