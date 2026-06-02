@@ -62,6 +62,14 @@ class InstrumentFlowIntegrationTest {
         } catch (Exception ignored) {}
     }
 
+    @AfterEach
+    void tearDown() {
+        try {
+            vendorAdmin.post().uri("/admin/failure-config")
+                    .body(Map.of()).retrieve().body(String.class);
+        } catch (Exception ignored) {}
+    }
+
     private void resetMockVendor() {
         try {
             vendorAdmin.post().uri("/admin/reset").retrieve().body(String.class);

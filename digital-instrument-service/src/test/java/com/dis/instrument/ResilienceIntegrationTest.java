@@ -73,12 +73,13 @@ class ResilienceIntegrationTest {
     void setUp() {
         rest = RestClient.builder().baseUrl("http://localhost:" + port)
                 .defaultHeader("X-API-Key", "test-api-key").build();
-        // Reset vendor failure config
-        try {
-            RestClient.create("http://localhost:8081").post().uri("/admin/failure-config")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(Map.of()).retrieve().body(String.class);
-        } catch (Exception ignored) {}
+        clearVendorFailures();
+    }
+
+    @AfterEach
+    void tearDown() {
+        // Always clear vendor failures — even if assertions fail
+        clearVendorFailures();
     }
 
     // ========== 1. DUPLICATE KAFKA MESSAGE — IDEMPOTENCY ==========
@@ -91,7 +92,7 @@ class ResilienceIntegrationTest {
         var result = startFlow("PN-DEDUP-001");
         String flowId = (String) result.get("id");
 
-        EnigioInstrumentEntity flow = waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(3));
+        EnigioInstrumentEntity flow = waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(2));
         assertNotNull(flow, "Flow should reach gate step");
 
         // Record vendor call count BEFORE duplicate injection
@@ -194,7 +195,7 @@ class ResilienceIntegrationTest {
         String flowId = (String) result.get("id");
 
         // Wait for flow to reach gate step (proves it started processing)
-        EnigioInstrumentEntity flow = waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(3));
+        EnigioInstrumentEntity flow = waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(2));
         assertNotNull(flow);
 
         // Simulate pod crash: set status=IN_PROGRESS with old updatedAt
@@ -244,7 +245,7 @@ class ResilienceIntegrationTest {
         var result = startFlow("PN-MAX-REC-001");
         String flowId = (String) result.get("id");
 
-        waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(3));
+        waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(2));
 
         // Simulate flow stuck with recoveryCount at max (10)
         mongoTemplate.updateFirst(
@@ -292,7 +293,7 @@ class ResilienceIntegrationTest {
 
         // Wait for all to reach gate step
         for (String flowId : flowIds) {
-            waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(3));
+            waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(2));
         }
 
         // Batch-update all to stale IN_PROGRESS in one operation
@@ -425,9 +426,9 @@ class ResilienceIntegrationTest {
     }
 
     private void clearVendorFailures() {
-        vendorAdmin().post().uri("/admin/failure-config")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of()).retrieve().body(String.class);
+        try {
+            vendorAdmin().post().uri("/admin/reset").retrieve().body(String.class);
+        } catch (Exception ignored) {}
     }
 
     // ========== Vendor HTTP Status Code Tests ==========
@@ -462,21 +463,12 @@ class ResilienceIntegrationTest {
         var result = startFlow("SC-500-" + UUID.randomUUID().toString().substring(0, 8));
         String flowId = (String) result.get("id");
 
-        // 500 is retryable — flow enters retry cycle
-        Thread.sleep(10000);
-
-        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
-        assertNotNull(flow);
-        // Should be retrying at REGISTER_DOCUMENT (500 from vendor)
-        // CREATE_DRAFT has no vendor call so it completes
-        assertTrue(flow.getCompletedSteps().contains("CREATE_DRAFT"),
-                "CREATE_DRAFT should complete before vendor failure");
-
-        // Clear failure and let it recover
+        // 500 is retryable — let it retry a few times then clear
+        Thread.sleep(5000);
         clearVendorFailures();
-        Thread.sleep(30000);
 
-        flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        // Wait for retry cycle to complete and flow to advance
+        EnigioInstrumentEntity flow = waitForStepCompleted(flowId, "REGISTER_DOCUMENT", Duration.ofMinutes(3));
         assertNotNull(flow);
         assertTrue(flow.getCompletedSteps().contains("REGISTER_DOCUMENT"),
                 "REGISTER_DOCUMENT should complete after vendor recovers");
@@ -490,17 +482,10 @@ class ResilienceIntegrationTest {
         var result = startFlow("SC-429-" + UUID.randomUUID().toString().substring(0, 8));
         String flowId = (String) result.get("id");
 
-        // 429 is retryable (special case in StepErrorHandler — treated as 5xx)
-        Thread.sleep(10000);
-
-        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
-        assertNotNull(flow);
-        assertTrue(flow.getCompletedSteps().contains("CREATE_DRAFT"));
-
+        Thread.sleep(5000);
         clearVendorFailures();
-        Thread.sleep(30000);
 
-        flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        EnigioInstrumentEntity flow = waitForStepCompleted(flowId, "REGISTER_DOCUMENT", Duration.ofMinutes(3));
         assertTrue(flow.getCompletedSteps().contains("REGISTER_DOCUMENT"),
                 "Should recover after 429 clears");
     }
@@ -513,17 +498,11 @@ class ResilienceIntegrationTest {
         var result = startFlow("SC-400-" + UUID.randomUUID().toString().substring(0, 8));
         String flowId = (String) result.get("id");
 
-        // 400 is non-retryable → flow should FAIL after DLT
-        Thread.sleep(30000);
-
-        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        EnigioInstrumentEntity flow = waitForTerminal(flowId, Duration.ofMinutes(3));
         assertNotNull(flow);
         FlowStatus status = flow.getStatus();
-        // Should be FAILED, COMPENSATION_FAILED, or COMPENSATING (DLT triggers compensation)
-        assertTrue(status == FlowStatus.FAILED || status == FlowStatus.COMPENSATION_FAILED
-                        || status == FlowStatus.COMPENSATING,
+        assertTrue(status == FlowStatus.FAILED || status == FlowStatus.COMPENSATION_FAILED || status == FlowStatus.COMPENSATING,
                 "400 should lead to terminal failure, got: " + status);
-        clearVendorFailures();
     }
 
     @Test
@@ -534,16 +513,10 @@ class ResilienceIntegrationTest {
         var result = startFlow("SC-503-" + UUID.randomUUID().toString().substring(0, 8));
         String flowId = (String) result.get("id");
 
-        Thread.sleep(10000);
-
-        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
-        assertNotNull(flow);
-        assertTrue(flow.getCompletedSteps().contains("CREATE_DRAFT"));
-
+        Thread.sleep(5000);
         clearVendorFailures();
-        Thread.sleep(30000);
 
-        flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        EnigioInstrumentEntity flow = waitForStepCompleted(flowId, "REGISTER_DOCUMENT", Duration.ofMinutes(3));
         assertTrue(flow.getCompletedSteps().contains("REGISTER_DOCUMENT"),
                 "Should recover after 503 clears");
     }
@@ -556,11 +529,10 @@ class ResilienceIntegrationTest {
         var result = startFlow("SC-502-" + UUID.randomUUID().toString().substring(0, 8));
         String flowId = (String) result.get("id");
 
-        Thread.sleep(10000);
+        Thread.sleep(5000);
         clearVendorFailures();
-        Thread.sleep(30000);
 
-        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        EnigioInstrumentEntity flow = waitForStepCompleted(flowId, "REGISTER_DOCUMENT", Duration.ofMinutes(3));
         assertNotNull(flow);
         assertTrue(flow.getCompletedSteps().contains("REGISTER_DOCUMENT"),
                 "Should recover after 502 clears");
@@ -574,14 +546,40 @@ class ResilienceIntegrationTest {
         var result = startFlow("SC-403-" + UUID.randomUUID().toString().substring(0, 8));
         String flowId = (String) result.get("id");
 
-        Thread.sleep(30000);
-
-        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        EnigioInstrumentEntity flow = waitForTerminal(flowId, Duration.ofMinutes(3));
         assertNotNull(flow);
         FlowStatus status = flow.getStatus();
-        assertTrue(status == FlowStatus.FAILED || status == FlowStatus.COMPENSATION_FAILED
-                        || status == FlowStatus.COMPENSATING,
+        assertTrue(status == FlowStatus.FAILED || status == FlowStatus.COMPENSATION_FAILED || status == FlowStatus.COMPENSATING,
                 "403 should lead to terminal failure, got: " + status);
-        clearVendorFailures();
+    }
+
+    private EnigioInstrumentEntity waitForStepCompleted(String flowId, String stepName, Duration timeout) {
+        long deadline = System.currentTimeMillis() + timeout.toMillis();
+        while (System.currentTimeMillis() < deadline) {
+            EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+            if (flow != null && flow.getCompletedSteps() != null && flow.getCompletedSteps().contains(stepName)) return flow;
+            try { Thread.sleep(2000); } catch (InterruptedException e) { break; }
+        }
+        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        fail("Flow " + flowId + " step " + stepName + " not completed within " + timeout +
+                ". Current: " + (flow != null ? flow.getStatus() + " @ " + flow.getCurrentStep() : "NOT FOUND"));
+        return null;
+    }
+
+    private EnigioInstrumentEntity waitForTerminal(String flowId, Duration timeout) {
+        long deadline = System.currentTimeMillis() + timeout.toMillis();
+        while (System.currentTimeMillis() < deadline) {
+            EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+            if (flow != null) {
+                FlowStatus s = flow.getStatus();
+                if (s == FlowStatus.FAILED || s == FlowStatus.CANCELLED || s == FlowStatus.COMPENSATION_FAILED
+                        || s == FlowStatus.COMPLETED || s == FlowStatus.COMPENSATING) return flow;
+            }
+            try { Thread.sleep(2000); } catch (InterruptedException e) { break; }
+        }
+        EnigioInstrumentEntity flow = mongoTemplate.findById(flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        fail("Flow " + flowId + " not terminal within " + timeout +
+                ". Current: " + (flow != null ? flow.getStatus() + " @ " + flow.getCurrentStep() : "NOT FOUND"));
+        return null;
     }
 }

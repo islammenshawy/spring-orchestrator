@@ -101,20 +101,52 @@ public class StepErrorHandler {
         throw new RetryableStepException(handler.getStepName() + " failed: " + errorMessage, ex);
     }
 
+    /**
+     * Extract HTTP status code from any exception in the cause chain.
+     * Uses reflection to avoid compile-time dependencies on Spring Web, WebFlux, or Feign.
+     *
+     * Supported exception types:
+     * - Spring RestClient/WebClient: getStatusCode().value() → int
+     * - Feign: status() → int
+     */
     private static int extractHttpStatus(Throwable ex) {
         Throwable current = ex;
         while (current != null) {
-            // Check the entire class hierarchy for getStatusCode() — covers:
-            // HttpClientErrorException, HttpServerErrorException, HttpStatusCodeException,
-            // WebClientResponseException, and any subclass (e.g. UnprocessableEntity)
-            try {
-                var method = current.getClass().getMethod("getStatusCode");
-                var statusCode = method.invoke(current);
-                return (int) statusCode.getClass().getMethod("value").invoke(statusCode);
-            } catch (NoSuchMethodException ignored) {
-                // Not an HTTP exception — try cause
-            } catch (Exception ignored) {}
+            int status = tryExtractSpringStatus(current);
+            if (status > 0) return status;
+
+            status = tryExtractFeignStatus(current);
+            if (status > 0) return status;
+
             current = current.getCause();
+        }
+        return 0;
+    }
+
+    /** Spring HTTP: HttpClientErrorException, HttpServerErrorException, WebClientResponseException */
+    private static int tryExtractSpringStatus(Throwable ex) {
+        try {
+            var statusCode = ex.getClass().getMethod("getStatusCode").invoke(ex);
+            return (int) statusCode.getClass().getMethod("value").invoke(statusCode);
+        } catch (NoSuchMethodException e) {
+            return 0;
+        } catch (Exception e) {
+            log.trace("Failed to extract Spring HTTP status from {}: {}", ex.getClass().getSimpleName(), e.getMessage());
+            return 0;
+        }
+    }
+
+    /** Feign: FeignException.status() returns int */
+    private static int tryExtractFeignStatus(Throwable ex) {
+        try {
+            var method = ex.getClass().getMethod("status");
+            if (method.getReturnType() == int.class) {
+                return (int) method.invoke(ex);
+            }
+        } catch (NoSuchMethodException e) {
+            return 0;
+        } catch (Exception e) {
+            log.trace("Failed to extract Feign HTTP status from {}: {}", ex.getClass().getSimpleName(), e.getMessage());
         }
         return 0;
     }

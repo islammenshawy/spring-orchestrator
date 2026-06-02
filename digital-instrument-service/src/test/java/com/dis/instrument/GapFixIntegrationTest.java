@@ -53,7 +53,15 @@ class GapFixIntegrationTest {
     void setUp() {
         rest = RestClient.builder().baseUrl("http://localhost:" + port)
                 .defaultHeader("X-API-Key", "test-api-key").build();
-        // Reset vendor failure config before each test to avoid cross-test contamination
+        resetVendor();
+    }
+
+    @AfterEach
+    void tearDown() {
+        resetVendor();
+    }
+
+    private void resetVendor() {
         try {
             RestClient.create("http://localhost:8081").post().uri("/admin/failure-config")
                     .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
