@@ -1,0 +1,106 @@
+{
+  "editable": true,
+  "templating": {
+    "list": [
+      {
+        "name": "flowId",
+        "type": "textbox",
+        "label": "Flow ID",
+        "current": { "value": "" },
+        "options": []
+      },
+      {
+        "name": "service",
+        "type": "custom",
+        "label": "Service",
+        "current": { "text": "All", "value": "" },
+        "options": [
+          { "text": "All", "value": "", "selected": true },
+          { "text": "DIS", "value": "digital-instrument-service" },
+          { "text": "DocuSeal", "value": "docuseal-signing-service" }
+        ],
+        "query": ""
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "Flow Lifecycle (by ID)",
+      "description": "Enter a Flow ID above to track its full lifecycle. Shows all log entries for that flow.",
+      "type": "logs",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{
+        "expr": "{service=~\"${service:pipe}.+\"} |~ \"$flowId\"",
+        "refId": "A"
+      }],
+      "options": { "showTime": true, "sortOrder": "Ascending", "enableLogDetails": true, "showLabels": true }
+    },
+    {
+      "title": "Step Transitions",
+      "description": "Step execution events for the flow — shows progression through the pipeline",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{
+        "expr": "{service=~\"${service:pipe}.+\"} |~ \"$flowId\" |~ \"Executing step|COMPLETED|PARKED|WAITING|FAILED|RECOVERED|advanceAfterReply|completeStep\"",
+        "refId": "A"
+      }],
+      "options": { "showTime": true, "sortOrder": "Ascending", "enableLogDetails": true }
+    },
+    {
+      "title": "Errors & Retries",
+      "description": "Errors, retries, DLT events, and compensation for this flow",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{
+        "expr": "{service=~\"${service:pipe}.+\"} |~ \"$flowId\" |~ \"ERROR|WARN|DLT|Compensation|RETRYING|Infrastructure|Dead-letter|Version conflict\"",
+        "refId": "A"
+      }],
+      "options": { "showTime": true, "sortOrder": "Ascending", "enableLogDetails": true }
+    },
+    {
+      "title": "Signals & Webhooks",
+      "description": "Signal delivery, webhook events, and approvals for this flow",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{
+        "expr": "{service=~\"${service:pipe}.+\"} |~ \"$flowId\" |~ \"Signal|webhook|approve|Replay|cancel\"",
+        "refId": "A"
+      }],
+      "options": { "showTime": true, "sortOrder": "Ascending", "enableLogDetails": true }
+    },
+    {
+      "title": "Kafka Message Flow",
+      "description": "Kafka consumer events — step commands received, replies published",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{
+        "expr": "{service=~\"${service:pipe}.+\"} |~ \"$flowId\" |~ \"topic=|offset=|Outbox|reply|advance\"",
+        "refId": "A"
+      }],
+      "options": { "showTime": true, "sortOrder": "Ascending", "enableLogDetails": true }
+    },
+    {
+      "title": "All Active Flows (last 30m)",
+      "description": "Recent flow starts — click an ID to paste into Flow ID filter",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 28 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{
+        "expr": "{service=~\"${service:pipe}.+\"} |~ \"startFlow|Started flow|Executing step CREATE_SUBMISSION|Executing step CREATE_DRAFT\"",
+        "refId": "A"
+      }],
+      "options": { "showTime": true, "sortOrder": "Descending", "enableLogDetails": true }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["dis", "flow-tracker"],
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Flow Tracker",
+  "uid": "flow-tracker",
+  "refresh": "10s"
+}

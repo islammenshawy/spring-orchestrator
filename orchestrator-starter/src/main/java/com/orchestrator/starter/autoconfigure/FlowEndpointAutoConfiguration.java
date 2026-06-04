@@ -36,6 +36,7 @@ public class FlowEndpointAutoConfiguration {
         @Autowired private FlowTypeRegistry registry;
         @Autowired private ObjectMapper objectMapper;
         @Autowired(required = false) private jakarta.validation.Validator validator;
+        @Autowired private com.orchestrator.starter.audit.StepExecutionLogRepository stepLogRepository;
         @org.springframework.beans.factory.annotation.Value("${orchestrator.search.api-enabled:false}")
         private boolean searchApiEnabled;
 
@@ -372,6 +373,65 @@ public class FlowEndpointAutoConfiguration {
             } catch (IllegalArgumentException e) {
                 return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
             }
+        }
+
+        /** Step timeline — shows step progression with timing for a specific flow. */
+        @GetMapping("/{flowType}/{id}/timeline")
+        public ResponseEntity<?> getTimeline(@PathVariable String flowType, @PathVariable String id) {
+            var logs = stepLogRepository.findByFlowIdOrderByStartedAtAsc(id);
+            if (logs.isEmpty()) return ResponseEntity.notFound().build();
+
+            // Deduplicate: keep only the final outcome per step (last attempt)
+            var stepMap = new java.util.LinkedHashMap<String, Map<String, Object>>();
+            for (var log : logs) {
+                String key = log.getStepName();
+                var entry = new java.util.LinkedHashMap<String, Object>();
+                entry.put("step", log.getStepName());
+                entry.put("status", log.getStatus());
+                entry.put("attempt", log.getAttemptNumber());
+                entry.put("durationMs", log.getDurationMs());
+                entry.put("startedAt", log.getStartedAt());
+                entry.put("completedAt", log.getCompletedAt());
+                if (log.getErrorMessage() != null) entry.put("error", log.getErrorMessage());
+
+                // Keep last outcome per step, but track total attempts
+                if (stepMap.containsKey(key)) {
+                    var prev = stepMap.get(key);
+                    int prevAttempts = (int) prev.getOrDefault("totalAttempts", 1);
+                    entry.put("totalAttempts", prevAttempts + 1);
+                } else {
+                    entry.put("totalAttempts", 1);
+                }
+                stepMap.put(key, entry);
+            }
+
+            // Calculate time between steps
+            var timeline = new java.util.ArrayList<>(stepMap.values());
+            for (int i = 1; i < timeline.size(); i++) {
+                var prev = timeline.get(i - 1);
+                var curr = timeline.get(i);
+                var prevCompleted = (java.time.Instant) prev.get("completedAt");
+                var currStarted = (java.time.Instant) curr.get("startedAt");
+                if (prevCompleted != null && currStarted != null) {
+                    long gapMs = java.time.Duration.between(prevCompleted, currStarted).toMillis();
+                    curr.put("gapFromPreviousMs", gapMs);
+                }
+            }
+
+            // Total duration
+            var first = logs.get(0);
+            var last = logs.get(logs.size() - 1);
+            long totalMs = 0;
+            if (first.getStartedAt() != null && last.getCompletedAt() != null) {
+                totalMs = java.time.Duration.between(first.getStartedAt(), last.getCompletedAt()).toMillis();
+            }
+
+            return ResponseEntity.ok(Map.of(
+                    "flowId", id,
+                    "totalDurationMs", totalMs,
+                    "totalSteps", timeline.size(),
+                    "totalLogEntries", logs.size(),
+                    "steps", timeline));
         }
     }
 }
