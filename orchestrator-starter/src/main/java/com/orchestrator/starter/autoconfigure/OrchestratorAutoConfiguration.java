@@ -420,7 +420,9 @@ public class OrchestratorAutoConfiguration {
                 container.getContainerProperties().setMessageListener(replyListener);
                 // Reply containers inherit concurrency from spring.kafka.listener.concurrency
                 container.setBeanName("orchestrator-reply-" + topic.replace(".", "-"));
-                container.start();
+                // Don't call start() here — context may not be refreshed yet.
+                // autoStartup=true lets Spring's SmartLifecycle start it after context refresh.
+                container.setAutoStartup(true);
                 containers.add(container);
             }
             log.info("Kafka listener: reply topic '{}' → group '{}-orchestrator'", topic, appName);
@@ -456,7 +458,7 @@ public class OrchestratorAutoConfiguration {
                 container.getContainerProperties().setConsumerRebalanceListener(rebalanceListener);
                 container.getContainerProperties().setMessageListener(dltListener);
                 container.setBeanName("orchestrator-dlt-" + topic.replace(".", "-"));
-                container.start();
+                container.setAutoStartup(true);
                 containers.add(container);
             }
             log.info("Kafka listener: DLT topic '{}' → group '{}-dlt'", topic, appName);
