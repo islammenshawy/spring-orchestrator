@@ -420,9 +420,7 @@ public class OrchestratorAutoConfiguration {
                 container.getContainerProperties().setMessageListener(replyListener);
                 // Reply containers inherit concurrency from spring.kafka.listener.concurrency
                 container.setBeanName("orchestrator-reply-" + topic.replace(".", "-"));
-                // Don't call start() here — context may not be refreshed yet.
-                // autoStartup=true lets Spring's SmartLifecycle start it after context refresh.
-                container.setAutoStartup(true);
+                container.start();
                 containers.add(container);
             }
             log.info("Kafka listener: reply topic '{}' → group '{}-orchestrator'", topic, appName);
@@ -458,7 +456,7 @@ public class OrchestratorAutoConfiguration {
                 container.getContainerProperties().setConsumerRebalanceListener(rebalanceListener);
                 container.getContainerProperties().setMessageListener(dltListener);
                 container.setBeanName("orchestrator-dlt-" + topic.replace(".", "-"));
-                container.setAutoStartup(true);
+                container.start();
                 containers.add(container);
             }
             log.info("Kafka listener: DLT topic '{}' → group '{}-dlt'", topic, appName);
@@ -468,6 +466,9 @@ public class OrchestratorAutoConfiguration {
         return containers;
     }
 
+    /** Start programmatic Kafka containers (reply + DLT) AFTER all singletons are initialized.
+     *  Containers are created with autoStartup=false to prevent the startup race condition
+     *  where the reply consumer processes messages before the context is fully refreshed. */
     /**
      * Startup safety: validates all required beans are ready before consumers process messages.
      * Prevents the race condition where Kafka assigns partitions and delivers messages
