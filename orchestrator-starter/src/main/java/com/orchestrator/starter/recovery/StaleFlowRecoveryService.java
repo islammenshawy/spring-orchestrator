@@ -85,6 +85,8 @@ public class StaleFlowRecoveryService {
 
             recoverFlowType(descriptor, commandTopic);
 
+            recoverCompletedButNotAdvanced(descriptor, commandTopic);
+
             redeliverPollingFlows(descriptor.getFlowType(), descriptor.getEntityClass(), commandTopic);
 
             redeliverParkedSafetyNet(descriptor.getFlowType(), descriptor.getEntityClass(), commandTopic);
@@ -168,6 +170,17 @@ public class StaleFlowRecoveryService {
 
             // Filter out flows with pending outbox events — pipeline is just busy
             if (outboxRepository != null && outboxRepository.countByFlowIdAndPublishedFalse(flow.getId()) > 0) {
+                releaseClaim(flow.getId(), entityClass);
+                continue;
+            }
+
+            // Skip flows where the current step is already in completedSteps.
+            // This means completeStep() saved but advanceToNextStep never ran
+            // (reply consumer broken, crash between save and reply, etc.).
+            // Re-publishing the same step would re-execute, re-complete, fail to advance
+            // again, increment recoveryCount, and eventually FAIL a completed flow.
+            // recoverCompletedButNotAdvanced handles these by advancing directly via CAS.
+            if (flow.getCurrentStep() != null && flow.getCompletedSteps().contains(flow.getCurrentStep())) {
                 releaseClaim(flow.getId(), entityClass);
                 continue;
             }
@@ -452,6 +465,85 @@ public class StaleFlowRecoveryService {
                 log.error("[Recovery] Failed to recover stuck flow {}: {}", flow.getId(), e.getMessage());
             } finally {
                 releaseClaim(flow.getId(), entityClass);
+            }
+        }
+    }
+
+    /**
+     * Detect flows where step completed (in completedSteps) but currentStep never advanced.
+     * This happens when the reply consumer fails to process the reply (startup race, Kafka issue).
+     * Fix: advance currentStep to the next step and re-publish.
+     */
+    @SuppressWarnings("unchecked")
+    private void recoverCompletedButNotAdvanced(FlowTypeDescriptor descriptor, String commandTopic) {
+        String flowType = descriptor.getFlowType();
+        Class<?> entityClass = descriptor.getEntityClass();
+        StepRegistry<?> stepRegistry = descriptor.getStepRegistry();
+        Instant threshold = Instant.now().minus(staleThresholdMinutes, ChronoUnit.MINUTES);
+
+        // Find IN_PROGRESS flows with stale updatedAt, no executingStep, not claimed
+        List<?> candidates = mongoTemplate.find(
+                Query.query(Criteria.where("status").is(FlowStatus.IN_PROGRESS.name())
+                        .and("updatedAt").lt(threshold)
+                        .and("executingStep").is(null)
+                        .and("claimedBy").is(null))
+                        .limit(batchSize),
+                entityClass);
+
+        for (Object obj : candidates) {
+            OrchestratorFlow flow = (OrchestratorFlow) obj;
+            String currentStep = flow.getCurrentStep();
+            if (currentStep == null) continue;
+
+            // Check: is currentStep already in completedSteps?
+            if (!flow.getCompletedSteps().contains(currentStep)) continue;
+
+            // Step completed but flow didn't advance — reply was lost
+            String nextStep = stepRegistry.getNextStep(currentStep);
+            if (nextStep == null) {
+                // Last step completed but not marked COMPLETED — fix status
+                log.warn("[Recovery] Flow {} completed final step {} but status is IN_PROGRESS — marking COMPLETED",
+                        flow.getId(), currentStep);
+                mongoTemplate.updateFirst(
+                        Query.query(Criteria.where("_id").is(flow.getId())
+                                .and("currentStep").is(currentStep)),
+                        new Update()
+                                .set("status", FlowStatus.COMPLETED.name())
+                                .set("updatedAt", Instant.now()),
+                        entityClass);
+                metrics.flowCompleted(flowType);
+                continue;
+            }
+
+            // Advance currentStep and re-publish next step
+            long modified = mongoTemplate.updateFirst(
+                    Query.query(Criteria.where("_id").is(flow.getId())
+                            .and("currentStep").is(currentStep)),
+                    new Update()
+                            .set("currentStep", nextStep)
+                            .set("updatedAt", Instant.now())
+                            .inc("version", 1),
+                    entityClass).getModifiedCount();
+
+            if (modified == 0) continue; // Another pod already advanced
+
+            try {
+                StepCommandMessage cmd = StepCommandMessage.builder()
+                        .eventId(UUID.randomUUID().toString())
+                        .flowId(flow.getId())
+                        .correlationId(flow.getCorrelationId())
+                        .stepName(nextStep)
+                        .flowType(flowType)
+                        .build();
+                String partitionKey = flow.getCorrelationId() != null
+                        ? flow.getCorrelationId() : flow.getId();
+                kafkaTemplate.send(commandTopic, partitionKey,
+                        objectMapper.writeValueAsString(cmd)).get();
+
+                log.warn("[Recovery] Flow {} step {} completed but not advanced — recovered to {} (reply consumer may have failed)",
+                        flow.getId(), currentStep, nextStep);
+            } catch (Exception e) {
+                log.error("[Recovery] Failed to recover stuck flow {}: {}", flow.getId(), e.getMessage());
             }
         }
     }
