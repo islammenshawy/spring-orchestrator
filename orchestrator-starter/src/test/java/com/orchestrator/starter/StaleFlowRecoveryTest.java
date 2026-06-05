@@ -296,4 +296,307 @@ class StaleFlowRecoveryTest {
         // updateMulti called at least once for orphan cleanup
         verify(mongoTemplate, atLeast(1)).updateMulti(any(Query.class), any(Update.class), eq(FlowA.class));
     }
+
+    // ── recoverCompletedButNotAdvanced tests ──────────────────────────────
+
+    /**
+     * Helper: build a descriptor with a real StepRegistry mock that knows next steps.
+     * Configures mongoTemplate.find to return the given flow for IN_PROGRESS queries
+     * and empty for all others, WITHOUT any claim pattern (recoverCompletedButNotAdvanced
+     * does its own unclaimed find, not the claim/batch pattern).
+     */
+    private FlowTypeDescriptor descriptorWithSteps(String flowType, Class<?> entityClass,
+                                                    String commandTopic, StepRegistry<?> stepRegistry) {
+        return FlowTypeDescriptor.builder()
+                .flowType(flowType).entityClass(entityClass)
+                .commandTopic(commandTopic).replyTopic(commandTopic + ".replies")
+                .replyEnabled(true).repository(null)
+                .stepRegistry(stepRegistry)
+                .orchestrator(mock(FlowOrchestrator.class))
+                .build();
+    }
+
+    /**
+     * Configure find to return candidates for recoverCompletedButNotAdvanced
+     * (IN_PROGRESS + stale + executingStep=null + claimedBy=null),
+     * while returning empty for recoverFlowType's candidate query (which also
+     * matches IN_PROGRESS) by counting invocations.
+     */
+    private void setupCompletedButNotAdvancedFind(Class<?> entityClass, List<?> candidates) {
+        AtomicInteger findCallCount = new AtomicInteger();
+        when(mongoTemplate.find(any(Query.class), eq(entityClass)))
+                .thenAnswer(inv -> {
+                    int call = findCallCount.incrementAndGet();
+                    // Call 1 = recoverFlowType candidate query → empty (skip normal recovery)
+                    // Call 2 = recoverCompletedButNotAdvanced candidate query → our candidates
+                    if (call == 2) return candidates;
+                    return List.of();
+                });
+    }
+
+    @Test
+    void recoverCompletedButNotAdvanced_advancesToNextStep() {
+        StepRegistry stepRegistry = mock(StepRegistry.class);
+        when(stepRegistry.getNextStep("STEP_1")).thenReturn("STEP_2");
+
+        FlowA flow = new FlowA();
+        flow.setId("adv-1");
+        flow.setCorrelationId("corr-adv");
+        flow.setCurrentStep("STEP_1");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setUpdatedAt(Instant.now().minus(20, ChronoUnit.MINUTES));
+        flow.getCompletedSteps().add("STEP_1");
+
+        setupCompletedButNotAdvancedFind(FlowA.class, List.of(flow));
+        // CAS update succeeds
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(FlowA.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1L, null));
+
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(
+                descriptorWithSteps("enigio", FlowA.class, "enigio.commands", stepRegistry)));
+
+        createService(registry).recoverStaleFlows();
+
+        // Should publish STEP_2 (the next step), not STEP_1
+        verify(kafkaTemplate).send(eq("enigio.commands"), eq("corr-adv"), contains("STEP_2"));
+    }
+
+    @Test
+    void recoverCompletedButNotAdvanced_skipsWhenCurrentStepNotInCompletedSteps() {
+        StepRegistry stepRegistry = mock(StepRegistry.class);
+
+        FlowA flow = new FlowA();
+        flow.setId("skip-1");
+        flow.setCorrelationId("corr-skip");
+        flow.setCurrentStep("STEP_1");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setUpdatedAt(Instant.now().minus(20, ChronoUnit.MINUTES));
+        // completedSteps does NOT contain STEP_1
+
+        setupCompletedButNotAdvancedFind(FlowA.class, List.of(flow));
+
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(
+                descriptorWithSteps("enigio", FlowA.class, "enigio.commands", stepRegistry)));
+
+        createService(registry).recoverStaleFlows();
+
+        // getNextStep should never be called — flow skipped
+        verify(stepRegistry, never()).getNextStep(anyString());
+        // No Kafka publish from recoverCompletedButNotAdvanced
+        verify(kafkaTemplate, never()).send(anyString(), anyString(), contains("STEP_2"));
+    }
+
+    @Test
+    void recoverCompletedButNotAdvanced_skipsFlowWithFreshUpdatedAt() {
+        StepRegistry stepRegistry = mock(StepRegistry.class);
+
+        FlowA flow = new FlowA();
+        flow.setId("fresh-1");
+        flow.setCurrentStep("STEP_1");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setUpdatedAt(Instant.now().minus(2, ChronoUnit.MINUTES)); // within threshold
+        flow.getCompletedSteps().add("STEP_1");
+
+        // Fresh flow should NOT appear in the MongoDB query results (filtered by updatedAt < threshold).
+        // So mongo returns empty — this flow is never seen by the method.
+        when(mongoTemplate.find(any(Query.class), eq(FlowA.class)))
+                .thenReturn(List.of());
+
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(
+                descriptorWithSteps("enigio", FlowA.class, "enigio.commands", stepRegistry)));
+
+        createService(registry).recoverStaleFlows();
+
+        verify(stepRegistry, never()).getNextStep(anyString());
+        verify(kafkaTemplate, never()).send(anyString(), anyString(), contains("STEP_2"));
+    }
+
+    @Test
+    void recoverCompletedButNotAdvanced_skipsFlowWithExecutingStepSet() {
+        StepRegistry stepRegistry = mock(StepRegistry.class);
+
+        FlowA flow = new FlowA();
+        flow.setId("exec-1");
+        flow.setCurrentStep("STEP_1");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setUpdatedAt(Instant.now().minus(20, ChronoUnit.MINUTES));
+        flow.setExecutingStep("STEP_1");
+        flow.getCompletedSteps().add("STEP_1");
+
+        // executingStep != null means MongoDB query filters it out (executingStep=null criteria)
+        when(mongoTemplate.find(any(Query.class), eq(FlowA.class)))
+                .thenReturn(List.of());
+
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(
+                descriptorWithSteps("enigio", FlowA.class, "enigio.commands", stepRegistry)));
+
+        createService(registry).recoverStaleFlows();
+
+        verify(stepRegistry, never()).getNextStep(anyString());
+        verify(kafkaTemplate, never()).send(anyString(), anyString(), contains("STEP_1"));
+    }
+
+    @Test
+    void recoverCompletedButNotAdvanced_lastStep_marksCompleted() {
+        StepRegistry stepRegistry = mock(StepRegistry.class);
+        when(stepRegistry.getNextStep("STEP_FINAL")).thenReturn(null); // last step
+
+        FlowA flow = new FlowA();
+        flow.setId("last-1");
+        flow.setCurrentStep("STEP_FINAL");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setUpdatedAt(Instant.now().minus(20, ChronoUnit.MINUTES));
+        flow.getCompletedSteps().add("STEP_FINAL");
+
+        setupCompletedButNotAdvancedFind(FlowA.class, List.of(flow));
+
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(
+                descriptorWithSteps("enigio", FlowA.class, "enigio.commands", stepRegistry)));
+
+        createService(registry).recoverStaleFlows();
+
+        // Should mark COMPLETED, not publish to Kafka
+        ArgumentCaptor<Update> updateCaptor = ArgumentCaptor.forClass(Update.class);
+        verify(mongoTemplate, atLeastOnce()).updateFirst(any(Query.class), updateCaptor.capture(), eq(FlowA.class));
+        String updateStr = updateCaptor.getAllValues().stream()
+                .map(Object::toString).reduce("", String::concat);
+        assertThat(updateStr).contains("COMPLETED");
+        // No step command should be published
+        verify(kafkaTemplate, never()).send(anyString(), anyString(), contains("STEP_FINAL"));
+    }
+
+    @Test
+    void recoverCompletedButNotAdvanced_skipsFlowWithClaimedBySet() {
+        StepRegistry stepRegistry = mock(StepRegistry.class);
+
+        FlowA flow = new FlowA();
+        flow.setId("claimed-1");
+        flow.setCurrentStep("STEP_1");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setUpdatedAt(Instant.now().minus(20, ChronoUnit.MINUTES));
+        flow.setClaimedBy("other-pod");
+        flow.getCompletedSteps().add("STEP_1");
+
+        // claimedBy != null means MongoDB query filters it out (claimedBy=null criteria)
+        when(mongoTemplate.find(any(Query.class), eq(FlowA.class)))
+                .thenReturn(List.of());
+
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(
+                descriptorWithSteps("enigio", FlowA.class, "enigio.commands", stepRegistry)));
+
+        createService(registry).recoverStaleFlows();
+
+        verify(stepRegistry, never()).getNextStep(anyString());
+        verify(kafkaTemplate, never()).send(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void recoverCompletedButNotAdvanced_casFailure_skipsPublish() {
+        StepRegistry stepRegistry = mock(StepRegistry.class);
+        when(stepRegistry.getNextStep("STEP_1")).thenReturn("STEP_2");
+
+        FlowA flow = new FlowA();
+        flow.setId("cas-fail-1");
+        flow.setCorrelationId("corr-cas");
+        flow.setCurrentStep("STEP_1");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setUpdatedAt(Instant.now().minus(20, ChronoUnit.MINUTES));
+        flow.getCompletedSteps().add("STEP_1");
+
+        setupCompletedButNotAdvancedFind(FlowA.class, List.of(flow));
+        // CAS update returns modifiedCount=0 (another pod already advanced)
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(FlowA.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 0L, null));
+
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(
+                descriptorWithSteps("enigio", FlowA.class, "enigio.commands", stepRegistry)));
+
+        createService(registry).recoverStaleFlows();
+
+        // Should NOT publish because CAS failed
+        verify(kafkaTemplate, never()).send(anyString(), anyString(), contains("STEP_2"));
+    }
+
+    @Test
+    void recoverCompletedButNotAdvanced_kafkaFailure_logsButDoesNotThrow() {
+        StepRegistry stepRegistry = mock(StepRegistry.class);
+        when(stepRegistry.getNextStep("STEP_1")).thenReturn("STEP_2");
+
+        FlowA flow = new FlowA();
+        flow.setId("kafka-fail-1");
+        flow.setCorrelationId("corr-kf");
+        flow.setCurrentStep("STEP_1");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setUpdatedAt(Instant.now().minus(20, ChronoUnit.MINUTES));
+        flow.getCompletedSteps().add("STEP_1");
+
+        setupCompletedButNotAdvancedFind(FlowA.class, List.of(flow));
+        when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(FlowA.class)))
+                .thenReturn(UpdateResult.acknowledged(1, 1L, null));
+        when(kafkaTemplate.send(anyString(), anyString(), anyString()))
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("Kafka down")));
+
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(
+                descriptorWithSteps("enigio", FlowA.class, "enigio.commands", stepRegistry)));
+
+        // Should not throw
+        createService(registry).recoverStaleFlows();
+
+        // Kafka send was attempted
+        verify(kafkaTemplate).send(eq("enigio.commands"), eq("corr-kf"), contains("STEP_2"));
+    }
+
+    // ── recoverFlowType skip guard tests ──────────────────────────────────
+
+    @Test
+    void recoverFlowType_skipsFlowWhereCurrentStepInCompletedSteps() {
+        StepRegistry stepRegistry = mock(StepRegistry.class);
+
+        FlowA flow = new FlowA();
+        flow.setId("guard-1");
+        flow.setCorrelationId("corr-guard");
+        flow.setCurrentStep("STEP_1");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setUpdatedAt(Instant.now().minus(20, ChronoUnit.MINUTES));
+        flow.getCompletedSteps().add("STEP_1"); // currentStep IS in completedSteps
+
+        // All IN_PROGRESS find calls return this flow (both recoverFlowType and recoverCompletedButNotAdvanced)
+        setupClaimPattern(FlowA.class, List.of(flow), 1);
+
+        // For recoverCompletedButNotAdvanced: getNextStep returns STEP_2
+        when(stepRegistry.getNextStep("STEP_1")).thenReturn("STEP_2");
+
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(
+                descriptorWithSteps("enigio", FlowA.class, "enigio.commands", stepRegistry)));
+
+        createService(registry).recoverStaleFlows();
+
+        // recoverFlowType should NOT publish STEP_1 (skipped by guard)
+        verify(kafkaTemplate, never()).send(anyString(), anyString(), contains("STEP_1"));
+        // releaseClaim should be called (the guard releases claim before continuing)
+        verify(mongoTemplate, atLeastOnce()).updateFirst(any(Query.class), any(Update.class), eq(FlowA.class));
+    }
+
+    @Test
+    void recoverFlowType_normalRecovery_whenCurrentStepNotInCompletedSteps() {
+        StepRegistry stepRegistry = mock(StepRegistry.class);
+
+        FlowA flow = new FlowA();
+        flow.setId("normal-1");
+        flow.setCorrelationId("corr-normal");
+        flow.setCurrentStep("STEP_1");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setUpdatedAt(Instant.now().minus(20, ChronoUnit.MINUTES));
+        // completedSteps does NOT contain STEP_1 → normal recovery path
+
+        setupClaimPattern(FlowA.class, List.of(flow), 1);
+
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(
+                descriptorWithSteps("enigio", FlowA.class, "enigio.commands", stepRegistry)));
+
+        createService(registry).recoverStaleFlows();
+
+        // recoverFlowType should re-publish STEP_1 (normal recovery)
+        verify(kafkaTemplate).send(eq("enigio.commands"), eq("corr-normal"), contains("STEP_1"));
+    }
 }
