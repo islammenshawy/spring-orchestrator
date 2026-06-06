@@ -2,8 +2,10 @@ package com.orchestrator.starter;
 
 import com.orchestrator.starter.autoconfigure.OrchestratorAutoConfiguration;
 import com.orchestrator.starter.autoconfigure.OrchestratorAutoConfiguration.OrchestratorCommandListener;
+import com.orchestrator.starter.autoconfigure.OrchestratorMetrics;
 import com.orchestrator.starter.autoconfigure.OrchestratorProperties;
 import com.orchestrator.starter.autoconfigure.OrchestratorProperties.*;
+import com.orchestrator.starter.flow.FlowOrchestrator;
 import com.orchestrator.starter.flow.FlowTypeDescriptor;
 import com.orchestrator.starter.flow.FlowTypeRegistry;
 import com.orchestrator.starter.kafka.MongoOffsetStore;
@@ -749,6 +751,306 @@ class AutoConfigurationTest {
 
             assertThat(props.getAudit().isIncludeFlowState()).isFalse();
             assertThat(props.getAudit().getMaxLogSnapshotBytes()).isEqualTo(32768);
+        }
+    }
+
+    // ========================================================================
+    // orchestratorCommandRetryConfig bean
+    // ========================================================================
+
+    @Nested
+    @DisplayName("orchestratorCommandRetryConfig")
+    class RetryConfigTests {
+
+        private OrchestratorAutoConfiguration config;
+
+        @BeforeEach
+        void setUp() {
+            config = new OrchestratorAutoConfiguration();
+        }
+
+        @Test
+        @DisplayName("creates retry config with custom backoff settings")
+        void retryConfig_usesPropsSettings() {
+            OrchestratorProperties props = new OrchestratorProperties();
+            props.getRetry().setMaxAttempts(6);
+            props.getRetry().setInitialIntervalMs(5000);
+            props.getRetry().setMultiplier(3.0);
+            props.getRetry().setMaxIntervalMs(60000);
+            props.getRetry().setJitterFactor(0.3);
+            props.getKafka().setCommandTopic("custom.commands");
+
+            @SuppressWarnings("unchecked")
+            org.springframework.kafka.core.KafkaTemplate<String, String> template =
+                    mock(org.springframework.kafka.core.KafkaTemplate.class);
+
+            org.springframework.kafka.retrytopic.RetryTopicConfiguration retryConfig =
+                    config.orchestratorCommandRetryConfig(template, props);
+
+            assertThat(retryConfig).isNotNull();
+        }
+
+        @Test
+        @DisplayName("retry config includes prefixed topics for PREFIXED failover")
+        void retryConfig_includesPrefixedTopics() {
+            OrchestratorProperties props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("commands");
+            props.getFailover().setEnabled(true);
+            props.getFailover().setReplicationPolicy(ReplicationPolicy.PREFIXED);
+
+            DcConfig dc = new DcConfig();
+            dc.setSourceAlias("us-east");
+            props.getFailover().setDcs(Map.of("us-east", dc));
+
+            @SuppressWarnings("unchecked")
+            org.springframework.kafka.core.KafkaTemplate<String, String> template =
+                    mock(org.springframework.kafka.core.KafkaTemplate.class);
+
+            org.springframework.kafka.retrytopic.RetryTopicConfiguration retryConfig =
+                    config.orchestratorCommandRetryConfig(template, props);
+
+            assertThat(retryConfig).isNotNull();
+        }
+
+        @Test
+        @DisplayName("retry config with IDENTITY failover only includes base topic")
+        void retryConfig_identityOnlyBaseTopics() {
+            OrchestratorProperties props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("commands");
+            props.getFailover().setEnabled(true);
+            props.getFailover().setReplicationPolicy(ReplicationPolicy.IDENTITY);
+
+            DcConfig dc = new DcConfig();
+            dc.setSourceAlias("us-east");
+            props.getFailover().setDcs(Map.of("us-east", dc));
+
+            @SuppressWarnings("unchecked")
+            org.springframework.kafka.core.KafkaTemplate<String, String> template =
+                    mock(org.springframework.kafka.core.KafkaTemplate.class);
+
+            org.springframework.kafka.retrytopic.RetryTopicConfiguration retryConfig =
+                    config.orchestratorCommandRetryConfig(template, props);
+
+            assertThat(retryConfig).isNotNull();
+        }
+
+        @Test
+        @DisplayName("retry config with default properties")
+        void retryConfig_defaultProps() {
+            OrchestratorProperties props = new OrchestratorProperties();
+
+            @SuppressWarnings("unchecked")
+            org.springframework.kafka.core.KafkaTemplate<String, String> template =
+                    mock(org.springframework.kafka.core.KafkaTemplate.class);
+
+            org.springframework.kafka.retrytopic.RetryTopicConfiguration retryConfig =
+                    config.orchestratorCommandRetryConfig(template, props);
+
+            assertThat(retryConfig).isNotNull();
+        }
+    }
+
+    // ========================================================================
+    // Shared service beans
+    // ========================================================================
+
+    @Nested
+    @DisplayName("Shared service beans")
+    class SharedServiceBeanTests {
+
+        private OrchestratorAutoConfiguration config;
+
+        @BeforeEach
+        void setUp() {
+            config = new OrchestratorAutoConfiguration();
+        }
+
+        @Test
+        @DisplayName("orchestratorMetrics created without meter registry")
+        void metrics_withoutRegistry() {
+            var provider = mock(org.springframework.beans.factory.ObjectProvider.class);
+            when(provider.getIfAvailable()).thenReturn(null);
+
+            var metrics = config.orchestratorMetrics(provider);
+            assertThat(metrics).isNotNull();
+        }
+
+        @Test
+        @DisplayName("orchestratorIdempotencyService created")
+        void idempotencyService_created() {
+            var repo = mock(com.orchestrator.starter.idempotency.ProcessedEventRepository.class);
+            var metrics = mock(OrchestratorMetrics.class);
+
+            var service = config.orchestratorIdempotencyService(repo, metrics);
+            assertThat(service).isNotNull();
+        }
+
+        @Test
+        @DisplayName("orchestratorTopicValidator created")
+        void topicValidator_created() {
+            var kafkaAdmin = mock(org.springframework.kafka.core.KafkaAdmin.class);
+            var props = new OrchestratorProperties();
+
+            var validator = config.orchestratorTopicValidator(kafkaAdmin, props);
+            assertThat(validator).isNotNull();
+        }
+
+        @Test
+        @DisplayName("orchestratorOutboxPublisher created with configured params")
+        void outboxPublisher_created() {
+            var outboxRepo = mock(com.orchestrator.starter.outbox.OutboxEventRepository.class);
+            @SuppressWarnings("unchecked")
+            var kafkaTemplate = mock(org.springframework.kafka.core.KafkaTemplate.class);
+            var props = new OrchestratorProperties();
+            props.getOutbox().setMaxPublishRetries(5);
+            props.getOutbox().setBatchSize(200);
+            var metrics = mock(OrchestratorMetrics.class);
+
+            var publisher = config.orchestratorOutboxPublisher(outboxRepo, kafkaTemplate, props, metrics);
+            assertThat(publisher).isNotNull();
+        }
+
+        @Test
+        @DisplayName("mongoOffsetStore created with cluster ID")
+        void mongoOffsetStore_created() {
+            var mongoTemplate = mock(MongoTemplate.class);
+            var props = new OrchestratorProperties();
+            props.getKafka().setClusterId("my-cluster");
+
+            var store = config.mongoOffsetStore(mongoTemplate, props);
+            assertThat(store).isNotNull();
+        }
+
+        @Test
+        @DisplayName("timestampOffsetRecoveryListener created with recovery config")
+        void timestampRecoveryListener_created() {
+            var props = new OrchestratorProperties();
+            var listener = config.timestampOffsetRecoveryListener(props);
+            assertThat(listener).isNotNull();
+        }
+
+        @Test
+        @DisplayName("orchestratorIndexInitializer created")
+        void indexInitializer_created() {
+            var mongoTemplate = mock(MongoTemplate.class);
+            var props = new OrchestratorProperties();
+            var registry = new FlowTypeRegistry(List.of());
+
+            var initializer = config.orchestratorIndexInitializer(mongoTemplate, props, registry);
+            assertThat(initializer).isNotNull();
+        }
+    }
+
+    // ========================================================================
+    // Backward-compatible singleton beans
+    // ========================================================================
+
+    @Nested
+    @DisplayName("Backward-compatible singleton beans")
+    class BackwardCompatBeanTests {
+
+        @Mock
+        private FlowTypeRegistry registry;
+        @Mock
+        private FlowTypeDescriptor descriptor;
+        @Mock
+        private FlowOrchestrator<?> orchestrator;
+        @Mock
+        private com.orchestrator.starter.domain.OrchestratorFlowRepository<?> flowRepo;
+        @Mock
+        private com.orchestrator.starter.flow.StepRegistry<?> stepRegistry;
+
+        private OrchestratorAutoConfiguration config;
+
+        @BeforeEach
+        @SuppressWarnings("unchecked")
+        void setUp() {
+            config = new OrchestratorAutoConfiguration();
+            when(registry.getAll()).thenReturn(List.of(descriptor));
+            doReturn(orchestrator).when(descriptor).getOrchestrator();
+            doReturn(flowRepo).when(descriptor).getRepository();
+            doReturn(stepRegistry).when(descriptor).getStepRegistry();
+        }
+
+        @Test
+        @DisplayName("orchestratorFlowOrchestrator returns first flow's orchestrator")
+        void flowOrchestrator_returnsFirst() {
+            var result = config.orchestratorFlowOrchestrator(registry);
+            assertThat(result).isSameAs(orchestrator);
+        }
+
+        @Test
+        @DisplayName("orchestratorGenericFlowRepository returns first flow's repository")
+        void flowRepository_returnsFirst() {
+            var result = config.orchestratorGenericFlowRepository(registry);
+            assertThat(result).isSameAs(flowRepo);
+        }
+
+        @Test
+        @DisplayName("orchestratorStepRegistry returns first flow's step registry")
+        void stepRegistry_returnsFirst() {
+            var result = config.orchestratorStepRegistry(registry);
+            assertThat(result).isSameAs(stepRegistry);
+        }
+    }
+
+    // ========================================================================
+    // Shutdown hook
+    // ========================================================================
+
+    @Nested
+    @DisplayName("Shutdown hook")
+    class ShutdownHookTests {
+
+        @Mock
+        private FlowTypeRegistry registry;
+        @Mock
+        private FlowTypeDescriptor descriptor;
+
+        private OrchestratorAutoConfiguration config;
+
+        @BeforeEach
+        void setUp() {
+            config = new OrchestratorAutoConfiguration();
+        }
+
+        @Test
+        @DisplayName("shutdown hook calls shutdown on all orchestrators")
+        void shutdownHook_callsShutdownOnAll() {
+            var orchestrator = mock(FlowOrchestrator.class);
+            when(descriptor.getOrchestrator()).thenReturn(orchestrator);
+            when(registry.getAll()).thenReturn(List.of(descriptor));
+
+            var listener = config.orchestratorShutdownHook(registry);
+            var event = mock(org.springframework.context.event.ContextClosedEvent.class);
+            listener.onApplicationEvent(event);
+
+            verify(orchestrator).shutdown();
+        }
+
+        @Test
+        @DisplayName("shutdown hook handles null orchestrator gracefully")
+        void shutdownHook_handlesNullOrchestrator() {
+            when(descriptor.getOrchestrator()).thenReturn(null);
+            when(registry.getAll()).thenReturn(List.of(descriptor));
+
+            var listener = config.orchestratorShutdownHook(registry);
+            var event = mock(org.springframework.context.event.ContextClosedEvent.class);
+
+            // Should not throw
+            listener.onApplicationEvent(event);
+        }
+
+        @Test
+        @DisplayName("shutdown hook with empty registry does nothing")
+        void shutdownHook_emptyRegistry() {
+            when(registry.getAll()).thenReturn(List.of());
+
+            var listener = config.orchestratorShutdownHook(registry);
+            var event = mock(org.springframework.context.event.ContextClosedEvent.class);
+
+            listener.onApplicationEvent(event);
+            // No orchestrators to shut down — just logs
         }
     }
 

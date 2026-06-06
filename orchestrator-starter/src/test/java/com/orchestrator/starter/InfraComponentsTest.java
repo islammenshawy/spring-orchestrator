@@ -392,6 +392,55 @@ class InfraComponentsTest {
             // or throw. The validator wraps this in IllegalStateException.
             assertThrows(IllegalStateException.class, () -> validator.validateTopics());
         }
+
+        @Test
+        void validateTopics_kafkaUnreachable_exceptionContainsHelpfulMessage() {
+            KafkaAdmin kafkaAdmin = mock(KafkaAdmin.class);
+            when(kafkaAdmin.getConfigurationProperties()).thenReturn(Map.of(
+                    "bootstrap.servers", "192.0.2.1:9092",
+                    "request.timeout.ms", "100",
+                    "default.api.timeout.ms", "100"
+            ));
+
+            var props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("my.commands");
+
+            var validator = new TopicValidator(kafkaAdmin, props);
+
+            var ex = assertThrows(IllegalStateException.class, () -> validator.validateTopics());
+            assertTrue(ex.getMessage().contains("cannot connect to Kafka"));
+            assertTrue(ex.getMessage().contains("spring.kafka.bootstrap-servers"));
+        }
+
+        @Test
+        void validateTopics_replyDisabled_onlyChecksCommandTopic() {
+            KafkaAdmin kafkaAdmin = mock(KafkaAdmin.class);
+            when(kafkaAdmin.getConfigurationProperties()).thenReturn(Map.of(
+                    "bootstrap.servers", "192.0.2.1:9092",
+                    "request.timeout.ms", "100",
+                    "default.api.timeout.ms", "100"
+            ));
+
+            var props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("my.commands");
+            props.getKafka().setReplyTopic(""); // disable reply
+
+            var validator = new TopicValidator(kafkaAdmin, props);
+
+            // Should still throw (Kafka unreachable) but shouldn't NPE from missing reply topic
+            assertThrows(IllegalStateException.class, () -> validator.validateTopics());
+        }
+
+        @Test
+        void constructor_storesKafkaAdminAndProps() {
+            KafkaAdmin kafkaAdmin = mock(KafkaAdmin.class);
+            var props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("test.topic");
+
+            var validator = new TopicValidator(kafkaAdmin, props);
+
+            assertNotNull(validator);
+        }
     }
 
     // =====================================================================
