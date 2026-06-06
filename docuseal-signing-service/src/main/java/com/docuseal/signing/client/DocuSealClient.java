@@ -52,9 +52,10 @@ public class DocuSealClient {
                                 "role", "Party B",
                                 "email", partyBEmail,
                                 "name", partyBName,
-                                "order", 1
-                                // send_email inherited from submission level — DocuSeal sends
-                                // when Party A completes (preserved order)
+                                "order", 1,
+                                "send_email", false
+                                // Don't auto-email Party B — our enrichPartyB step sends
+                                // a custom email after pre-filling Party A's signed values
                         )
                 )
         );
