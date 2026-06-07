@@ -420,7 +420,7 @@ public class OrchestratorAutoConfiguration {
                 container.getContainerProperties().setMessageListener(replyListener);
                 // Reply containers inherit concurrency from spring.kafka.listener.concurrency
                 container.setBeanName("orchestrator-reply-" + topic.replace(".", "-"));
-                container.start();
+                container.setAutoStartup(false); // started by SmartInitializingSingleton
                 containers.add(container);
             }
             log.info("Kafka listener: reply topic '{}' → group '{}-orchestrator'", topic, appName);
@@ -456,7 +456,7 @@ public class OrchestratorAutoConfiguration {
                 container.getContainerProperties().setConsumerRebalanceListener(rebalanceListener);
                 container.getContainerProperties().setMessageListener(dltListener);
                 container.setBeanName("orchestrator-dlt-" + topic.replace(".", "-"));
-                container.start();
+                container.setAutoStartup(false); // started by SmartInitializingSingleton
                 containers.add(container);
             }
             log.info("Kafka listener: DLT topic '{}' → group '{}-dlt'", topic, appName);
@@ -466,17 +466,16 @@ public class OrchestratorAutoConfiguration {
         return containers;
     }
 
-    /** Start programmatic Kafka containers (reply + DLT) AFTER all singletons are initialized.
-     *  Containers are created with autoStartup=false to prevent the startup race condition
-     *  where the reply consumer processes messages before the context is fully refreshed. */
     /**
-     * Startup safety: validates all required beans are ready before consumers process messages.
-     * Prevents the race condition where Kafka assigns partitions and delivers messages
-     * before MongoTemplate, FlowTypeRegistry, etc. are fully initialized.
+     * Startup safety: validates all required beans are ready, then starts programmatic
+     * Kafka containers (reply + DLT). Containers are created with autoStartup=false
+     * to prevent the race condition where reply consumers process messages before
+     * MongoTemplate, FlowTypeRegistry, etc. are fully initialized.
      */
     @Bean
     public org.springframework.beans.factory.SmartInitializingSingleton
-    orchestratorStartupValidator(org.springframework.context.ApplicationContext context) {
+    orchestratorStartupValidator(org.springframework.context.ApplicationContext context,
+                                 List<ConcurrentMessageListenerContainer<String, String>> listenerContainers) {
         return () -> {
             // Resolve lazily — avoids circular dependency during bean creation
             FlowTypeRegistry registry = context.getBean(FlowTypeRegistry.class);
@@ -491,8 +490,17 @@ public class OrchestratorAutoConfiguration {
                 log.error("[Startup] MongoDB NOT reachable — flows will fail until connection is established: {}",
                         e.getMessage());
             }
-            log.info("[Startup] Orchestrator ready — {} flow type(s), Kafka consumers active",
-                    registry.getAll().size());
+
+            // Start programmatic containers now that context is fully refreshed
+            for (var container : listenerContainers) {
+                if (!container.isRunning()) {
+                    container.start();
+                    log.debug("[Startup] Started container: {}", container.getBeanName());
+                }
+            }
+
+            log.info("[Startup] Orchestrator ready — {} flow type(s), {} Kafka containers started",
+                    registry.getAll().size(), listenerContainers.size());
         };
     }
 

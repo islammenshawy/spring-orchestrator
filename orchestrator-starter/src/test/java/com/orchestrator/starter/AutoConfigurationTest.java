@@ -549,7 +549,7 @@ class AutoConfigurationTest {
             when(mongoTemplate.getDb()).thenReturn(mongoDatabase);
             when(mongoDatabase.getName()).thenReturn("test-db");
 
-            var singleton = config.orchestratorStartupValidator(context);
+            var singleton = config.orchestratorStartupValidator(context, List.of());
 
             // Should not throw
             singleton.afterSingletonsInstantiated();
@@ -566,7 +566,7 @@ class AutoConfigurationTest {
             when(mongoTemplate.getDb()).thenReturn(mongoDatabase);
             when(mongoDatabase.getName()).thenReturn("test-db");
 
-            var singleton = config.orchestratorStartupValidator(context);
+            var singleton = config.orchestratorStartupValidator(context, List.of());
 
             // Should not throw — just logs a warning
             singleton.afterSingletonsInstantiated();
@@ -582,7 +582,7 @@ class AutoConfigurationTest {
             when(mongoTemplate.getDb()).thenReturn(mongoDatabase);
             when(mongoDatabase.getName()).thenReturn("orchestrator-db");
 
-            var singleton = config.orchestratorStartupValidator(context);
+            var singleton = config.orchestratorStartupValidator(context, List.of());
             singleton.afterSingletonsInstantiated();
 
             verify(mongoTemplate, atLeastOnce()).getDb();
@@ -596,7 +596,7 @@ class AutoConfigurationTest {
             when(registry.getAll()).thenReturn(List.of(descriptor));
             when(mongoTemplate.getDb()).thenThrow(new RuntimeException("Connection refused"));
 
-            var singleton = config.orchestratorStartupValidator(context);
+            var singleton = config.orchestratorStartupValidator(context, List.of());
 
             // Should not throw — logs error instead
             singleton.afterSingletonsInstantiated();
