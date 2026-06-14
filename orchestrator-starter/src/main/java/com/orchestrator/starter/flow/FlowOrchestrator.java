@@ -1232,6 +1232,18 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                         log.info("[Saga] Preserved {} new signal(s) from concurrent push for flow {}",
                                 af.getPendingSignals().size(), flowId);
                     }
+                    // completedSteps / completedParallelSteps are append-only sets mutated
+                    // concurrently by atomic $addToSet (completeStep on the command side vs
+                    // markParallelStepCompleted on the reply side). A full-document save here
+                    // would clobber entries the other side just added — UNION them so neither a
+                    // step completion nor a parallel-sibling completion is lost (which would
+                    // leave a parallel flow stalled forever at the join).
+                    if (af.getCompletedSteps() != null) {
+                        afFlow.getCompletedSteps().addAll(af.getCompletedSteps());
+                    }
+                    if (af.getCompletedParallelSteps() != null) {
+                        afFlow.getCompletedParallelSteps().addAll(af.getCompletedParallelSteps());
+                    }
                 }
             }
         }
@@ -1424,7 +1436,13 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 if (allDone) {
                     log.info("[Saga] All parallel steps in group '{}' completed for flow {}",
                             adapter.getParallelGroup(), flow.getId());
-                    advanceToNextStep(flow, completedStep);
+                    // Advance using the group's ACTUAL currentStep (pinned to the first
+                    // parallel sibling when the group was dispatched) — not the last-completed
+                    // step, whose name won't match the currentStep CAS in advanceToNextStep
+                    // and would leave the flow stalled at the join. getNextStep maps every
+                    // sibling to the same join, so this resolves correctly regardless of
+                    // which sibling finished last.
+                    advanceToNextStep(flow, fresh.getCurrentStep());
                 } else {
                     log.info("[Saga] Parallel step {} done, waiting for siblings in group '{}'",
                             stepName, adapter.getParallelGroup());
@@ -1440,7 +1458,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
                 List<StepHandler<F>> siblings = stepRegistry.getParallelGroup(adapter.getParallelGroup());
                 boolean allDone = siblings.stream().allMatch(s -> completed.contains(s.getStepName()));
                 if (allDone) {
-                    advanceToNextStep(flow, completedStep);
+                    // Advance from the group's actual currentStep, not the last-completed
+                    // step (see the mongoTemplate branch above for the rationale).
+                    advanceToNextStep(flow, flow.getCurrentStep());
                 }
             }
         } else {

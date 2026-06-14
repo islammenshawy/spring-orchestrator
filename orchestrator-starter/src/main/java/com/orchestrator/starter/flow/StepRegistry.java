@@ -15,6 +15,7 @@ public class StepRegistry<F extends OrchestratorFlow> {
 
     private final LinkedHashMap<String, StepHandler<F>> steps;
     private final List<String> orderedStepNames;
+    private final boolean hasParallelSteps;
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     public StepRegistry(List handlers) {
@@ -26,6 +27,8 @@ public class StepRegistry<F extends OrchestratorFlow> {
                 .forEach(h -> steps.put(h.getStepName(), h));
 
         this.orderedStepNames = List.copyOf(steps.keySet());
+        this.hasParallelSteps = steps.values().stream()
+                .anyMatch(h -> h instanceof MethodStepAdapter<?> a && a.isParallel());
         log.info("Step registry: {}", orderedStepNames);
     }
 
@@ -96,6 +99,10 @@ public class StepRegistry<F extends OrchestratorFlow> {
                 .filter(h -> h.getOrder() == order)
                 .map(StepHandler::getStepName)
                 .collect(Collectors.toList());
+    }
+
+    public boolean hasParallelSteps() {
+        return hasParallelSteps;
     }
 
     public boolean isLastStep(String stepName) {

@@ -324,4 +324,54 @@ class FlowResilienceTest {
             assertNotNull(f.getMergedResult());
         }
     }
+
+    /** Poll a parallel flow for a status; returns null on timeout instead of failing. */
+    private ParallelFlow pollParallel(String flowId, FlowStatus expected, Duration timeout) {
+        long deadline = System.currentTimeMillis() + timeout.toMillis();
+        while (System.currentTimeMillis() < deadline) {
+            ParallelFlow f = mongoTemplate.findById(flowId, ParallelFlow.class, "parallel_flows");
+            if (f != null && f.getStatus() == expected) return f;
+            try { Thread.sleep(500); } catch (InterruptedException e) { break; }
+        }
+        return null;
+    }
+
+    /**
+     * Regression for the parallel→join advance bug: the join only advanced when the
+     * sibling that the group's currentStep points to happened to finish LAST, so a
+     * flow stalled IN_PROGRESS at a parallel step ~half the time. A single run misses
+     * it ~50% of the time (which is why {@link #parallelFlow_completesWithJoins} let it
+     * through) — so drive many runs to exercise BOTH completion orders. Every flow must
+     * reach COMPLETED, and the join must have observed both siblings' state
+     * (mergedResult = validate+enrich) across both parallel groups (finalResult).
+     */
+    @Test
+    @Order(11)
+    void parallelFlow_completesAcrossManyRuns_exercisingBothCompletionOrders() {
+        int runs = 12;
+        List<String> ids = new java.util.ArrayList<>();
+        for (int i = 0; i < runs; i++) {
+            ids.add((String) startParallelFlow("Order Stress #" + (i + 1)).get("id"));
+        }
+
+        List<String> stalled = new java.util.ArrayList<>();
+        for (String id : ids) {
+            ParallelFlow f = pollParallel(id, FlowStatus.COMPLETED, Duration.ofSeconds(90));
+            if (f == null) {
+                ParallelFlow cur = mongoTemplate.findById(id, ParallelFlow.class, "parallel_flows");
+                stalled.add(id + " → " + (cur != null ? cur.getStatus() + " @ " + cur.getCurrentStep() : "NOT_FOUND"));
+                continue;
+            }
+            // Join must have combined BOTH parallel siblings — guards against a
+            // concurrent-save clobber dropping one sibling's result at the join.
+            assertNotNull(f.getMergedResult(), "merge join lost a sibling for " + id);
+            assertTrue(f.getMergedResult().contains("+"),
+                    "merge must combine validate+enrich for " + id + " (got: " + f.getMergedResult() + ")");
+            assertNotNull(f.getFinalResult(), "second join (delivery) did not complete for " + id);
+        }
+
+        assertTrue(stalled.isEmpty(),
+                stalled.size() + "/" + runs + " parallel flows stalled at the join "
+                        + "(completion-order regression): " + stalled);
+    }
 }
