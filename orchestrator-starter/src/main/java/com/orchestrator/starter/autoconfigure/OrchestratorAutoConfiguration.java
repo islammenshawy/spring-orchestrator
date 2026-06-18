@@ -518,40 +518,59 @@ public class OrchestratorAutoConfiguration {
      */
     @Bean
     public String[] orchestratorCommandTopics(OrchestratorProperties props) {
-        String commandTopic = props.getKafka().getCommandTopic();
+        // Collect all unique command topics: global + per-flow overrides
+        Set<String> baseTopics = new java.util.LinkedHashSet<>();
+        baseTopics.add(props.getKafka().getCommandTopic());
+        props.getFlows().values().forEach(fc -> {
+            if (fc.getTopic() != null && !fc.getTopic().isEmpty()) {
+                baseTopics.add(fc.getTopic());
+            }
+        });
+
         var failover = props.getFailover();
         if (failover.isEnabled()
                 && failover.getReplicationPolicy() == OrchestratorProperties.ReplicationPolicy.PREFIXED) {
-            // Subscribe to BOTH local and all prefixed variants
-            var topics = new java.util.ArrayList<String>();
-            topics.add(commandTopic); // local topic
-            failover.getDcs().values().forEach(dc -> {
-                if (dc.getSourceAlias() != null) {
-                    topics.add(dc.getSourceAlias() + "." + commandTopic);
-                }
-            });
+            var topics = new java.util.LinkedHashSet<>(baseTopics);
+            for (String topic : baseTopics) {
+                failover.getDcs().values().forEach(dc -> {
+                    if (dc.getSourceAlias() != null) {
+                        topics.add(dc.getSourceAlias() + "." + topic);
+                    }
+                });
+            }
             log.info("Command topics (PREFIXED failover): {}", topics);
             return topics.toArray(new String[0]);
         }
-        return new String[]{commandTopic};
+        return baseTopics.toArray(new String[0]);
     }
 
     @Bean
     public String[] orchestratorCommandDltTopics(OrchestratorProperties props) {
-        String dltTopic = props.getKafka().getCommandTopic() + "-dlt";
+        // Collect DLT topics: per-flow overrides + derived from command topics
+        Set<String> baseDltTopics = new java.util.LinkedHashSet<>();
+        baseDltTopics.add(props.getKafka().getCommandTopic() + "-dlt");
+        props.getFlows().forEach((name, fc) -> {
+            if (fc.getDltTopic() != null && !fc.getDltTopic().isEmpty()) {
+                baseDltTopics.add(fc.getDltTopic());
+            } else if (fc.getTopic() != null && !fc.getTopic().isEmpty()) {
+                baseDltTopics.add(fc.getTopic() + "-dlt");
+            }
+        });
+
         var failover = props.getFailover();
         if (failover.isEnabled()
                 && failover.getReplicationPolicy() == OrchestratorProperties.ReplicationPolicy.PREFIXED) {
-            var topics = new java.util.ArrayList<String>();
-            topics.add(dltTopic);
-            failover.getDcs().values().forEach(dc -> {
-                if (dc.getSourceAlias() != null) {
-                    topics.add(dc.getSourceAlias() + "." + dltTopic);
-                }
-            });
+            var topics = new java.util.LinkedHashSet<>(baseDltTopics);
+            for (String dlt : baseDltTopics) {
+                failover.getDcs().values().forEach(dc -> {
+                    if (dc.getSourceAlias() != null) {
+                        topics.add(dc.getSourceAlias() + "." + dlt);
+                    }
+                });
+            }
             return topics.toArray(new String[0]);
         }
-        return new String[]{dltTopic};
+        return baseDltTopics.toArray(new String[0]);
     }
 
     @Bean
@@ -649,17 +668,27 @@ public class OrchestratorAutoConfiguration {
                 .dltProcessingFailureStrategy(DltStrategy.FAIL_ON_ERROR)
                 .retryOn(RetryableStepException.class);
 
-        // Include all command topics (local + prefixed variants for PREFIXED failover)
-        String commandTopic = props.getKafka().getCommandTopic();
-        builder.includeTopic(commandTopic);
+        // Include all command topics (global + per-flow + prefixed failover variants)
+        Set<String> commandTopics = new java.util.LinkedHashSet<>();
+        commandTopics.add(props.getKafka().getCommandTopic());
+        props.getFlows().values().forEach(fc -> {
+            if (fc.getTopic() != null && !fc.getTopic().isEmpty()) {
+                commandTopics.add(fc.getTopic());
+            }
+        });
+        for (String topic : commandTopics) {
+            builder.includeTopic(topic);
+        }
         var failover = props.getFailover();
         if (failover.isEnabled()
                 && failover.getReplicationPolicy() == OrchestratorProperties.ReplicationPolicy.PREFIXED) {
-            failover.getDcs().values().forEach(dc -> {
-                if (dc.getSourceAlias() != null) {
-                    builder.includeTopic(dc.getSourceAlias() + "." + commandTopic);
-                }
-            });
+            for (String topic : commandTopics) {
+                failover.getDcs().values().forEach(dc -> {
+                    if (dc.getSourceAlias() != null) {
+                        builder.includeTopic(dc.getSourceAlias() + "." + topic);
+                    }
+                });
+            }
         }
 
         return builder.create(template);

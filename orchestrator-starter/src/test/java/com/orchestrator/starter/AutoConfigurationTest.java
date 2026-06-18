@@ -272,6 +272,160 @@ class AutoConfigurationTest {
     }
 
     // ========================================================================
+    // Per-flow topic configuration
+    // ========================================================================
+
+    @Nested
+    @DisplayName("Per-flow topic configuration")
+    class PerFlowTopicTests {
+
+        private OrchestratorAutoConfiguration config;
+
+        @BeforeEach
+        void setUp() {
+            config = new OrchestratorAutoConfiguration();
+        }
+
+        @Test
+        @DisplayName("per-flow command topics included alongside global topic")
+        void perFlowCommandTopics_includedWithGlobal() {
+            OrchestratorProperties props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("orchestrator.commands");
+
+            var flowA = new OrchestratorProperties.FlowConfig();
+            flowA.setTopic("payment.commands");
+            var flowB = new OrchestratorProperties.FlowConfig();
+            flowB.setTopic("shipping.commands");
+            props.getFlows().put("payment", flowA);
+            props.getFlows().put("shipping", flowB);
+
+            String[] topics = config.orchestratorCommandTopics(props);
+
+            assertThat(topics).containsExactlyInAnyOrder(
+                    "orchestrator.commands", "payment.commands", "shipping.commands");
+        }
+
+        @Test
+        @DisplayName("flows without per-flow topic use only global topic")
+        void noPerFlowTopic_usesGlobalOnly() {
+            OrchestratorProperties props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("orchestrator.commands");
+            props.getFlows().put("flow-a", new OrchestratorProperties.FlowConfig());
+            props.getFlows().put("flow-b", new OrchestratorProperties.FlowConfig());
+
+            String[] topics = config.orchestratorCommandTopics(props);
+
+            assertThat(topics).containsExactly("orchestrator.commands");
+        }
+
+        @Test
+        @DisplayName("mixed: some flows on custom topic, others on global")
+        void mixedTopics_globalAndCustom() {
+            OrchestratorProperties props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("orchestrator.commands");
+
+            var custom = new OrchestratorProperties.FlowConfig();
+            custom.setTopic("payment.commands");
+            props.getFlows().put("payment", custom);
+            props.getFlows().put("default-flow", new OrchestratorProperties.FlowConfig());
+
+            String[] topics = config.orchestratorCommandTopics(props);
+
+            assertThat(topics).containsExactlyInAnyOrder(
+                    "orchestrator.commands", "payment.commands");
+        }
+
+        @Test
+        @DisplayName("per-flow DLT topics: explicit override + derived from command topic")
+        void perFlowDltTopics() {
+            OrchestratorProperties props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("orchestrator.commands");
+
+            var flowA = new OrchestratorProperties.FlowConfig();
+            flowA.setTopic("payment.commands");
+            // no explicit DLT → derived as payment.commands-dlt
+
+            var flowB = new OrchestratorProperties.FlowConfig();
+            flowB.setDltTopic("shipping.critical-dlt");
+            // explicit DLT override
+
+            props.getFlows().put("payment", flowA);
+            props.getFlows().put("shipping", flowB);
+
+            String[] dltTopics = config.orchestratorCommandDltTopics(props);
+
+            assertThat(dltTopics).containsExactlyInAnyOrder(
+                    "orchestrator.commands-dlt",
+                    "payment.commands-dlt",
+                    "shipping.critical-dlt");
+        }
+
+        @Test
+        @DisplayName("per-flow topics with PREFIXED failover generates all variants")
+        void perFlowTopics_prefixedFailover() {
+            OrchestratorProperties props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("orchestrator.commands");
+
+            var flowA = new OrchestratorProperties.FlowConfig();
+            flowA.setTopic("payment.commands");
+            props.getFlows().put("payment", flowA);
+
+            FailoverConfig failover = props.getFailover();
+            failover.setEnabled(true);
+            failover.setReplicationPolicy(ReplicationPolicy.PREFIXED);
+
+            DcConfig dc = new DcConfig();
+            dc.setSourceAlias("us-east");
+            failover.setDcs(Map.of("us-east", dc));
+
+            String[] topics = config.orchestratorCommandTopics(props);
+
+            assertThat(topics).containsExactlyInAnyOrder(
+                    "orchestrator.commands",
+                    "payment.commands",
+                    "us-east.orchestrator.commands",
+                    "us-east.payment.commands");
+        }
+
+        @Test
+        @DisplayName("duplicate per-flow topic deduplicated")
+        void duplicatePerFlowTopic_deduplicated() {
+            OrchestratorProperties props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("shared.commands");
+
+            var flowA = new OrchestratorProperties.FlowConfig();
+            flowA.setTopic("shared.commands"); // same as global
+            var flowB = new OrchestratorProperties.FlowConfig();
+            flowB.setTopic("shared.commands"); // same as global
+            props.getFlows().put("flow-a", flowA);
+            props.getFlows().put("flow-b", flowB);
+
+            String[] topics = config.orchestratorCommandTopics(props);
+
+            assertThat(topics).containsExactly("shared.commands");
+        }
+
+        @Test
+        @DisplayName("retry config includes per-flow command topics")
+        void retryConfig_includesPerFlowTopics() {
+            OrchestratorProperties props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("orchestrator.commands");
+
+            var flowA = new OrchestratorProperties.FlowConfig();
+            flowA.setTopic("payment.commands");
+            props.getFlows().put("payment", flowA);
+
+            @SuppressWarnings("unchecked")
+            org.springframework.kafka.core.KafkaTemplate<String, String> template =
+                    mock(org.springframework.kafka.core.KafkaTemplate.class);
+
+            var retryConfig = config.orchestratorCommandRetryConfig(template, props);
+
+            assertThat(retryConfig).isNotNull();
+        }
+    }
+
+    // ========================================================================
     // orchestratorCommandDltTopics bean logic
     // ========================================================================
 

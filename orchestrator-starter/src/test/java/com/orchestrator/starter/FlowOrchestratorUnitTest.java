@@ -2118,6 +2118,31 @@ class FlowOrchestratorUnitTest {
             assertEquals(1, result.size());
             verify(mongoTemplate).find(any(Query.class), eq(TestFlow.class));
         }
+
+        @Test
+        @DisplayName("Multiple attributes — AND query")
+        void multipleAttributes_andQuery() {
+            TestFlow flow = newFlow("ff-2", FlowStatus.COMPLETED, "DONE");
+            when(mongoTemplate.find(any(Query.class), eq(TestFlow.class)))
+                    .thenReturn(List.of(flow));
+
+            var result = casOrchestrator.findFlows(
+                    Map.of("status", "COMPLETED", "result", "success"));
+
+            assertEquals(1, result.size());
+            verify(mongoTemplate).find(any(Query.class), eq(TestFlow.class));
+        }
+
+        @Test
+        @DisplayName("No matches — returns empty list")
+        void noMatches_returnsEmpty() {
+            when(mongoTemplate.find(any(Query.class), eq(TestFlow.class)))
+                    .thenReturn(List.of());
+
+            var result = casOrchestrator.findFlows(Map.of("result", "nonexistent"));
+
+            assertTrue(result.isEmpty());
+        }
     }
 
     // ====================================================================
@@ -2168,6 +2193,116 @@ class FlowOrchestratorUnitTest {
             assertNotNull(flow.getNextRetryAt());
             assertNull(flow.getExecutingStep());
             assertNull(flow.getExecutingPod());
+        }
+    }
+
+    // ====================================================================
+    // retryCompensation — additional edge cases
+    // ====================================================================
+
+    @Nested
+    @DisplayName("retryCompensation edge cases")
+    class RetryCompensationEdgeCases {
+
+        @Test
+        @DisplayName("COMPENSATING status is accepted (not just COMPENSATION_FAILED)")
+        void compensatingStatus_accepted() {
+            TestFlow flow = newFlow("rc-1", FlowStatus.COMPENSATING, "STEP_B");
+            flow.setCompensationError("partial failure");
+
+            MethodStepAdapter<TestFlow> stepA = mock(MethodStepAdapter.class);
+            when(stepA.hasCompensation()).thenReturn(true);
+
+            when(flowRepo.findById("rc-1")).thenReturn(Optional.of(flow));
+            when(stepRegistry.getHandler("STEP_A")).thenReturn(stepA);
+            when(stepRegistry.getCompletedStepsBefore("STEP_B"))
+                    .thenReturn(new ArrayList<>(List.of("STEP_A")));
+
+            orchestrator.retryCompensation("rc-1");
+
+            assertEquals(FlowStatus.FAILED, flow.getStatus());
+            verify(stepA).compensate(flow);
+        }
+
+        @Test
+        @DisplayName("compensationError is cleared before re-run")
+        void compensationError_cleared() {
+            TestFlow flow = newFlow("rc-2", FlowStatus.COMPENSATION_FAILED, "STEP_A");
+            flow.setCompensationError("previous error");
+
+            when(flowRepo.findById("rc-2")).thenReturn(Optional.of(flow));
+            when(stepRegistry.getCompletedStepsBefore("STEP_A"))
+                    .thenReturn(new ArrayList<>());
+
+            orchestrator.retryCompensation("rc-2");
+
+            assertNull(flow.getCompensationError());
+        }
+
+        @Test
+        @DisplayName("compensation re-failure stays COMPENSATION_FAILED")
+        void reFailure_staysCompensationFailed() {
+            TestFlow flow = newFlow("rc-3", FlowStatus.COMPENSATION_FAILED, "STEP_B");
+
+            MethodStepAdapter<TestFlow> stepA = mock(MethodStepAdapter.class);
+            when(stepA.hasCompensation()).thenReturn(true);
+            doThrow(new RuntimeException("still broken")).when(stepA).compensate(flow);
+
+            when(flowRepo.findById("rc-3")).thenReturn(Optional.of(flow));
+            when(stepRegistry.getHandler("STEP_A")).thenReturn(stepA);
+            when(stepRegistry.getCompletedStepsBefore("STEP_B"))
+                    .thenReturn(new ArrayList<>(List.of("STEP_A")));
+
+            orchestrator.retryCompensation("rc-3");
+
+            assertEquals(FlowStatus.COMPENSATION_FAILED, flow.getStatus());
+            assertNotNull(flow.getCompensationError());
+        }
+
+        @Test
+        @DisplayName("IN_PROGRESS status is rejected")
+        void inProgressStatus_rejected() {
+            TestFlow flow = newFlow("rc-4", FlowStatus.IN_PROGRESS, "STEP_A");
+            when(flowRepo.findById("rc-4")).thenReturn(Optional.of(flow));
+
+            orchestrator.retryCompensation("rc-4");
+
+            verify(stepRegistry, never()).getCompletedStepsBefore(anyString());
+        }
+    }
+
+    // ====================================================================
+    // executeStepOnly
+    // ====================================================================
+
+    @Nested
+    @DisplayName("executeStepOnly")
+    class ExecuteStepOnlyTests {
+
+        @Test
+        @DisplayName("delegates to executeStep")
+        void delegatesToExecuteStep() {
+            TestFlow flow = newFlow("eso-1", FlowStatus.IN_PROGRESS, "STEP_A");
+            StepHandler<TestFlow> handler = mock(StepHandler.class);
+            when(handler.getStepName()).thenReturn("STEP_A");
+
+            when(flowRepo.findById("eso-1")).thenReturn(Optional.of(flow));
+            when(stepRegistry.getHandler("STEP_A")).thenReturn(handler);
+            when(stepRegistry.isLastStep("STEP_A")).thenReturn(false);
+            when(stepRegistry.getNextStep("STEP_A")).thenReturn("STEP_B");
+
+            orchestrator.executeStepOnly("eso-1", "STEP_A");
+
+            verify(handler).execute(flow);
+        }
+
+        @Test
+        @DisplayName("flow not found throws")
+        void flowNotFound_throws() {
+            when(flowRepo.findById("eso-2")).thenReturn(Optional.empty());
+
+            assertThrows(Exception.class, () ->
+                    orchestrator.executeStepOnly("eso-2", "STEP_A"));
         }
     }
 

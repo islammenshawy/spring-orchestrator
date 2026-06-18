@@ -194,9 +194,7 @@ public class OrchestratorProperties {
      */
     @Data
     public static class FlowConfig {
-        /** @deprecated Per-flow topic overrides are not fully implemented.
-         *  The command listener only subscribes to the global topic. Ignored. */
-        @Deprecated
+        /** Per-flow command topic override. Null = use global orchestrator.kafka.command-topic. */
         private String topic;
         /** DLT topic override. Null = use standard {topic}-dlt suffix. */
         private String dltTopic;
