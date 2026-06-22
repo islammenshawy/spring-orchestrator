@@ -7,6 +7,7 @@ import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.flow.FlowOrchestrator;
 import com.orchestrator.starter.flow.FlowTypeDescriptor;
 import com.orchestrator.starter.flow.FlowTypeRegistry;
+import com.orchestrator.starter.flow.MethodStepAdapter;
 import com.orchestrator.starter.flow.StepHandler;
 import com.orchestrator.starter.flow.StepRegistry;
 import com.orchestrator.starter.outbox.OutboxEventRepository;
@@ -599,4 +600,157 @@ class StaleFlowRecoveryTest {
         // recoverFlowType should re-publish STEP_1 (normal recovery)
         verify(kafkaTemplate).send(eq("enigio.commands"), eq("corr-normal"), contains("STEP_1"));
     }
+
+    // ====================================================================
+    // BUG 1: Recovery re-drives COMPLETED parallel sibling
+    // ====================================================================
+
+    @Test
+    void parallelRecovery_shouldRepublishOnlyIncompleteSiblings() {
+        // Setup: 4 parallel siblings (PULL_DNB, PULL_EQUIFAX, PULL_EXPERIAN, PULL_TRANSUNION)
+        // currentStep pinned to PULL_DNB (first sibling)
+        // PULL_DNB + PULL_EQUIFAX completed, PULL_EXPERIAN + PULL_TRANSUNION incomplete
+        MethodStepAdapter<FlowA> pullDnb = mock(MethodStepAdapter.class);
+        when(pullDnb.getStepName()).thenReturn("PULL_DNB");
+        when(pullDnb.getOrder()).thenReturn(2);
+        when(pullDnb.isParallel()).thenReturn(true);
+        when(pullDnb.getParallelGroup()).thenReturn("pull");
+
+        MethodStepAdapter<FlowA> pullEquifax = mock(MethodStepAdapter.class);
+        when(pullEquifax.getStepName()).thenReturn("PULL_EQUIFAX");
+        when(pullEquifax.getOrder()).thenReturn(2);
+        when(pullEquifax.isParallel()).thenReturn(true);
+        when(pullEquifax.getParallelGroup()).thenReturn("pull");
+
+        MethodStepAdapter<FlowA> pullExperian = mock(MethodStepAdapter.class);
+        when(pullExperian.getStepName()).thenReturn("PULL_EXPERIAN");
+        when(pullExperian.getOrder()).thenReturn(2);
+        when(pullExperian.isParallel()).thenReturn(true);
+        when(pullExperian.getParallelGroup()).thenReturn("pull");
+
+        MethodStepAdapter<FlowA> pullTransunion = mock(MethodStepAdapter.class);
+        when(pullTransunion.getStepName()).thenReturn("PULL_TRANSUNION");
+        when(pullTransunion.getOrder()).thenReturn(2);
+        when(pullTransunion.isParallel()).thenReturn(true);
+        when(pullTransunion.getParallelGroup()).thenReturn("pull");
+
+        StepHandler<FlowA> seed = mock(StepHandler.class);
+        when(seed.getStepName()).thenReturn("SEED");
+        when(seed.getOrder()).thenReturn(1);
+
+        StepHandler<FlowA> merge = mock(StepHandler.class);
+        when(merge.getStepName()).thenReturn("MERGE");
+        when(merge.getOrder()).thenReturn(3);
+
+        StepRegistry<FlowA> stepRegistry = new StepRegistry<>(
+                List.of(seed, pullDnb, pullEquifax, pullExperian, pullTransunion, merge));
+
+        // Flow: currentStep=PULL_DNB (pinned to first sibling)
+        // completedSteps includes SEED + PULL_DNB (first sibling completed)
+        // completedParallelSteps: PULL_DNB + PULL_EQUIFAX (2 of 4 done)
+        FlowA flow = new FlowA();
+        flow.setId("parallel-1");
+        flow.setCorrelationId("corr-parallel");
+        flow.setCurrentStep("PULL_DNB");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setUpdatedAt(Instant.now().minus(20, ChronoUnit.MINUTES));
+        flow.getCompletedSteps().add("SEED");
+        flow.getCompletedSteps().add("PULL_DNB");
+        flow.getCompletedParallelSteps().add("PULL_DNB");
+        flow.getCompletedParallelSteps().add("PULL_EQUIFAX");
+
+        setupClaimPattern(FlowA.class, List.of(flow), 1);
+
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(
+                descriptorWithSteps("enigio", FlowA.class, "enigio.commands", stepRegistry)));
+
+        createService(registry).recoverStaleFlows();
+
+        // EXPECTED: re-publish ONLY the 2 incomplete siblings (PULL_EXPERIAN, PULL_TRANSUNION)
+        // NOT PULL_DNB (already completed)
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(kafkaTemplate, atLeast(1)).send(eq("enigio.commands"), eq("corr-parallel"), payloadCaptor.capture());
+
+        List<String> publishedPayloads = payloadCaptor.getAllValues();
+        List<String> publishedSteps = publishedPayloads.stream()
+                .filter(p -> p.contains("PULL_"))
+                .toList();
+
+        // Must NOT re-publish completed siblings
+        assertThat(publishedSteps).noneMatch(p -> p.contains("PULL_DNB"));
+        assertThat(publishedSteps).noneMatch(p -> p.contains("PULL_EQUIFAX"));
+
+        // Must re-publish incomplete siblings
+        assertThat(publishedSteps).anyMatch(p -> p.contains("PULL_EXPERIAN"));
+        assertThat(publishedSteps).anyMatch(p -> p.contains("PULL_TRANSUNION"));
+    }
+
+    // ====================================================================
+    // BUG 2: recoverCompletedButNotAdvanced publishes only 1 of N siblings
+    // ====================================================================
+
+    @Test
+    void recoverCompletedButNotAdvanced_parallelNextStep_shouldPublishAllSiblings() {
+        // Setup: flow completed SEED, currentStep=SEED (still), next step is a parallel group
+        MethodStepAdapter<FlowA> pullDnb = mock(MethodStepAdapter.class);
+        when(pullDnb.getStepName()).thenReturn("PULL_DNB");
+        when(pullDnb.getOrder()).thenReturn(2);
+        when(pullDnb.isParallel()).thenReturn(true);
+        when(pullDnb.getParallelGroup()).thenReturn("pull");
+
+        MethodStepAdapter<FlowA> pullEquifax = mock(MethodStepAdapter.class);
+        when(pullEquifax.getStepName()).thenReturn("PULL_EQUIFAX");
+        when(pullEquifax.getOrder()).thenReturn(2);
+        when(pullEquifax.isParallel()).thenReturn(true);
+        when(pullEquifax.getParallelGroup()).thenReturn("pull");
+
+        MethodStepAdapter<FlowA> pullExperian = mock(MethodStepAdapter.class);
+        when(pullExperian.getStepName()).thenReturn("PULL_EXPERIAN");
+        when(pullExperian.getOrder()).thenReturn(2);
+        when(pullExperian.isParallel()).thenReturn(true);
+        when(pullExperian.getParallelGroup()).thenReturn("pull");
+
+        StepHandler<FlowA> seed = mock(StepHandler.class);
+        when(seed.getStepName()).thenReturn("SEED");
+        when(seed.getOrder()).thenReturn(1);
+
+        StepHandler<FlowA> merge = mock(StepHandler.class);
+        when(merge.getStepName()).thenReturn("MERGE");
+        when(merge.getOrder()).thenReturn(3);
+
+        StepRegistry<FlowA> stepRegistry = new StepRegistry<>(
+                List.of(seed, pullDnb, pullEquifax, pullExperian, merge));
+
+        // Flow: SEED completed but never advanced (reply lost)
+        FlowA flow = new FlowA();
+        flow.setId("advance-parallel-1");
+        flow.setCorrelationId("corr-advance");
+        flow.setCurrentStep("SEED");
+        flow.setStatus(FlowStatus.IN_PROGRESS);
+        flow.setUpdatedAt(Instant.now().minus(20, ChronoUnit.MINUTES));
+        flow.getCompletedSteps().add("SEED");
+
+        setupCompletedButNotAdvancedFind(FlowA.class, List.of(flow));
+
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(
+                descriptorWithSteps("enigio", FlowA.class, "enigio.commands", stepRegistry)));
+
+        createService(registry).recoverStaleFlows();
+
+        // EXPECTED: should publish ALL 3 parallel siblings (PULL_DNB, PULL_EQUIFAX, PULL_EXPERIAN)
+        // not just PULL_DNB (the first one returned by getNextStep)
+        ArgumentCaptor<String> payloadCaptor = ArgumentCaptor.forClass(String.class);
+        verify(kafkaTemplate, atLeast(1)).send(eq("enigio.commands"), anyString(), payloadCaptor.capture());
+
+        List<String> publishedPayloads = payloadCaptor.getAllValues();
+
+        assertThat(publishedPayloads).anyMatch(p -> p.contains("PULL_DNB"));
+        assertThat(publishedPayloads).anyMatch(p -> p.contains("PULL_EQUIFAX"));
+        assertThat(publishedPayloads).anyMatch(p -> p.contains("PULL_EXPERIAN"));
+    }
+
+    // ====================================================================
+    // BUG 3: RetryableStepException cause swallowed
+    // ====================================================================
+    // (Tested in OrchestratorKafkaConsumer — separate test file)
 }

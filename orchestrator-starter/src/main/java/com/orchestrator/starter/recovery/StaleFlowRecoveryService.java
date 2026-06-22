@@ -5,6 +5,8 @@ import com.orchestrator.starter.domain.FlowStatus;
 import com.orchestrator.starter.domain.OrchestratorFlow;
 import com.orchestrator.starter.flow.FlowTypeDescriptor;
 import com.orchestrator.starter.flow.FlowTypeRegistry;
+import com.orchestrator.starter.flow.MethodStepAdapter;
+import com.orchestrator.starter.flow.StepHandler;
 import com.orchestrator.starter.flow.StepRegistry;
 import com.orchestrator.starter.kafka.StepCommandMessage;
 import tools.jackson.databind.ObjectMapper;
@@ -19,6 +21,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -175,12 +178,60 @@ public class StaleFlowRecoveryService {
             }
 
             // Skip flows where the current step is already in completedSteps.
-            // This means completeStep() saved but advanceToNextStep never ran
-            // (reply consumer broken, crash between save and reply, etc.).
-            // Re-publishing the same step would re-execute, re-complete, fail to advance
-            // again, increment recoveryCount, and eventually FAIL a completed flow.
-            // recoverCompletedButNotAdvanced handles these by advancing directly via CAS.
+            // Sequential: completeStep() saved but advanceToNextStep never ran →
+            //   recoverCompletedButNotAdvanced handles these by advancing directly.
+            // Parallel: currentStep is pinned to the first sibling. If that sibling
+            //   completed but others are stuck, we must re-publish the INCOMPLETE
+            //   siblings — not skip the flow entirely.
             if (flow.getCurrentStep() != null && flow.getCompletedSteps().contains(flow.getCurrentStep())) {
+                if (stepRegistry != null && stepRegistry.hasParallelSteps()) {
+                    try {
+                        StepHandler<?> handler = stepRegistry.getHandler(flow.getCurrentStep());
+                        if (handler instanceof MethodStepAdapter<?> adapter && adapter.isParallel()) {
+                            Set<String> completedParallel = flow.getCompletedParallelSteps();
+                            List<? extends StepHandler<?>> siblings =
+                                    stepRegistry.getParallelGroup(adapter.getParallelGroup());
+                            List<String> incomplete = siblings.stream()
+                                    .map(StepHandler::getStepName)
+                                    .filter(s -> !completedParallel.contains(s))
+                                    .toList();
+                            if (!incomplete.isEmpty()) {
+                                // Re-publish ONLY incomplete siblings
+                                String partitionKey = flow.getCorrelationId() != null
+                                        ? flow.getCorrelationId() : flow.getId();
+                                for (String step : incomplete) {
+                                    StepCommandMessage cmd = StepCommandMessage.builder()
+                                            .eventId(UUID.randomUUID().toString())
+                                            .flowId(flow.getId())
+                                            .correlationId(flow.getCorrelationId())
+                                            .stepName(step)
+                                            .flowType(flowType)
+                                            .build();
+                                    kafkaTemplate.send(commandTopic, partitionKey,
+                                            objectMapper.writeValueAsString(cmd)).get();
+                                }
+                                mongoTemplate.updateFirst(
+                                        Query.query(Criteria.where("_id").is(flow.getId())),
+                                        new Update()
+                                                .inc("recoveryCount", 1)
+                                                .set("updatedAt", Instant.now())
+                                                .set("claimedBy", null)
+                                                .set("claimedAt", null),
+                                        entityClass);
+                                log.info("[Recovery] Re-published {} incomplete parallel siblings for flow {} (group: {}, done: {})",
+                                        incomplete.size(), flow.getId(), adapter.getParallelGroup(), completedParallel);
+                                metrics.recoveryRecovered(flowType);
+                                continue;
+                            }
+                            // All siblings done but join didn't fire → fall through to skip
+                        }
+                    } catch (IllegalArgumentException e) {
+                        // Step not in registry — fall through to skip
+                    } catch (Exception e) {
+                        log.warn("[Recovery] Error checking parallel state for flow {}: {}",
+                                flow.getId(), e.getMessage());
+                    }
+                }
                 releaseClaim(flow.getId(), entityClass);
                 continue;
             }
@@ -528,20 +579,28 @@ public class StaleFlowRecoveryService {
             if (modified == 0) continue; // Another pod already advanced
 
             try {
-                StepCommandMessage cmd = StepCommandMessage.builder()
-                        .eventId(UUID.randomUUID().toString())
-                        .flowId(flow.getId())
-                        .correlationId(flow.getCorrelationId())
-                        .stepName(nextStep)
-                        .flowType(flowType)
-                        .build();
+                // Publish all siblings if next step is a parallel group
+                List<String> stepsToPublish = stepRegistry.getStepsAtSameOrder(nextStep);
+                if (stepsToPublish.size() <= 1) {
+                    stepsToPublish = List.of(nextStep);
+                }
+
                 String partitionKey = flow.getCorrelationId() != null
                         ? flow.getCorrelationId() : flow.getId();
-                kafkaTemplate.send(commandTopic, partitionKey,
-                        objectMapper.writeValueAsString(cmd)).get();
+                for (String step : stepsToPublish) {
+                    StepCommandMessage cmd = StepCommandMessage.builder()
+                            .eventId(UUID.randomUUID().toString())
+                            .flowId(flow.getId())
+                            .correlationId(flow.getCorrelationId())
+                            .stepName(step)
+                            .flowType(flowType)
+                            .build();
+                    kafkaTemplate.send(commandTopic, partitionKey,
+                            objectMapper.writeValueAsString(cmd)).get();
+                }
 
-                log.warn("[Recovery] Flow {} step {} completed but not advanced — recovered to {} (reply consumer may have failed)",
-                        flow.getId(), currentStep, nextStep);
+                log.warn("[Recovery] Flow {} step {} completed but not advanced — recovered to {} ({} commands published, reply consumer may have failed)",
+                        flow.getId(), currentStep, nextStep, stepsToPublish.size());
             } catch (Exception e) {
                 log.error("[Recovery] Failed to recover stuck flow {}: {}", flow.getId(), e.getMessage());
             }

@@ -61,10 +61,16 @@ public class OrchestratorKafkaConsumer<F extends OrchestratorFlow> {
                 topic, offset, command.getStepName(), command.getFlowId(),
                 command.getFlowType() != null ? command.getFlowType() : "default");
 
-        if (replyMode && descriptor.isReplyEnabled()) {
-            orchestrator.executeStepOnly(command.getFlowId(), command.getStepName());
-        } else {
-            orchestrator.executeStep(command.getFlowId(), command.getStepName());
+        try {
+            if (replyMode && descriptor.isReplyEnabled()) {
+                orchestrator.executeStepOnly(command.getFlowId(), command.getStepName());
+            } else {
+                orchestrator.executeStep(command.getFlowId(), command.getStepName());
+            }
+        } catch (com.orchestrator.starter.exception.RetryableStepException e) {
+            log.warn("[topic={}][offset={}] Step {} failed for flow {} (retryable, routing to retry topic): {}",
+                    topic, offset, command.getStepName(), command.getFlowId(), e.getMessage());
+            throw e;
         }
 
         idempotencyService.tryProcess(command.getEventId());
