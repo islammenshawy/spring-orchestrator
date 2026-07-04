@@ -1,0 +1,67 @@
+# Overlay for the multi-cluster failover stack:
+#  1. Remap kafka-a host 9092 → 19092 (avoids tg-kafka-dev; host port unused — DIS + MM2 + scripts
+#     use the internal listener kafka-a:29092).
+#  2. Add a 2nd DIS app container (dis-failover-2) for the "2 app containers, multi-cluster" HA setup.
+#  3. Set executionClaimTtlMinutes=2 on both DIS so crash-mid-step recovery (F1) is prompt in this
+#     fast-recovery env (staleThreshold=2min, scan=10s).
+# Usage: docker compose -f docker-compose-failover.yml -f docker-compose-failover-portfix.yml up -d --build
+services:
+  kafka-a:
+    ports: !override
+      - "29092:29092"
+      - "19092:19092"
+    environment:
+      # Advertise EXTERNAL on the remapped host port so host-run clients (integration tests)
+      # stay on kafka-a and can NEVER be redirected to localhost:9092 (tg-kafka-dev).
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-a:29092,EXTERNAL://localhost:19092
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:19092
+
+  dis-failover:
+    environment:
+      ORCHESTRATOR_RECOVERY_EXECUTION_CLAIM_TTL_MINUTES: "2"
+
+  dis-failover-2:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      args:
+        JAR_FILE: digital-instrument-service/target/digital-instrument-service-0.0.1-SNAPSHOT.jar
+    ports:
+      - "18087:8087"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka-a:
+        condition: service_healthy
+      kafka-b:
+        condition: service_healthy
+      mock-vendor:
+        condition: service_healthy
+    environment:
+      SPRING_MONGODB_URI: mongodb://mongodb:27017/digital_instrument_service
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-a:29092
+      VENDOR_ENIGIO_BASE_URL: http://mock-vendor:8081/api/v1
+      DIS_AUTH_API_KEY: soak-test-key
+      SPRING_KAFKA_LISTENER_CONCURRENCY: "2"
+      ORCHESTRATOR_FAILOVER_ENABLED: "true"
+      ORCHESTRATOR_FAILOVER_ACTIVE_DC: dca
+      ORCHESTRATOR_FAILOVER_REPLICATION_POLICY: PREFIXED
+      ORCHESTRATOR_FAILOVER_DCS_DCA_BOOTSTRAP: kafka-a:29092
+      ORCHESTRATOR_FAILOVER_DCS_DCA_SOURCE_ALIAS: dc-a
+      ORCHESTRATOR_FAILOVER_DCS_DCB_BOOTSTRAP: kafka-b:29093
+      ORCHESTRATOR_FAILOVER_DCS_DCB_SOURCE_ALIAS: dc-b
+      ORCHESTRATOR_FAILOVER_DEGRADED_THRESHOLD: "3"
+      ORCHESTRATOR_FAILOVER_FAILOVER_THRESHOLD: "6"
+      ORCHESTRATOR_FAILOVER_DWELL_TIME_SECONDS: "30"
+      ORCHESTRATOR_KAFKA_CLUSTER_ID: dc-a
+      SPRING_TASK_SCHEDULING_POOL_SIZE: "3"
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,metrics,dc-health
+      ORCHESTRATOR_RECOVERY_STALE_THRESHOLD_MINUTES: "2"
+      ORCHESTRATOR_RECOVERY_SCAN_INTERVAL_MS: "10000"
+      ORCHESTRATOR_RECOVERY_EXECUTION_CLAIM_TTL_MINUTES: "2"
+    healthcheck:
+      test: wget -qO- http://localhost:8087/actuator/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped

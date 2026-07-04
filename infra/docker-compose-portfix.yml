@@ -1,0 +1,27 @@
+# Port-remap override — avoids host-port conflicts with other running apps.
+# Base infra host ports collide with: tg-kafka-dev (9092, another app's Kafka — untouched)
+# and local java/python apps (8085/8086/8088/8090). This remaps ONLY the host side.
+# Internal container networking (kafka-1:29092) and docker-exec-based test scripts are unaffected.
+# `!override` replaces the base ports list (default merge would append and still bind the old port).
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose-portfix.yml up -d
+# Scripts:
+#   soak-test.sh  → DIS_URL=http://localhost:18090   (nginx LB remapped)
+#   collect-metrics.sh / failover-stress.sh → DIS_URL=http://localhost:8087  (DIS-1, unchanged/free)
+services:
+  kafka-1:
+    ports: !override
+      - "19092:9092"   # host 9092 (tg-kafka-dev) → 19092; no script uses host Kafka
+  sample-app-1:
+    ports: !override
+      - "18085:8085"
+  sample-app-2:
+    ports: !override
+      - "18086:8085"
+  nginx:
+    ports: !override
+      - "18090:8090"   # soak-test.sh LB target → DIS_URL=http://localhost:18090
+  digital-instrument-service-2:
+    ports: !override
+      - "18088:8087"
