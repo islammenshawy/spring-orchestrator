@@ -74,6 +74,12 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
     @Setter private String dcId;
     /** Pod/instance ID for step execution claim. Prevents concurrent step execution on rebalance. */
     @Setter private String podId;
+    /** Retry backoff config (orchestrator.retry.*) applied to the WAITING_RETRY retry path so it is
+     *  jittered like the non-blocking retry topics. Defaults mirror OrchestratorProperties.RetryConfig. */
+    @Setter private long retryInitialIntervalMs = 3000;
+    @Setter private double retryMultiplier = 2.0;
+    @Setter private long retryMaxIntervalMs = 30000;
+    @Setter private double retryJitterFactor = 0.5;
 
     @Builder
     public FlowOrchestrator(
@@ -1348,10 +1354,27 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         }
     }
 
+    /**
+     * Jittered exponential backoff (equal jitter) using the configured orchestrator.retry.* values.
+     * Mirrors JitteredExponentialBackOffPolicy so the WAITING_RETRY retry path — which is the path
+     * actually used in failover mode (and by the scanner-driven redelivery) — spreads retries the
+     * same way the non-blocking retry topics do, preventing a thundering herd.
+     */
+    private long jitteredBackoffMs(int attempt) {
+        double base = Math.min(
+                retryInitialIntervalMs * Math.pow(retryMultiplier, Math.max(0, attempt - 1)),
+                retryMaxIntervalMs);
+        double jitter = Math.max(0.0, Math.min(1.0, retryJitterFactor));
+        // equal jitter: fixed (1-jitter) portion + random [0, jitter) portion
+        return (long) (base * (1 - jitter)
+                + java.util.concurrent.ThreadLocalRandom.current().nextDouble() * base * jitter);
+    }
+
     private void handleRetryableFailure(F flow, RetryableStepException e) {
         int retryCount = flow.getRetryCount() + 1;
-        int backoff = (int) Math.min(Math.pow(2, retryCount), 60);
-        Instant nextRetry = Instant.now().plusSeconds(backoff);
+        long backoffMs = jitteredBackoffMs(retryCount);
+        int backoff = (int) Math.max(1, backoffMs / 1000);
+        Instant nextRetry = Instant.now().plusMillis(backoffMs);
         String errorMsg = e.getMessage() != null ? e.getMessage() : "retryable error";
         var fields = new LinkedHashMap<String, Object>();
         fields.put("retryCount", retryCount);

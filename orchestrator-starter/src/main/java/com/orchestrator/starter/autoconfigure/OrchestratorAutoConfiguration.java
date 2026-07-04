@@ -253,6 +253,12 @@ public class OrchestratorAutoConfiguration {
         String hostname = System.getenv("HOSTNAME");
         orchestrator.setPodId(hostname != null && !hostname.isBlank()
                 ? hostname : "pod-" + Integer.toHexString(System.identityHashCode(orchestrator)));
+        // Jittered retry backoff for the WAITING_RETRY path (used in failover mode)
+        var retryCfg = props.getRetry();
+        orchestrator.setRetryInitialIntervalMs(retryCfg.getInitialIntervalMs());
+        orchestrator.setRetryMultiplier(retryCfg.getMultiplier());
+        orchestrator.setRetryMaxIntervalMs(retryCfg.getMaxIntervalMs());
+        orchestrator.setRetryJitterFactor(retryCfg.getJitterFactor());
         // Validator is set separately after bean creation (injected via ObjectProvider in registry bean)
         // See orchestratorFlowTypeRegistry() for wiring
 

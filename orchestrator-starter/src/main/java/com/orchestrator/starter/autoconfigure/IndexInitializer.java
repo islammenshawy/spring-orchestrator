@@ -64,6 +64,11 @@ public class IndexInitializer {
                 new Index().on("published", Sort.Direction.ASC)
                         .on("createdAt", Sort.Direction.ASC));
 
+        // Outbox lookup by flow — countByFlowIdAndPublishedFalse (recovery scanner, per candidate)
+        ensureIndex("orchestrator_outbox", "flow_published_idx",
+                new Index().on("flowId", Sort.Direction.ASC)
+                        .on("published", Sort.Direction.ASC));
+
         // ===== Step log query indexes =====
 
         // Step log lookup by flow + step
@@ -202,9 +207,11 @@ public class IndexInitializer {
             mongoTemplate.indexOps(collection).ensureIndex(index.named(name));
             log.info("[Index] Created {}.{}", collection, name);
         } catch (Exception e) {
-            // Index may already exist with same definition — safe to ignore
-            if (!e.getMessage().contains("already exists")) {
-                log.warn("[Index] Failed to create {}.{}: {}", collection, name, e.getMessage());
+            // Index may already exist with same definition — safe to ignore.
+            // Null-guard the message so one odd exception can't NPE and abort the remaining indexes.
+            String msg = e.getMessage();
+            if (msg == null || !msg.contains("already exists")) {
+                log.warn("[Index] Failed to create {}.{}: {}", collection, name, msg);
             }
         }
     }

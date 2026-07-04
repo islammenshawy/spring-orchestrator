@@ -650,7 +650,9 @@ class AutoConfigurationTest {
 
             assertThat(topic).isNotNull();
             assertThat(topic.name()).isEqualTo("my.commands-dlt");
-            assertThat(topic.numPartitions()).isEqualTo(1);
+            // DLT now matches the main command topic's partition count so records on any partition
+            // can be dead-lettered (see the failover DLT-partition-wedge fix).
+            assertThat(topic.numPartitions()).isEqualTo(props.getKafka().getPartitions());
             // 48 hours = 172800000 ms
             assertThat(topic.configs())
                     .containsEntry("retention.ms", "172800000");

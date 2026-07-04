@@ -40,7 +40,8 @@ public class GenericFlowRepository<F extends OrchestratorFlow> implements Orches
 
     @Override
     public boolean existsById(String id) {
-        return findById(id).isPresent();
+        // exists() avoids fetching the whole (potentially large) flow document just to test presence.
+        return mongoTemplate.exists(Query.query(Criteria.where("_id").is(id)), entityClass);
     }
 
     @Override

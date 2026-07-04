@@ -100,14 +100,15 @@ class GenericFlowRepositoryTest {
 
     @Test
     void existsById_true_whenFlowExists() {
-        when(mongoTemplate.findById("f-1", TestFlow.class)).thenReturn(new TestFlow("f-1"));
+        // existsById now uses mongoTemplate.exists() (avoids fetching the full document)
+        when(mongoTemplate.exists(any(Query.class), eq(TestFlow.class))).thenReturn(true);
 
         assertTrue(repo.existsById("f-1"));
     }
 
     @Test
     void existsById_false_whenFlowMissing() {
-        when(mongoTemplate.findById("missing", TestFlow.class)).thenReturn(null);
+        when(mongoTemplate.exists(any(Query.class), eq(TestFlow.class))).thenReturn(false);
 
         assertFalse(repo.existsById("missing"));
     }
