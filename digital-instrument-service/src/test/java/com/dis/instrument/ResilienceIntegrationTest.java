@@ -237,6 +237,51 @@ class ResilienceIntegrationTest {
                 "Claim should be released after processing");
     }
 
+    /**
+     * F1 / GLM-5.2 LIB-6 — the case the test above OMITS. A pod that crashes WHILE executing a
+     * synchronous step leaves executingStep set. Before the fix, releaseOrphanedClaims cleared only
+     * claimedBy/claimedAt, so the consumer's claim CAS (executingStep=null) skipped every redelivery
+     * and the flow burned recoveryCount to max → force-compensation. Recovery must now reap a stale
+     * executingStep (IN_PROGRESS + updatedAt older than executionClaimTtl) so the flow can re-claim.
+     */
+    @Test
+    @Order(4)
+    @DisplayName("Pod crash MID-STEP (executingStep set): recovery reaps the stale claim (F1/LIB-6)")
+    void podCrash_midStepExecutingClaim_reapedByRecovery() throws Exception {
+        var result = startFlow("PN-CRASH-MIDSTEP-001");
+        String flowId = (String) result.get("id");
+        waitForStep(flowId, "AWAIT_PREPARATION_APPROVAL", Duration.ofMinutes(2));
+
+        // Simulate a pod that died mid-step: executingStep set on a real synchronous step,
+        // IN_PROGRESS, updatedAt older than executionClaimTtl (30 min default). This is exactly
+        // the field the previous test leaves null — the difference that makes F1 reproduce.
+        mongoTemplate.updateFirst(
+                Query.query(Criteria.where("_id").is(flowId)),
+                new Update()
+                        .set("status", FlowStatus.IN_PROGRESS.name())
+                        .set("currentStep", "REGISTER_DOCUMENT")
+                        .set("executingStep", "REGISTER_DOCUMENT")
+                        .set("executingPod", "dead-pod-1")
+                        .set("updatedAt", Instant.now().minus(40, ChronoUnit.MINUTES))
+                        .set("claimedBy", null)
+                        .set("claimedAt", null),
+                "dis_instrument_flows");
+
+        EnigioInstrumentEntity stuck = mongoTemplate.findById(
+                flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertEquals("REGISTER_DOCUMENT", stuck.getExecutingStep(),
+                "precondition: flow is stuck holding a dead pod's execution claim");
+
+        // Recovery must reap the stale execution claim so the flow can be re-driven.
+        staleFlowRecoveryService.recoverStaleFlows();
+
+        EnigioInstrumentEntity recovered = mongoTemplate.findById(
+                flowId, EnigioInstrumentEntity.class, "dis_instrument_flows");
+        assertNotNull(recovered);
+        assertNotEquals("dead-pod-1", recovered.getExecutingPod(),
+                "dead pod's execution claim must be reaped (was permanently stuck before the fix)");
+    }
+
     @Test
     @Order(4)
     @DisplayName("Pod crash: recovery count caps at max, marks FAILED")

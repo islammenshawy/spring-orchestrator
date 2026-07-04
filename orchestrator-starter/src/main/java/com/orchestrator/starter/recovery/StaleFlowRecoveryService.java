@@ -50,6 +50,15 @@ public class StaleFlowRecoveryService {
     private final com.orchestrator.starter.outbox.OutboxEventRepository outboxRepository;
     private final OrchestratorMetrics metrics;
 
+    /**
+     * Minutes before a stale execution claim (executingStep) left by a pod that crashed mid-step
+     * is reaped. Conservative default — MUST exceed the longest synchronous step so a slow-but-alive
+     * step is never falsely reclaimed (which would risk double execution). Long-running work should
+     * use pollUntil/waitUntil/sleep (PARKED — no execution claim held).
+     */
+    private int executionClaimTtlMinutes = 30;
+    public void setExecutionClaimTtlMinutes(int minutes) { this.executionClaimTtlMinutes = minutes; }
+
     public StaleFlowRecoveryService(FlowTypeRegistry registry, KafkaTemplate kafkaTemplate,
                                      ObjectMapper objectMapper, MongoTemplate mongoTemplate,
                                      int staleThresholdMinutes, int maxRecoveryAttempts,
@@ -115,6 +124,26 @@ public class StaleFlowRecoveryService {
 
         if (released > 0) {
             log.warn("[Recovery] Released {} orphaned claims (claimTtl={}min)", released, claimTtlMinutes);
+        }
+
+        // Reap stale EXECUTION claims left by a pod that crashed mid-step (F1 / GLM-5.2 LIB-6).
+        // The consumer's claim CAS sets executingStep before running a handler and clears it only on
+        // in-process exit paths; a hard crash (kill-9/OOM/node loss) leaves it set forever. Recovery
+        // re-publishes currentStep, but the claim CAS requires executingStep=null and would skip every
+        // redelivery — burning recoveryCount until the flow is force-compensated. Clearing it here lets
+        // the redelivered command re-claim. Gated by a conservative TTL (> longest synchronous step)
+        // and IN_PROGRESS status so a slow-but-alive step is never falsely reclaimed.
+        Instant execThreshold = Instant.now().minus(executionClaimTtlMinutes, ChronoUnit.MINUTES);
+        long execReleased = mongoTemplate.updateMulti(
+                Query.query(Criteria.where("executingStep").ne(null)
+                        .and("status").is(FlowStatus.IN_PROGRESS.name())
+                        .and("updatedAt").lt(execThreshold)),
+                new Update().set("executingStep", null).set("executingPod", null),
+                entityClass).getModifiedCount();
+
+        if (execReleased > 0) {
+            log.warn("[Recovery] Reaped {} stale execution claims (executingStep, ttl={}min) — crashed mid-step",
+                    execReleased, executionClaimTtlMinutes);
         }
     }
 

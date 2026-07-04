@@ -324,7 +324,7 @@ public class OrchestratorAutoConfiguration {
     public org.apache.kafka.clients.admin.NewTopic orchestratorCommandDltTopic(OrchestratorProperties props) {
         long retentionMs = props.getRetention().getDltRetentionHours() * 3600_000L;
         return org.springframework.kafka.config.TopicBuilder.name(props.getKafka().getCommandTopic() + "-dlt")
-                .partitions(1)
+                .partitions(props.getKafka().getPartitions())
                 .config(org.apache.kafka.common.config.TopicConfig.RETENTION_MS_CONFIG, String.valueOf(retentionMs))
                 .build();
     }
@@ -665,6 +665,13 @@ public class OrchestratorAutoConfiguration {
                 .retryTopicSuffix("-retry")
                 .dltSuffix("-dlt")
                 .setTopicSuffixingStrategy(TopicSuffixingStrategy.SUFFIX_WITH_INDEX_VALUE)
+                // Create retry/DLT topics with the SAME partition count as the main command topic.
+                // Otherwise the DLT under-partitions (default 1) while the main topic (and its
+                // MM2-replicated PREFIXED variant) has N partitions — a non-retryable record on
+                // partition >0 then can't be dead-lettered ("non-existent DLT partition"), and with
+                // DltStrategy.FAIL_ON_ERROR the error handler can't seek past it → the partition
+                // wedges and every flow behind it stalls (observed in PREFIXED failover).
+                .autoCreateTopics(true, props.getKafka().getPartitions(), (short) 1)
                 .dltProcessingFailureStrategy(DltStrategy.FAIL_ON_ERROR)
                 .retryOn(RetryableStepException.class);
 
@@ -721,13 +728,15 @@ public class OrchestratorAutoConfiguration {
             OrchestratorProperties props,
             OutboxEventRepository outboxRepository,
             OrchestratorMetrics metrics) {
-        return new StaleFlowRecoveryService(
+        StaleFlowRecoveryService service = new StaleFlowRecoveryService(
                 registry, kafkaTemplate, objectMapper, mongoTemplate,
                 props.getRecovery().getStaleThresholdMinutes(),
                 props.getRecovery().getMaxRecoveryAttempts(),
                 props.getRecovery().getBatchSize(),
                 props.getRecovery().getClaimTtlMinutes(),
                 outboxRepository, metrics);
+        service.setExecutionClaimTtlMinutes(props.getRecovery().getExecutionClaimTtlMinutes());
+        return service;
     }
 
     // ========== Backward-compatible singleton beans ==========

@@ -298,6 +298,32 @@ class StaleFlowRecoveryTest {
         verify(mongoTemplate, atLeast(1)).updateMulti(any(Query.class), any(Update.class), eq(FlowA.class));
     }
 
+    /**
+     * F1 / GLM-5.2 LIB-6 regression: a pod that crashes mid-step leaves executingStep set forever.
+     * releaseOrphanedClaims clears only claimedBy/claimedAt, so the consumer's claim CAS
+     * (executingStep=null) skips every redelivery → recoveryCount burns to max → force-compensation.
+     * Recovery MUST also reap a stale executingStep (IN_PROGRESS + updatedAt older than the
+     * execution-claim TTL) so the redelivered command can re-claim. RED before the fix.
+     */
+    @Test
+    void releaseOrphanedClaims_reapsStaleExecutionClaim() {
+        ArgumentCaptor<Update> updateCaptor = ArgumentCaptor.forClass(Update.class);
+
+        FlowTypeRegistry registry = new FlowTypeRegistry(List.of(
+                buildDescriptor("enigio", FlowA.class, "enigio.commands", null)));
+
+        createService(registry).recoverStaleFlows();
+
+        // Among the reaper's updateMulti calls, one must $set executingStep + executingPod to null.
+        verify(mongoTemplate, atLeast(1)).updateMulti(any(Query.class), updateCaptor.capture(), eq(FlowA.class));
+        boolean reapsExecutionClaim = updateCaptor.getAllValues().stream()
+                .map(Object::toString)
+                .anyMatch(s -> s.contains("executingStep") && s.contains("executingPod"));
+        assertThat(reapsExecutionClaim)
+                .as("recovery must reap stale executingStep/executingPod so a crashed-mid-step flow can re-claim")
+                .isTrue();
+    }
+
     // ── recoverCompletedButNotAdvanced tests ──────────────────────────────
 
     /**

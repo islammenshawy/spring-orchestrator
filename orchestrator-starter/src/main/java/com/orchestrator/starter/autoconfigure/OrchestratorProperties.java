@@ -106,6 +106,11 @@ public class OrchestratorProperties {
         private int batchSize = 100;
         /** Minutes before an orphaned claim is released. Default 5. */
         private int claimTtlMinutes = 5;
+
+        /** Minutes before a stale execution claim (executingStep) from a pod that crashed mid-step
+         *  is reaped by recovery. MUST exceed the longest synchronous step to avoid reclaiming a
+         *  slow-but-alive step. Long work should use pollUntil/waitUntil/sleep (PARKED). Default 30. */
+        private int executionClaimTtlMinutes = 30;
     }
 
     public enum OffsetStore {
