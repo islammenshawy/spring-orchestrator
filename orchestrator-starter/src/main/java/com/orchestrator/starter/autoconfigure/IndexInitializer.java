@@ -164,28 +164,31 @@ public class IndexInitializer {
     }
 
     /**
-     * Discover flow collection names from MongoDB.
-     * Finds collections that look like flow collections (have status field).
+     * Flow collection names from the {@link FlowTypeRegistry} — the AUTHORITATIVE list of registered
+     * flow entities. The previous discovery sampled every Mongo collection and claimed any whose first
+     * document happened to carry {@code status} + {@code currentStep}; in a shared database that
+     * duck-typing claimed HOST-APPLICATION domain collections (e.g. an onboarding-session store with
+     * those same field names) and its unique {@code correlationId} index then rejected every second
+     * domain insert. Never guess ownership from data shape — only index what was registered with us.
      */
     private java.util.List<String> getFlowCollections() {
         var collections = new java.util.ArrayList<String>();
-        for (String name : mongoTemplate.getCollectionNames()) {
-            // Skip library collections
-            if (name.startsWith("orchestrator_") || name.startsWith("system.")) continue;
-            // Check if it looks like a flow collection (has status field)
-            try {
-                var sample = mongoTemplate.getCollection(name).find().limit(1).first();
-                if (sample != null && sample.containsKey("status") && sample.containsKey("currentStep")) {
-                    collections.add(name);
+        if (flowTypeRegistry != null) {
+            for (FlowTypeDescriptor descriptor : flowTypeRegistry.getAll()) {
+                Class<?> entityClass = descriptor.getEntityClass();
+                if (entityClass == null || entityClass == Object.class) continue;
+                String collection = resolveCollectionName(entityClass);
+                if (collection != null && !collections.contains(collection)) {
+                    collections.add(collection);
                 }
-            } catch (Exception ignored) {}
+            }
         }
         if (collections.isEmpty()) {
-            // Fallback: common flow collection names
+            // Fallback: common flow collection names (pre-registry deployments)
             collections.add("dis_instrument_flows");
             collections.add("enigio_flows");
         }
-        log.info("[Index] Flow collections found: {}", collections);
+        log.info("[Index] Flow collections (from registry): {}", collections);
         return collections;
     }
 
