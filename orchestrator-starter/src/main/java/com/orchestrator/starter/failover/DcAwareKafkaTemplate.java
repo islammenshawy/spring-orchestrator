@@ -45,4 +45,26 @@ public class DcAwareKafkaTemplate extends KafkaTemplate {
         KafkaTemplate active = manager.getActiveTemplate();
         return active.send(resolvedTopic, data);
     }
+
+    /**
+     * Used by Spring Kafka's DeadLetterPublishingRecoverer for retry-topic and DLT routing.
+     * The record's topic is already the exact destination (derived from the CONSUMED topic,
+     * including any dc-prefix), so it must NOT be re-resolved — only transported on the active DC.
+     *
+     * Without this override the call fell through to the dummy super() producer (empty config →
+     * localhost:9092) and EVERY retry/DLT publication failed in failover mode: the error handler
+     * then fell back to in-place seeks, the redelivery hit the WAITING_RETRY skip-guard, the offset
+     * committed, and the scanner re-drove the step forever — unbounded retries, nothing ever
+     * reaching the retry topics or DLT.
+     */
+    @Override
+    public CompletableFuture send(org.apache.kafka.clients.producer.ProducerRecord record) {
+        return manager.getActiveTemplate().send(record);
+    }
+
+    /** Same transport routing for Message-based sends (topic resolved from headers by the target). */
+    @Override
+    public CompletableFuture send(org.springframework.messaging.Message message) {
+        return manager.getActiveTemplate().send(message);
+    }
 }

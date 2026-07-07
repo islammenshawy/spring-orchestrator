@@ -1376,16 +1376,27 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         int backoff = (int) Math.max(1, backoffMs / 1000);
         Instant nextRetry = Instant.now().plusMillis(backoffMs);
         String errorMsg = e.getMessage() != null ? e.getMessage() : "retryable error";
-        var fields = new LinkedHashMap<String, Object>();
-        fields.put("retryCount", retryCount);
-        fields.put("backoffSeconds", backoff);
-        fields.put("nextRetryAt", nextRetry);
-        fields.put("status", FlowStatus.WAITING_RETRY.name());
-        fields.put("errorMessage", errorMsg);
-        fields.put("executingStep", null);
-        fields.put("executingPod", null);
-        fields.put("updatedAt", Instant.now());
         if (mongoTemplate != null && entityClass != null) {
+            // Kafka mode: the NON-BLOCKING RETRY TOPICS own retryable redelivery — the rethrown
+            // exception routes this message to retry-0..N with the configured jittered backoff,
+            // bounded by retry.max-attempts, then DLT → markDeadLettered.
+            // nextRetryAt is explicitly NULLED (not just omitted — it clears any stale value):
+            //  - a set nextRetryAt makes redeliverPollingFlows re-publish FRESH main-topic messages
+            //    whose retry headers start at attempt 1 → the attempt count never accumulates →
+            //    unbounded retries;
+            //  - and the skip-guard (WAITING_RETRY + future nextRetryAt) swallows the retry-topic
+            //    chain's own redeliveries → the bounded chain starves.
+            // WAITING_RETRY + retryCount are kept for observability; the scanner keeps owning
+            // pollUntil/sleep (handleWaitingStep sets nextRetryAt) and crash recovery (IN_PROGRESS).
+            var fields = new LinkedHashMap<String, Object>();
+            fields.put("retryCount", retryCount);
+            fields.put("backoffSeconds", 0);
+            fields.put("nextRetryAt", null);
+            fields.put("status", FlowStatus.WAITING_RETRY.name());
+            fields.put("errorMessage", errorMsg);
+            fields.put("executingStep", null);
+            fields.put("executingPod", null);
+            fields.put("updatedAt", Instant.now());
             updateFlowPartial(flow.getId(), fields);
         } else {
             flow.setRetryCount(retryCount);

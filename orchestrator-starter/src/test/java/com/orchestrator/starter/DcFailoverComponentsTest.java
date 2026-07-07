@@ -616,6 +616,32 @@ class DcFailoverComponentsTest {
         }
 
         @Test
+        @DisplayName("send(ProducerRecord) — the DeadLetterPublishingRecoverer path — routes to the "
+                + "active DC template WITHOUT re-resolving the topic")
+        void sendProducerRecord_routesToActiveDc_notDummyProducer() {
+            // Regression pin: without this override, retry-topic/DLT publications fell through to
+            // the dummy super() producer (localhost:9092) and ALL retry/DLT routing failed in
+            // failover mode → unbounded WAITING_RETRY loop instead of bounded retry-0..8 → DLT.
+            var kafkaManager = mock(DcAwareKafkaManager.class);
+            @SuppressWarnings("unchecked")
+            KafkaTemplate<String, String> activeTemplate = mock(KafkaTemplate.class);
+            when(kafkaManager.getActiveTemplate()).thenReturn(activeTemplate);
+            when(activeTemplate.send(any(org.apache.kafka.clients.producer.ProducerRecord.class)))
+                    .thenReturn(CompletableFuture.completedFuture(null));
+
+            var record = new org.apache.kafka.clients.producer.ProducerRecord<String, String>(
+                    "dc-a.dis.commands-retry-0", "key-1", "payload");
+
+            var dcTemplate = new DcAwareKafkaTemplate(kafkaManager);
+            dcTemplate.send(record);
+
+            // Transported as-is on the active DC — the record's topic is already the exact
+            // destination (derived from the consumed topic, dc-prefix included).
+            verify(activeTemplate).send(record);
+            verify(kafkaManager, never()).resolveActiveTopic(anyString());
+        }
+
+        @Test
         @DisplayName("send(topic, partition, key, data) routes to active DC template")
         void sendTopicPartitionKeyData_routesToActiveDc() {
             var kafkaManager = mock(DcAwareKafkaManager.class);

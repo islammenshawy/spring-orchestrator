@@ -1228,6 +1228,36 @@ class FlowOrchestratorUnitTest {
         }
 
         @Test
+        @DisplayName("RETRYABLE with mongoTemplate — nextRetryAt stays null: retry topics own "
+                + "redelivery, the scanner must not re-drive (would reset retry headers → unbounded)")
+        void retryable_mongoTemplate_doesNotSetNextRetryAt() {
+            TestFlow flow = newFlow("rt-own-1", FlowStatus.IN_PROGRESS, "STEP_A");
+
+            StepHandler<TestFlow> handler = mock(StepHandler.class);
+            doThrow(new RetryableStepException("vendor 503")).when(handler).execute(flow);
+
+            when(mongoTemplate.updateFirst(any(Query.class), any(Update.class), eq(TestFlow.class)))
+                    .thenReturn(ack(1));
+            when(flowRepo.findById("rt-own-1")).thenReturn(Optional.of(flow));
+            when(stepRegistry.getHandler("STEP_A")).thenReturn(handler);
+
+            assertThrows(RetryableStepException.class,
+                    () -> casOrchestrator.executeStep("rt-own-1", "STEP_A"));
+
+            var updateCaptor = org.mockito.ArgumentCaptor.forClass(Update.class);
+            verify(mongoTemplate, atLeast(1)).updateFirst(any(Query.class), updateCaptor.capture(), eq(TestFlow.class));
+            var retryUpdate = updateCaptor.getAllValues().stream()
+                    .map(u -> (org.bson.Document) u.getUpdateObject().get("$set"))
+                    .filter(s -> s != null && s.containsKey("retryCount"))
+                    .findFirst().orElseThrow(() -> new AssertionError("no retryable partial update captured"));
+            assertEquals(FlowStatus.WAITING_RETRY.name(), retryUpdate.getString("status"));
+            assertNull(retryUpdate.get("nextRetryAt"),
+                    "nextRetryAt must be null(ed) — the Kafka retry-topic chain owns retryable "
+                            + "redelivery; a set nextRetryAt makes the scanner inject fresh main-topic "
+                            + "messages (unbounded) while the skip-guard starves the retry chain");
+        }
+
+        @Test
         @DisplayName("Null error message — uses default")
         void nullMessage_usesDefault() {
             TestFlow flow = newFlow("ws-7", FlowStatus.IN_PROGRESS, "STEP_A");
