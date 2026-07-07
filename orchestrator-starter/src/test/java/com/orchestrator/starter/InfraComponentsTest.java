@@ -506,25 +506,44 @@ class InfraComponentsTest {
             assertDoesNotThrow(() -> initializer.createIndexes());
         }
 
+        @org.springframework.data.mongodb.core.mapping.Document(collection = "my_flows")
+        static class RegisteredFlowEntity extends com.orchestrator.starter.domain.AbstractFlow {}
+
         @Test
         void createIndexes_createsFlowCollectionIndexes() {
-            // Simulate a flow collection detected by getFlowCollections
-            var mockCollection = mock(com.mongodb.client.MongoCollection.class);
-            var mockIterable = mock(com.mongodb.client.FindIterable.class);
-            when(mockCollection.find()).thenReturn(mockIterable);
-            when(mockIterable.limit(1)).thenReturn(mockIterable);
-            var doc = new org.bson.Document()
-                    .append("status", "IN_PROGRESS")
-                    .append("currentStep", "STEP_A");
-            when(mockIterable.first()).thenReturn(doc);
-            when(mongoTemplate.getCollectionNames()).thenReturn(Set.of("my_flows"));
-            when(mongoTemplate.getCollection("my_flows")).thenReturn(mockCollection);
+            // Flow collections come from the FlowTypeRegistry (authoritative), not from sampling
+            // live Mongo collections — a registered entity's collection gets the flow indexes.
+            var registry = new FlowTypeRegistry(List.of(
+                    com.orchestrator.starter.flow.FlowTypeDescriptor.builder()
+                            .flowType("my-flow")
+                            .entityClass(RegisteredFlowEntity.class)
+                            .build()));
 
-            var initializer = new IndexInitializer(mongoTemplate, props, flowTypeRegistry);
+            var initializer = new IndexInitializer(mongoTemplate, props, registry);
             initializer.createIndexes();
 
-            // Should have created flow indexes on my_flows collection
+            // Registered entity's collection is indexed (incl. unique correlationId, even if empty)
             verify(mongoTemplate, atLeastOnce()).indexOps("my_flows");
+        }
+
+        @Test
+        void createIndexes_neverClaimsUnregisteredCollections() {
+            // Regression pin: the old sampling duck-typed ANY collection whose first doc had
+            // status+currentStep — in a shared DB that claimed host-application collections and
+            // imposed a unique correlationId index on them. Unregistered collections must be ignored.
+            when(mongoTemplate.getCollectionNames()).thenReturn(Set.of("host_app_sessions"));
+
+            var registry = new FlowTypeRegistry(List.of(
+                    com.orchestrator.starter.flow.FlowTypeDescriptor.builder()
+                            .flowType("my-flow")
+                            .entityClass(RegisteredFlowEntity.class)
+                            .build()));
+
+            var initializer = new IndexInitializer(mongoTemplate, props, registry);
+            initializer.createIndexes();
+
+            verify(mongoTemplate, never()).indexOps("host_app_sessions");
+            verify(mongoTemplate, never()).getCollection("host_app_sessions");
         }
 
         @Test
