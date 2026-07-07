@@ -10,6 +10,10 @@ DRAIN_TIMEOUT=${DRAIN_TIMEOUT:-300}
 CHAOS=${CHAOS:-0}           # Set CHAOS=1 to enable chaos scenarios
 POD_KILL_WAVE=${POD_KILL_WAVE:-0}  # Wave number to kill DIS-1 (0=auto at 40%)
 DEDUP_INTERVAL=${DEDUP_INTERVAL:-5} # Inject duplicates every N waves
+# Kafka target — single-cluster default; for the failover topology use
+# KAFKA_CONTAINER=infra-kafka-a-1 KAFKA_BOOT=kafka-a:29092
+KAFKA_CONTAINER=${KAFKA_CONTAINER:-infra-kafka-1-1}
+KAFKA_BOOT=${KAFKA_BOOT:-kafka-1:29092}
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 METRICS_INTERVAL=${METRICS_INTERVAL:-5}  # Brief metrics every N waves
@@ -39,8 +43,8 @@ for GROUP in digital-instrument-service-executor digital-instrument-service-dlt 
              digital-instrument-service-executor-retry-0 \
              digital-instrument-service-executor-retry-1 \
              digital-instrument-service-executor-retry-2; do
-  docker exec infra-kafka-1-1 kafka-consumer-groups --bootstrap-server kafka-1:29092 \
-    --group "$GROUP" --reset-offsets --to-latest --all-topics --execute 2>/dev/null >/dev/null
+  docker exec "$KAFKA_CONTAINER" kafka-consumer-groups --bootstrap-server "$KAFKA_BOOT" \
+    --group "$GROUP" --reset-offsets --to-latest --all-topics --execute 2>/dev/null >/dev/null || true
 done
 log "Kafka consumer offsets reset to latest"
 
@@ -143,7 +147,7 @@ chaos_inject_duplicates() {
     IFS='|' read -r fid corr step ftype <<< "$line"
     [ -z "$fid" ] && continue
     local eid="chaos-dedup-$(date +%s)-$RANDOM"
-    docker exec infra-kafka-1-1 bash -c "echo '{\"eventId\":\"$eid\",\"flowId\":\"$fid\",\"correlationId\":\"$corr\",\"stepName\":\"$step\",\"flowType\":\"$ftype\"}' | kafka-console-producer --broker-list kafka-1:29092 --topic dis.instrument.commands --property parse.key=true --property key.separator=: <<< \"$corr:{\\\"eventId\\\":\\\"$eid\\\",\\\"flowId\\\":\\\"$fid\\\",\\\"correlationId\\\":\\\"$corr\\\",\\\"stepName\\\":\\\"$step\\\",\\\"flowType\\\":\\\"$ftype\\\"}\"" 2>/dev/null &
+    docker exec "$KAFKA_CONTAINER" bash -c "echo '{\"eventId\":\"$eid\",\"flowId\":\"$fid\",\"correlationId\":\"$corr\",\"stepName\":\"$step\",\"flowType\":\"$ftype\"}' | kafka-console-producer --broker-list $KAFKA_BOOT --topic dis.instrument.commands --property parse.key=true --property key.separator=: <<< \"$corr:{\\\"eventId\\\":\\\"$eid\\\",\\\"flowId\\\":\\\"$fid\\\",\\\"correlationId\\\":\\\"$corr\\\",\\\"stepName\\\":\\\"$step\\\",\\\"flowType\\\":\\\"$ftype\\\"}\"" 2>/dev/null &
     count=$((count + 1))
   done
   wait 2>/dev/null
@@ -330,12 +334,12 @@ docker exec infra-mongodb-1 mongosh --quiet digital_instrument_service --eval '
 ' 2>/dev/null
 
 log "=== Kafka Offsets ==="
-docker exec infra-kafka-1-1 bash -c '
-T="dis.instrument.commands"; kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka-1:29092 --topic $T 2>/dev/null | tr "\n" "," ; echo
-T="dis.instrument.commands.replies"; kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka-1:29092 --topic $T 2>/dev/null | tr "\n" "," ; echo
-T="dis.instrument.commands-dlt"; kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka-1:29092 --topic $T 2>/dev/null | tr "\n" "," ; echo
-T="dis.instrument.notifications"; kafka-run-class kafka.tools.GetOffsetShell --broker-list kafka-1:29092 --topic $T 2>/dev/null | tr "\n" "," ; echo
-'
+docker exec -e KB="$KAFKA_BOOT" "$KAFKA_CONTAINER" bash -c '
+T="dis.instrument.commands"; kafka-run-class kafka.tools.GetOffsetShell --broker-list $KB --topic $T 2>/dev/null | tr "\n" "," ; echo
+T="dis.instrument.commands.replies"; kafka-run-class kafka.tools.GetOffsetShell --broker-list $KB --topic $T 2>/dev/null | tr "\n" "," ; echo
+T="dis.instrument.commands-dlt"; kafka-run-class kafka.tools.GetOffsetShell --broker-list $KB --topic $T 2>/dev/null | tr "\n" "," ; echo
+T="dis.instrument.notifications"; kafka-run-class kafka.tools.GetOffsetShell --broker-list $KB --topic $T 2>/dev/null | tr "\n" "," ; echo
+' || true
 
 log "=== Webhook Registrations ==="
 docker logs infra-mock-vendor-1 2>&1 | grep "Webhook registered" | tail -3
