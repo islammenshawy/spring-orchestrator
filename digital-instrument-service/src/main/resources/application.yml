@@ -88,6 +88,20 @@ orchestrator:
     command-topic: dis.instrument.commands
     partitions: 6                             # even number for balanced multi-instance distribution
 
+  # Execution lanes: the instrument flow runs in a dedicated "interactive" lane with its own
+  # consumer group (digital-instrument-service-executor-interactive) and its own concurrency —
+  # a future batch/sweep lane can never starve these partitions.
+  lanes:
+    interactive:
+      topics: [dis.instrument.commands]
+      concurrency: 3
+
+  flows:
+    enigio-instrument:
+      # Vendor register/transfer calls can be slow under load — headroom over the global 60s
+      # step timeout. Individual long steps can override via @Step(timeoutSeconds=...).
+      step-timeout-seconds: 90
+
   retry:
     initial-interval-ms: 3000             # 3s first retry
     multiplier: 2.0                       # ladder: 3s → 6s → 10s (capped)

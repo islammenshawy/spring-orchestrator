@@ -1,10 +1,20 @@
 spring:
   application:
-    name: dis-test
+    # Unique per test CONTEXT: consumer group names derive from the app name, and multiple cached
+    # @SpringBootTest contexts sharing groups rebalance against each other (container-killing tests
+    # push the retry-tier groups into minutes-long rebalance purgatory — flows stall WAITING_RETRY
+    # past assertion windows). Unique names give each context its own group family; duplicate
+    # consumption across contexts is the normal multi-pod pattern the library dedupes by design
+    # (executingStep claim CAS + two-layer idempotency).
+    name: dis-test-${random.uuid}
   mongodb:
     uri: mongodb://localhost:27117/dis-test
   kafka:
     bootstrap-servers: localhost:9092
+    # NOTE: auto-offset-reset stays 'latest' (inherited). 'earliest' was tried and reverted: on the
+    # long-lived shared dis.test.* topics it replays weeks of history through every NEW consumer
+    # group (e.g. a lane's first run), re-driving old flows into a message storm. The cold-start
+    # publish race is handled by KafkaAssignmentGate (waits for stable assignments) instead.
 
 vendor:
   enigio:
@@ -21,6 +31,13 @@ spring.cloud.openfeign:
 orchestrator:
   kafka:
     command-topic: dis.test.commands
+  # Same lane architecture as production: the ENTIRE integration suite runs through the
+  # dedicated lane listener (group digital-instrument-service-executor-interactive), so lane
+  # consumption, retry topics, and DLT routing are exercised end-to-end on every build.
+  lanes:
+    interactive:
+      topics: [dis.test.commands]
+      concurrency: 3
   search:
     api-enabled: true
   retry:
