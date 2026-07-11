@@ -31,6 +31,29 @@ public class OrchestratorProperties {
     private AuditConfig audit = new AuditConfig();
     private FailoverConfig failover = new FailoverConfig();
 
+    /** Execution lanes: named groups of command topics consumed by DEDICATED listener containers
+     *  with their own consumer group ({spring.application.name}-executor-{lane}) and their own
+     *  concurrency. Topics claimed by a lane are removed from the default command listener's
+     *  subscription, so a lane chewing long batch steps can never starve another lane's partitions.
+     *  Topics must not be claimed by more than one lane. Key = lane name.
+     *
+     *  Migration note: moving a topic into a lane changes its consumer group — the lane group
+     *  starts from auto.offset.reset for that topic. Drain the topic (or rely on the recovery
+     *  scanner to re-drive in-flight flows) when first enabling a lane on a live topic.
+     *
+     *  Example:
+     *  <pre>
+     *  orchestrator:
+     *    lanes:
+     *      interactive:
+     *        topics: [payments.commands]
+     *        concurrency: 4
+     *      batch:
+     *        topics: [sweep.commands]
+     *        concurrency: 1
+     *  </pre> */
+    private Map<String, LaneConfig> lanes = new LinkedHashMap<>();
+
     @Data
     public static class KafkaConfig {
         private String commandTopic = "orchestrator.commands";
@@ -205,6 +228,22 @@ public class OrchestratorProperties {
         private String dltTopic;
         /** Reply topic override. Null = use standard {topic}.replies suffix. */
         private String replyTopic;
+        /** Per-flow step timeout override in seconds. Null = inherit orchestrator.step.timeout-seconds.
+         *  0 = disable the timeout for this flow. Use for flows with long-running steps (e.g. batch
+         *  sweeps) — with bounded retry topics, a too-short timeout churns retry tiers and can DLT a
+         *  healthy long step before it finishes. A @Step(timeoutSeconds=...) annotation on an
+         *  individual step overrides this value. */
+        private Integer stepTimeoutSeconds;
+    }
+
+    /** Execution lane: a set of command topics served by a dedicated listener container. */
+    @Data
+    public static class LaneConfig {
+        /** Command topics this lane consumes exclusively (removed from the default listener).
+         *  In PREFIXED failover mode, dc-prefixed variants are added automatically. */
+        private java.util.List<String> topics = new java.util.ArrayList<>();
+        /** Listener container concurrency (consumer threads) for this lane. Default 1. */
+        private int concurrency = 1;
     }
 
     @Data

@@ -110,8 +110,9 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
         this.txTemplate = txTemplate;
         this.kafkaTemplate = kafkaTemplate;
         this.stepTimeoutSeconds = stepTimeoutSeconds;
-        this.stepExecutor = stepTimeoutSeconds > 0
-                ? Executors.newVirtualThreadPerTaskExecutor() : null;
+        // Always create the (virtually free) executor: even with the flow/global timeout disabled,
+        // an individual step may set its own @Step(timeoutSeconds=...) override.
+        this.stepExecutor = Executors.newVirtualThreadPerTaskExecutor();
         this.metrics = metrics != null ? metrics : OrchestratorMetrics.noop();
     }
 
@@ -1607,11 +1608,18 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
 
     /**
      * Execute a step handler with an optional timeout.
-     * When timeout is enabled (> 0), runs the handler on a virtual thread
+     * When a timeout applies (> 0), runs the handler on a virtual thread
      * and throws RetryableStepException if it exceeds the configured duration.
+     *
+     * Effective timeout resolution (most specific wins):
+     *   @Step(timeoutSeconds=N) on the step  >  orchestrator.flows.{name}.step-timeout-seconds
+     *   (resolved into this orchestrator's stepTimeoutSeconds)  >  orchestrator.step.timeout-seconds.
+     * A step-level 0 disables the timeout for that step (long batch sweeps); -1 inherits.
      */
     private void executeWithTimeout(StepHandler<F> handler, F flow, String stepName) throws Exception {
-        if (stepTimeoutSeconds <= 0 || stepExecutor == null) {
+        int stepOverride = handler.getTimeoutSeconds();
+        int effectiveTimeout = stepOverride >= 0 ? stepOverride : stepTimeoutSeconds;
+        if (effectiveTimeout <= 0 || stepExecutor == null) {
             handler.execute(flow);
             return;
         }
@@ -1625,11 +1633,11 @@ public class FlowOrchestrator<F extends OrchestratorFlow> {
             }
         }, stepExecutor);
         try {
-            future.get(stepTimeoutSeconds, TimeUnit.SECONDS);
+            future.get(effectiveTimeout, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
             future.cancel(true); // Interrupt the virtual thread to release resources
             throw new RetryableStepException(
-                    "Step " + stepName + " timed out after " + stepTimeoutSeconds + "s");
+                    "Step " + stepName + " timed out after " + effectiveTimeout + "s");
         } catch (java.util.concurrent.ExecutionException e) {
             Throwable cause = e.getCause();
             if (cause instanceof RuntimeException re) throw re;

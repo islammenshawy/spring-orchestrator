@@ -54,6 +54,11 @@ public class MethodStepAdapter<F extends OrchestratorFlow> implements StepHandle
     }
 
     @Override
+    public int getTimeoutSeconds() {
+        return stepAnnotation.timeoutSeconds();
+    }
+
+    @Override
     public void execute(F flow) {
         try {
             method.invoke(flowDefinition, flow);

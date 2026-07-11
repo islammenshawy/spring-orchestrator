@@ -59,6 +59,15 @@ public interface StepHandler<F extends OrchestratorFlow> {
     }
 
     /**
+     * Per-step timeout override in seconds. Default reads @Step.timeoutSeconds if present.
+     * -1 = inherit the flow/global timeout; 0 = no timeout for this step; > 0 = override.
+     */
+    default int getTimeoutSeconds() {
+        Step step = this.getClass().getAnnotation(Step.class);
+        return step != null ? step.timeoutSeconds() : -1;
+    }
+
+    /**
      * Execute the step. Set results on the flow object.
      *
      * Error handling options (choose one):

@@ -95,6 +95,8 @@ cd orchestrator-starter && mvn package
 - **Saga compensation** — `@Compensate` for reverse execution on failure
 - **Flow cancellation** — `@OnCancel` with reverse handler execution
 - **Parallel + join** — `@Parallel` + `@JoinOn` for concurrent step execution
+- **Execution lanes** — `orchestrator.lanes.{lane}.{topics,concurrency}`: dedicated listener containers + consumer groups per lane, so batch work can never starve interactive flows
+- **Step timeout overrides** — global → per-flow (`flows.{name}.step-timeout-seconds`) → per-step (`@Step(timeoutSeconds=…)`), so long sweeps aren't dead-lettered by the bounded retry ladder
 - **checkpoint()** — mid-step persistence for crash safety after vendor API calls
 - **Stale flow recovery** — container crash safety net
 - **Auto-generated repositories** — no boilerplate Spring Data interfaces needed

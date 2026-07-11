@@ -140,7 +140,7 @@ class AutoConfigurationTest {
             @Test
             @DisplayName("calls consumer.onDlt with exception message")
             void onDlt_withExceptionMessage() {
-                var listener = new OrchestratorCommandListener(consumer, mongoOffsetStore, false, "app-executor");
+                var listener = new OrchestratorAutoConfiguration.OrchestratorCommandDltListener(consumer);
 
                 listener.onCommandDlt("dlt-payload", "orchestrator.commands-dlt", 100L, "NullPointerException: oops");
 
@@ -150,7 +150,7 @@ class AutoConfigurationTest {
             @Test
             @DisplayName("null exception header sends 'unknown' as message")
             void onDlt_nullExceptionHeader() {
-                var listener = new OrchestratorCommandListener(consumer, mongoOffsetStore, false, "app-executor");
+                var listener = new OrchestratorAutoConfiguration.OrchestratorCommandDltListener(consumer);
 
                 listener.onCommandDlt("dlt-payload-2", "orchestrator.commands-dlt", 200L, null);
 
@@ -766,64 +766,214 @@ class AutoConfigurationTest {
     // ========================================================================
 
     @Nested
-    @DisplayName("orchestratorCommandListener bean")
+    @DisplayName("orchestratorLaneRegistrar (command listener bean registration)")
     class CommandListenerBeanTests {
 
-        @Mock
-        private OrchestratorKafkaConsumer<?> consumer;
-        @Mock
-        private MongoOffsetStore mongoOffsetStore;
-        @Mock
-        private org.springframework.core.env.Environment env;
-
-        private OrchestratorAutoConfiguration autoConfig;
+        private org.springframework.beans.factory.support.DefaultListableBeanFactory registry;
+        private org.springframework.mock.env.MockEnvironment env;
 
         @BeforeEach
         void setUp() {
-            autoConfig = new OrchestratorAutoConfiguration();
+            registry = new org.springframework.beans.factory.support.DefaultListableBeanFactory();
+            env = new org.springframework.mock.env.MockEnvironment();
+        }
+
+        private void runRegistrar() {
+            OrchestratorAutoConfiguration.orchestratorLaneRegistrar(env)
+                    .postProcessBeanDefinitionRegistry(registry);
         }
 
         @Test
-        @DisplayName("creates listener with saveMongo=true when offset store is MONGO")
-        void createsWithSaveMongoTrue() {
-            OrchestratorProperties props = new OrchestratorProperties();
-            props.getRecovery().setOffsetStore(OffsetStore.MONGO);
-            when(env.getProperty("spring.application.name", "orchestrator")).thenReturn("my-app");
+        @DisplayName("no lanes → default listener registered with {app}-executor group + saveMongo")
+        void noLanes_registersDefaultListener() {
+            env.setProperty("spring.application.name", "my-app");
 
-            OrchestratorCommandListener listener = autoConfig.orchestratorCommandListener(
-                    consumer, mongoOffsetStore, props, env);
+            runRegistrar();
 
-            // Verify it saves offset by calling onCommand with valid partition+timestamp
-            listener.onCommand("test", "topic", 1L, 0, 1000L, "key");
-            verify(mongoOffsetStore).saveOffset(eq("my-app-executor"), eq("topic"), eq(0), eq(1L), eq("key"), eq(1000L));
+            assertThat(registry.containsBeanDefinition("orchestratorCommandListener")).isTrue();
+            var args = registry.getBeanDefinition("orchestratorCommandListener")
+                    .getConstructorArgumentValues();
+            assertThat(args.getIndexedArgumentValue(2, Boolean.class).getValue()).isEqualTo(true); // MONGO default
+            assertThat(args.getIndexedArgumentValue(3, String.class).getValue()).isEqualTo("my-app-executor");
         }
 
         @Test
-        @DisplayName("creates listener with saveMongo=false when offset store is KAFKA")
-        void createsWithSaveMongoFalse() {
-            OrchestratorProperties props = new OrchestratorProperties();
-            props.getRecovery().setOffsetStore(OffsetStore.KAFKA);
-            when(env.getProperty("spring.application.name", "orchestrator")).thenReturn("my-app");
+        @DisplayName("offset store KAFKA → default listener registered with saveMongo=false")
+        void kafkaOffsetStore_saveMongoFalse() {
+            env.setProperty("orchestrator.recovery.offset-store", "KAFKA");
 
-            OrchestratorCommandListener listener = autoConfig.orchestratorCommandListener(
-                    consumer, mongoOffsetStore, props, env);
+            runRegistrar();
 
-            listener.onCommand("test", "topic", 1L, 0, 1000L, "key");
-            verifyNoInteractions(mongoOffsetStore);
+            var args = registry.getBeanDefinition("orchestratorCommandListener")
+                    .getConstructorArgumentValues();
+            assertThat(args.getIndexedArgumentValue(2, Boolean.class).getValue()).isEqualTo(false);
+            assertThat(args.getIndexedArgumentValue(3, String.class).getValue()).isEqualTo("orchestrator-executor");
         }
 
         @Test
-        @DisplayName("uses default app name 'orchestrator' when spring.application.name not set")
-        void usesDefaultAppName() {
+        @DisplayName("lane registered with own group, topics, and concurrency")
+        void lane_registersDedicatedListener() {
+            env.setProperty("spring.application.name", "my-app");
+            env.setProperty("orchestrator.lanes.batch.topics[0]", "sweep.commands");
+            env.setProperty("orchestrator.lanes.batch.concurrency", "3");
+
+            runRegistrar();
+
+            assertThat(registry.containsBeanDefinition("orchestratorLaneListener_batch")).isTrue();
+            var args = registry.getBeanDefinition("orchestratorLaneListener_batch")
+                    .getConstructorArgumentValues();
+            assertThat(args.getIndexedArgumentValue(3, String.class).getValue()).isEqualTo("my-app-executor-batch");
+            assertThat((String[]) args.getIndexedArgumentValue(4, String[].class).getValue())
+                    .containsExactly("sweep.commands");
+            assertThat(args.getIndexedArgumentValue(5, String.class).getValue()).isEqualTo("3");
+            // default listener still present — global command topic is unclaimed
+            assertThat(registry.containsBeanDefinition("orchestratorCommandListener")).isTrue();
+        }
+
+        @Test
+        @DisplayName("lanes claiming ALL command topics → default listener not registered")
+        void allTopicsLaned_noDefaultListener() {
+            env.setProperty("orchestrator.kafka.command-topic", "app.commands");
+            env.setProperty("orchestrator.lanes.interactive.topics[0]", "app.commands");
+            env.setProperty("orchestrator.lanes.interactive.concurrency", "4");
+
+            runRegistrar();
+
+            assertThat(registry.containsBeanDefinition("orchestratorCommandListener")).isFalse();
+            assertThat(registry.containsBeanDefinition("orchestratorLaneListener_interactive")).isTrue();
+        }
+
+        @Test
+        @DisplayName("PREFIXED failover → lane topics expanded with dc-prefixed variants")
+        void prefixedFailover_laneTopicsExpanded() {
+            env.setProperty("orchestrator.lanes.batch.topics[0]", "sweep.commands");
+            env.setProperty("orchestrator.failover.enabled", "true");
+            env.setProperty("orchestrator.failover.replication-policy", "PREFIXED");
+            env.setProperty("orchestrator.failover.dcs.dc-a.bootstrap", "kafka-a:9092");
+            env.setProperty("orchestrator.failover.dcs.dc-a.source-alias", "dc-a");
+            env.setProperty("orchestrator.failover.dcs.dc-b.bootstrap", "kafka-b:9093");
+            env.setProperty("orchestrator.failover.dcs.dc-b.source-alias", "dc-b");
+
+            runRegistrar();
+
+            var args = registry.getBeanDefinition("orchestratorLaneListener_batch")
+                    .getConstructorArgumentValues();
+            assertThat((String[]) args.getIndexedArgumentValue(4, String[].class).getValue())
+                    .containsExactlyInAnyOrder("sweep.commands", "dc-a.sweep.commands", "dc-b.sweep.commands");
+        }
+
+        @Test
+        @DisplayName("topic claimed by two lanes → fail fast")
+        void duplicateLaneClaim_throws() {
+            env.setProperty("orchestrator.lanes.a.topics[0]", "shared.commands");
+            env.setProperty("orchestrator.lanes.b.topics[0]", "shared.commands");
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(this::runRegistrar)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("already claimed by another lane");
+        }
+
+        @Test
+        @DisplayName("lane with no topics → fail fast")
+        void emptyLaneTopics_throws() {
+            env.setProperty("orchestrator.lanes.empty.concurrency", "2");
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(this::runRegistrar)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("topics must not be empty");
+        }
+    }
+
+    @Nested
+    @DisplayName("lane-aware topic beans")
+    class LaneTopicBeansTests {
+
+        private final OrchestratorAutoConfiguration config = new OrchestratorAutoConfiguration();
+
+        @Test
+        @DisplayName("orchestratorCommandTopics excludes lane-claimed topics")
+        void commandTopics_excludeLaneClaimed() {
             OrchestratorProperties props = new OrchestratorProperties();
-            props.getRecovery().setOffsetStore(OffsetStore.MONGO);
-            when(env.getProperty("spring.application.name", "orchestrator")).thenReturn("orchestrator");
+            props.getKafka().setCommandTopic("app.commands");
+            var flow = new OrchestratorProperties.FlowConfig();
+            flow.setTopic("sweep.commands");
+            props.getFlows().put("sweep", flow);
+            var lane = new OrchestratorProperties.LaneConfig();
+            lane.setTopics(java.util.List.of("sweep.commands"));
+            props.getLanes().put("batch", lane);
 
-            OrchestratorCommandListener listener = autoConfig.orchestratorCommandListener(
-                    consumer, mongoOffsetStore, props, env);
+            assertThat(config.orchestratorCommandTopics(props)).containsExactly("app.commands");
+        }
 
-            listener.onCommand("test", "topic", 1L, 0, 1000L, "key");
-            verify(mongoOffsetStore).saveOffset(eq("orchestrator-executor"), anyString(), anyInt(), anyLong(), any(), anyLong());
+        @Test
+        @DisplayName("orchestratorCommandDltTopics includes lane-topic DLTs")
+        void dltTopics_includeLaneTopicDlts() {
+            OrchestratorProperties props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("app.commands");
+            var lane = new OrchestratorProperties.LaneConfig();
+            lane.setTopics(java.util.List.of("sweep.commands"));
+            props.getLanes().put("batch", lane);
+
+            assertThat(config.orchestratorCommandDltTopics(props))
+                    .contains("app.commands-dlt", "sweep.commands-dlt");
+        }
+
+        @Test
+        @DisplayName("retry-topic configuration covers lane topics (incl. PREFIXED variants) with "
+                + "main-topic partition count and BROKER-DEFAULT replication")
+        void retryConfig_coversLaneTopics() {
+            OrchestratorProperties props = new OrchestratorProperties();
+            props.getKafka().setCommandTopic("app.commands");
+            var lane = new OrchestratorProperties.LaneConfig();
+            lane.setTopics(java.util.List.of("sweep.commands"));
+            props.getLanes().put("batch", lane);
+            props.getFailover().setEnabled(true);
+            props.getFailover().setReplicationPolicy(OrchestratorProperties.ReplicationPolicy.PREFIXED);
+            var dc = new OrchestratorProperties.DcConfig();
+            dc.setBootstrap("kafka-a:9092");
+            dc.setSourceAlias("dc-a");
+            props.getFailover().getDcs().put("dc-a", dc);
+
+            @SuppressWarnings({"unchecked", "rawtypes"})
+            var retryConfig = config.orchestratorCommandRetryConfig(
+                    mock(org.springframework.kafka.core.KafkaTemplate.class), props);
+
+            // Lane topic + its prefixed failover variant are covered by the retry chain
+            assertThat(retryConfig.hasConfigurationForTopics(new String[]{"sweep.commands"})).isTrue();
+            assertThat(retryConfig.hasConfigurationForTopics(new String[]{"dc-a.sweep.commands"})).isTrue();
+            assertThat(retryConfig.hasConfigurationForTopics(new String[]{"app.commands"})).isTrue();
+            assertThat(retryConfig.hasConfigurationForTopics(new String[]{"unrelated.topic"})).isFalse();
+
+            // Retry/DLT topics: main-topic partition count (wedge fix) + broker-default RF
+            // (hardcoded RF broke clusters with min.insync.replicas > RF → NOT_ENOUGH_REPLICAS).
+            // TopicCreation is package-private in spring-kafka — read via reflection.
+            Object creation = retryConfig.forKafkaTopicAutoCreation();
+            assertThat(reflect(creation, "shouldCreateTopics")).isEqualTo(true);
+            assertThat(reflect(creation, "getNumPartitions")).isEqualTo(props.getKafka().getPartitions());
+            assertThat(reflect(creation, "getReplicationFactor")).isEqualTo((short) -1);
+        }
+
+        private Object reflect(Object target, String method) {
+            try {
+                Method m = target.getClass().getDeclaredMethod(method);
+                m.setAccessible(true);
+                return m.invoke(target);
+            } catch (Exception e) {
+                throw new AssertionError("reflection on " + method + " failed", e);
+            }
+        }
+
+        @Test
+        @DisplayName("flow step-timeout override resolves over global; absent flow inherits global")
+        void stepTimeoutResolution() {
+            OrchestratorProperties props = new OrchestratorProperties();
+            props.getStep().setTimeoutSeconds(60);
+            var fc = new OrchestratorProperties.FlowConfig();
+            fc.setStepTimeoutSeconds(300);
+            props.getFlows().put("sweep", fc);
+
+            assertThat(OrchestratorAutoConfiguration.resolveStepTimeoutSeconds(props, "sweep")).isEqualTo(300);
+            assertThat(OrchestratorAutoConfiguration.resolveStepTimeoutSeconds(props, "other")).isEqualTo(60);
         }
     }
 

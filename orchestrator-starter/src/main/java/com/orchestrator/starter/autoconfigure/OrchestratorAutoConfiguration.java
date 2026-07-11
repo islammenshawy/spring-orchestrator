@@ -241,7 +241,7 @@ public class OrchestratorAutoConfiguration {
                 .txTemplate(transactionTemplate)
                 .includeFlowStateInLogs(props.getAudit().isIncludeFlowState())
                 .kafkaTemplate(kafkaTemplate)
-                .stepTimeoutSeconds(props.getStep().getTimeoutSeconds())
+                .stepTimeoutSeconds(resolveStepTimeoutSeconds(props, flowType))
                 .metrics(metrics)
                 .build();
         if (entityClass != null && entityClass != Object.class) {
@@ -518,25 +518,24 @@ public class OrchestratorAutoConfiguration {
 
     // ========== Command topic @KafkaListener (non-blocking retry topics) ==========
 
-    /**
-     * Command topics to subscribe to. Single-cluster: just the command topic.
-     * Multi-DC PREFIXED: both local and prefixed topics (messages may come from either DC).
-     */
-    @Bean
-    public String[] orchestratorCommandTopics(OrchestratorProperties props) {
-        // Collect all unique command topics: global + per-flow overrides
-        Set<String> baseTopics = new java.util.LinkedHashSet<>();
+    /** All configured command topics: global + per-flow overrides (no lane logic, no prefixes). */
+    static Set<String> allBaseCommandTopics(OrchestratorProperties props) {
+        Set<String> baseTopics = new LinkedHashSet<>();
         baseTopics.add(props.getKafka().getCommandTopic());
         props.getFlows().values().forEach(fc -> {
             if (fc.getTopic() != null && !fc.getTopic().isEmpty()) {
                 baseTopics.add(fc.getTopic());
             }
         });
+        return baseTopics;
+    }
 
+    /** Expand topics with {sourceAlias}.{topic} variants when PREFIXED failover is enabled. */
+    static Set<String> expandWithPrefixVariants(Collection<String> baseTopics, OrchestratorProperties props) {
+        var topics = new LinkedHashSet<>(baseTopics);
         var failover = props.getFailover();
         if (failover.isEnabled()
                 && failover.getReplicationPolicy() == OrchestratorProperties.ReplicationPolicy.PREFIXED) {
-            var topics = new java.util.LinkedHashSet<>(baseTopics);
             for (String topic : baseTopics) {
                 failover.getDcs().values().forEach(dc -> {
                     if (dc.getSourceAlias() != null) {
@@ -544,16 +543,47 @@ public class OrchestratorAutoConfiguration {
                     }
                 });
             }
-            log.info("Command topics (PREFIXED failover): {}", topics);
-            return topics.toArray(new String[0]);
         }
-        return baseTopics.toArray(new String[0]);
+        return topics;
+    }
+
+    /** Base topics claimed by lanes, validated: no topic may belong to two lanes, no empty lane. */
+    static Set<String> laneClaimedTopics(OrchestratorProperties props) {
+        Set<String> claimed = new LinkedHashSet<>();
+        props.getLanes().forEach((lane, cfg) -> {
+            if (cfg.getTopics() == null || cfg.getTopics().isEmpty()) {
+                throw new IllegalStateException("orchestrator.lanes." + lane + ": topics must not be empty");
+            }
+            for (String topic : cfg.getTopics()) {
+                if (!claimed.add(topic)) {
+                    throw new IllegalStateException("orchestrator.lanes." + lane + ": topic '" + topic
+                            + "' is already claimed by another lane — a topic may belong to only one lane");
+                }
+            }
+        });
+        return claimed;
+    }
+
+    /**
+     * Command topics for the DEFAULT listener: all command topics MINUS topics claimed by lanes
+     * (each lane gets its own dedicated listener container — see orchestratorLaneRegistrar).
+     * Single-cluster: base topics. Multi-DC PREFIXED: base + prefixed variants.
+     */
+    @Bean
+    public String[] orchestratorCommandTopics(OrchestratorProperties props) {
+        Set<String> baseTopics = allBaseCommandTopics(props);
+        baseTopics.removeAll(laneClaimedTopics(props));
+        Set<String> topics = expandWithPrefixVariants(baseTopics, props);
+        log.info("Default-lane command topics: {} (lanes: {})", topics, props.getLanes().keySet());
+        return topics.toArray(new String[0]);
     }
 
     @Bean
     public String[] orchestratorCommandDltTopics(OrchestratorProperties props) {
-        // Collect DLT topics: per-flow overrides + derived from command topics
-        Set<String> baseDltTopics = new java.util.LinkedHashSet<>();
+        // Collect DLT topics: per-flow overrides + derived from command topics.
+        // Lane topics are included too (a lane topic that isn't any flow's topic still
+        // dead-letters to {topic}-dlt and must be consumed for markDeadLettered).
+        Set<String> baseDltTopics = new LinkedHashSet<>();
         baseDltTopics.add(props.getKafka().getCommandTopic() + "-dlt");
         props.getFlows().forEach((name, fc) -> {
             if (fc.getDltTopic() != null && !fc.getDltTopic().isEmpty()) {
@@ -562,36 +592,90 @@ public class OrchestratorAutoConfiguration {
                 baseDltTopics.add(fc.getTopic() + "-dlt");
             }
         });
+        props.getLanes().values().forEach(lane ->
+                lane.getTopics().forEach(topic -> baseDltTopics.add(topic + "-dlt")));
 
-        var failover = props.getFailover();
-        if (failover.isEnabled()
-                && failover.getReplicationPolicy() == OrchestratorProperties.ReplicationPolicy.PREFIXED) {
-            var topics = new java.util.LinkedHashSet<>(baseDltTopics);
-            for (String dlt : baseDltTopics) {
-                failover.getDcs().values().forEach(dc -> {
-                    if (dc.getSourceAlias() != null) {
-                        topics.add(dc.getSourceAlias() + "." + dlt);
-                    }
-                });
-            }
-            return topics.toArray(new String[0]);
-        }
-        return baseDltTopics.toArray(new String[0]);
+        return expandWithPrefixVariants(baseDltTopics, props).toArray(new String[0]);
     }
 
+    /**
+     * Registers command listener beans from lane configuration (BeanDefinitionRegistryPostProcessor
+     * because the number of beans depends on properties):
+     * - the DEFAULT listener ({app}-executor) for all command topics not claimed by a lane —
+     *   skipped entirely when lanes claim every topic;
+     * - one {@link LaneCommandListener} per orchestrator.lanes.{lane} with its own consumer group
+     *   ({app}-executor-{lane}), its own topics, and its own concurrency.
+     *
+     * All are real @KafkaListener beans, so RetryTopicConfiguration (non-blocking retry topics) and
+     * the @Primary DcAware consumer factory (failover) apply to every lane exactly as they do to the
+     * default listener. DcAwareKafkaManager stops/starts ALL registry containers on DC switch.
+     */
     @Bean
-    public OrchestratorCommandListener orchestratorCommandListener(
-            OrchestratorKafkaConsumer<?> consumer,
-            MongoOffsetStore mongoOffsetStore,
-            OrchestratorProperties props,
-            org.springframework.core.env.Environment env) {
-        boolean saveMongo = props.getRecovery().getOffsetStore() == OrchestratorProperties.OffsetStore.MONGO;
-        String appName = env.getProperty("spring.application.name", "orchestrator");
-        return new OrchestratorCommandListener(consumer, mongoOffsetStore, saveMongo, appName + "-executor");
+    public static org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor
+    orchestratorLaneRegistrar(org.springframework.core.env.Environment env) {
+        return registry -> {
+            OrchestratorProperties props = org.springframework.boot.context.properties.bind.Binder.get(env)
+                    .bind("orchestrator", OrchestratorProperties.class)
+                    .orElseGet(OrchestratorProperties::new);
+            String appName = env.getProperty("spring.application.name", "orchestrator");
+            boolean saveMongo = props.getRecovery().getOffsetStore() == OrchestratorProperties.OffsetStore.MONGO;
+
+            Set<String> claimed = laneClaimedTopics(props); // validates lane config (fail fast)
+
+            // Default listener — only when at least one command topic remains unclaimed
+            Set<String> defaultTopics = allBaseCommandTopics(props);
+            defaultTopics.removeAll(claimed);
+            if (defaultTopics.isEmpty()) {
+                log.info("All command topics are claimed by lanes {} — default command listener disabled",
+                        props.getLanes().keySet());
+            } else {
+                var def = new org.springframework.beans.factory.support.GenericBeanDefinition();
+                def.setBeanClass(OrchestratorCommandListener.class);
+                def.setAutowireMode(org.springframework.beans.factory.support.AbstractBeanDefinition.AUTOWIRE_CONSTRUCTOR);
+                def.getConstructorArgumentValues().addIndexedArgumentValue(2, saveMongo);
+                def.getConstructorArgumentValues().addIndexedArgumentValue(3, appName + "-executor");
+                registry.registerBeanDefinition("orchestratorCommandListener", def);
+            }
+
+            // One listener bean per lane
+            props.getLanes().forEach((lane, cfg) -> {
+                String[] laneTopics = expandWithPrefixVariants(cfg.getTopics(), props).toArray(new String[0]);
+                String groupId = appName + "-executor-" + lane;
+                var def = new org.springframework.beans.factory.support.GenericBeanDefinition();
+                def.setBeanClass(LaneCommandListener.class);
+                def.setAutowireMode(org.springframework.beans.factory.support.AbstractBeanDefinition.AUTOWIRE_CONSTRUCTOR);
+                def.getConstructorArgumentValues().addIndexedArgumentValue(2, saveMongo);
+                def.getConstructorArgumentValues().addIndexedArgumentValue(3, groupId);
+                def.getConstructorArgumentValues().addIndexedArgumentValue(4, laneTopics);
+                def.getConstructorArgumentValues().addIndexedArgumentValue(5, String.valueOf(cfg.getConcurrency()));
+                def.getConstructorArgumentValues().addIndexedArgumentValue(6, lane);
+                registry.registerBeanDefinition("orchestratorLaneListener_" + lane, def);
+                log.info("Lane '{}': topics={} group={} concurrency={}", lane, List.of(laneTopics),
+                        groupId, cfg.getConcurrency());
+            });
+        };
     }
 
-    /** Command topic listener using @KafkaListener — supports RetryTopicConfiguration
-     *  for non-blocking retry topics. Reply topics use programmatic containers above. */
+    /** Shared command dispatch for the default and lane listeners. */
+    static void dispatchCommand(OrchestratorKafkaConsumer<?> consumer, MongoOffsetStore mongoOffsetStore,
+                                boolean saveMongo, String groupId, String payload, String topic,
+                                long offset, Integer partition, Long timestamp, String key) {
+        consumer.onStepCommand(payload, topic, offset);
+        // Save offset AFTER successful processing — prevents message loss on DC failover.
+        // If step throws (goes to retry topic), offset is NOT saved → on failover,
+        // the message is re-delivered and idempotency handles the duplicate.
+        if (saveMongo && partition != null && timestamp != null) {
+            try {
+                mongoOffsetStore.saveOffset(groupId, topic, partition, offset, key, timestamp);
+            } catch (Exception e) {
+                // Don't block processing if offset save fails
+            }
+        }
+    }
+
+    /** Default-lane command listener using @KafkaListener — supports RetryTopicConfiguration
+     *  for non-blocking retry topics. Reply topics use programmatic containers above.
+     *  Registered by {@link #orchestratorLaneRegistrar} unless lanes claim all command topics. */
     public static class OrchestratorCommandListener {
         private final OrchestratorKafkaConsumer<?> consumer;
         private final MongoOffsetStore mongoOffsetStore;
@@ -621,18 +705,73 @@ public class OrchestratorAutoConfiguration {
                                       name = org.springframework.kafka.support.KafkaHeaders.RECEIVED_TIMESTAMP, required = false) Long timestamp,
                               @org.springframework.messaging.handler.annotation.Header(
                                       name = org.springframework.kafka.support.KafkaHeaders.RECEIVED_KEY, required = false) String key) {
-            consumer.onStepCommand(payload, topic, offset);
-            // Save offset AFTER successful processing — prevents message loss on DC failover.
-            // If step throws (goes to retry topic), offset is NOT saved → on failover,
-            // the message is re-delivered and idempotency handles the duplicate.
-            if (saveMongo && partition != null && timestamp != null) {
-                try {
-                    mongoOffsetStore.saveOffset(groupId, topic,
-                            partition, offset, key, timestamp);
-                } catch (Exception e) {
-                    // Don't block processing if offset save fails
-                }
-            }
+            dispatchCommand(consumer, mongoOffsetStore, saveMongo, groupId,
+                    payload, topic, offset, partition, timestamp, key);
+        }
+    }
+
+    /** Per-lane command listener: identical dispatch to the default listener, but with its own
+     *  consumer group, topic set, and container concurrency (resolved from the lane config via
+     *  {@code #{__listener.*}} SpEL). One bean instance per configured lane. */
+    public static class LaneCommandListener {
+        private final OrchestratorKafkaConsumer<?> consumer;
+        private final MongoOffsetStore mongoOffsetStore;
+        private final boolean saveMongo;
+        private final String groupId;
+        private final String[] topics;
+        private final String concurrency;
+        private final String lane;
+
+        public LaneCommandListener(OrchestratorKafkaConsumer<?> consumer,
+                                   MongoOffsetStore mongoOffsetStore,
+                                   boolean saveMongo, String groupId,
+                                   String[] topics, String concurrency, String lane) {
+            this.consumer = consumer;
+            this.mongoOffsetStore = mongoOffsetStore;
+            this.saveMongo = saveMongo;
+            this.groupId = groupId;
+            this.topics = topics;
+            this.concurrency = concurrency;
+            this.lane = lane;
+        }
+
+        public String[] getTopics() { return topics; }
+        public String getGroupId() { return groupId; }
+        public String getConcurrency() { return concurrency; }
+        public String getLane() { return lane; }
+
+        @org.springframework.kafka.annotation.KafkaListener(
+                topics = "#{__listener.topics}",
+                groupId = "#{__listener.groupId}",
+                concurrency = "#{__listener.concurrency}")
+        public void onCommand(String payload,
+                              @org.springframework.messaging.handler.annotation.Header(
+                                      name = org.springframework.kafka.support.KafkaHeaders.RECEIVED_TOPIC) String topic,
+                              @org.springframework.messaging.handler.annotation.Header(
+                                      name = org.springframework.kafka.support.KafkaHeaders.OFFSET) long offset,
+                              @org.springframework.messaging.handler.annotation.Header(
+                                      name = org.springframework.kafka.support.KafkaHeaders.RECEIVED_PARTITION, required = false) Integer partition,
+                              @org.springframework.messaging.handler.annotation.Header(
+                                      name = org.springframework.kafka.support.KafkaHeaders.RECEIVED_TIMESTAMP, required = false) Long timestamp,
+                              @org.springframework.messaging.handler.annotation.Header(
+                                      name = org.springframework.kafka.support.KafkaHeaders.RECEIVED_KEY, required = false) String key) {
+            dispatchCommand(consumer, mongoOffsetStore, saveMongo, groupId,
+                    payload, topic, offset, partition, timestamp, key);
+        }
+    }
+
+    @Bean
+    public OrchestratorCommandDltListener orchestratorCommandDltListener(OrchestratorKafkaConsumer<?> consumer) {
+        return new OrchestratorCommandDltListener(consumer);
+    }
+
+    /** Command DLT listener — always registered (independent of lane configuration) so
+     *  dead-lettered commands mark their flows regardless of which lane produced them. */
+    public static class OrchestratorCommandDltListener {
+        private final OrchestratorKafkaConsumer<?> consumer;
+
+        public OrchestratorCommandDltListener(OrchestratorKafkaConsumer<?> consumer) {
+            this.consumer = consumer;
         }
 
         @org.springframework.kafka.annotation.KafkaListener(
@@ -677,34 +816,37 @@ public class OrchestratorAutoConfiguration {
                 // partition >0 then can't be dead-lettered ("non-existent DLT partition"), and with
                 // DltStrategy.FAIL_ON_ERROR the error handler can't seek past it → the partition
                 // wedges and every flow behind it stalls (observed in PREFIXED failover).
-                .autoCreateTopics(true, props.getKafka().getPartitions(), (short) 1)
+                //
+                // Replication factor -1 = BROKER DEFAULT (KIP-464), same as the TopicBuilder beans.
+                // A hardcoded RF (e.g. 1) breaks multi-broker clusters whose min.insync.replicas
+                // exceeds it: every retry/DLT publication is rejected with NOT_ENOUGH_REPLICAS, the
+                // error handler falls back to in-place seeks, and the retry chain silently never
+                // runs (observed live on a 3-broker cluster with min.insync.replicas=2).
+                .autoCreateTopics(true, props.getKafka().getPartitions(), (short) -1)
                 .dltProcessingFailureStrategy(DltStrategy.FAIL_ON_ERROR)
                 .retryOn(RetryableStepException.class);
 
-        // Include all command topics (global + per-flow + prefixed failover variants)
-        Set<String> commandTopics = new java.util.LinkedHashSet<>();
-        commandTopics.add(props.getKafka().getCommandTopic());
-        props.getFlows().values().forEach(fc -> {
-            if (fc.getTopic() != null && !fc.getTopic().isEmpty()) {
-                commandTopics.add(fc.getTopic());
-            }
-        });
-        for (String topic : commandTopics) {
+        // Include all command topics: global + per-flow + lane topics + prefixed failover variants.
+        // Lane topics get the same retry chains — each lane's @KafkaListener endpoint is decorated
+        // by this configuration for the topics it consumes.
+        Set<String> commandTopics = allBaseCommandTopics(props);
+        props.getLanes().values().forEach(lane -> commandTopics.addAll(lane.getTopics()));
+        for (String topic : expandWithPrefixVariants(commandTopics, props)) {
             builder.includeTopic(topic);
-        }
-        var failover = props.getFailover();
-        if (failover.isEnabled()
-                && failover.getReplicationPolicy() == OrchestratorProperties.ReplicationPolicy.PREFIXED) {
-            for (String topic : commandTopics) {
-                failover.getDcs().values().forEach(dc -> {
-                    if (dc.getSourceAlias() != null) {
-                        builder.includeTopic(dc.getSourceAlias() + "." + topic);
-                    }
-                });
-            }
         }
 
         return builder.create(template);
+    }
+
+    /** Effective flow-level step timeout: orchestrator.flows.{name}.step-timeout-seconds if set,
+     *  else the global orchestrator.step.timeout-seconds. Individual steps can still override
+     *  via @Step(timeoutSeconds=...). */
+    public static int resolveStepTimeoutSeconds(OrchestratorProperties props, String flowType) {
+        OrchestratorProperties.FlowConfig fc = props.getFlows().get(flowType);
+        if (fc != null && fc.getStepTimeoutSeconds() != null) {
+            return fc.getStepTimeoutSeconds();
+        }
+        return props.getStep().getTimeoutSeconds();
     }
 
     // ========== Health Indicator ==========

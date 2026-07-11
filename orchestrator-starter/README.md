@@ -205,7 +205,7 @@ The library auto-configures:
 | Annotation | Required? | Default if omitted | Where |
 |-----------|-----------|-------------------|-------|
 | `@Flow` | **Yes** | `topic` from `orchestrator.kafka.command-topic` in yml | Class |
-| `@Step(order, completedWhen)` | **Yes** | `name` = method name as UPPER_SNAKE. `completedWhen` empty = always execute | Method |
+| `@Step(order, completedWhen, timeoutSeconds)` | **Yes** | `name` = method name as UPPER_SNAKE. `completedWhen` empty = always execute. `timeoutSeconds` -1 = inherit flow/global timeout (see [Step Timeouts](#step-timeouts)) | Method |
 | `@RetryOn` | No | **Built-in: HTTP 5xx + 429 → retry via Kafka topics** | Class or method |
 | `@FailOn` | No | **Built-in: HTTP 4xx (except 429) → fail immediately** | Class or method |
 | `@RecoverOn` | No | No recovery — add for vendor-specific cases (409, etc.) | Class or method |
@@ -878,6 +878,84 @@ Kafka consumer → executes step 1 → outbox → step 2 → ... → COMPLETED
 ```
 
 The caller never waits for vendor API calls. The API response is always ~3ms.
+
+---
+
+## Step Timeouts
+
+Every step executes under a watchdog (virtual thread). If it exceeds the effective timeout, the
+library throws `RetryableStepException` and the command routes to the Kafka retry topics.
+
+Resolution order — **most specific wins**:
+
+| Level | Config | Semantics |
+|-------|--------|-----------|
+| Step | `@Step(order = 3, timeoutSeconds = 600)` | `-1` (default) = inherit; `0` = **no timeout for this step**; `> 0` = override |
+| Flow | `orchestrator.flows.{name}.step-timeout-seconds` | null = inherit global; `0` = disable for the whole flow |
+| Global | `orchestrator.step.timeout-seconds` (default **60**) | `0` = disabled everywhere |
+
+```yaml
+orchestrator:
+  step:
+    timeout-seconds: 60          # global default
+  flows:
+    nightly-sweep:
+      step-timeout-seconds: 900  # this flow's steps get 15 min
+```
+
+```java
+@Step(order = 2, timeoutSeconds = 0)   // cursor-walk sweep: opts out of the watchdog entirely
+public void applyAll(SweepFlow flow) { ... }
+```
+
+> **Why this matters with bounded retries:** retry topics cap at `orchestrator.retry.max-attempts`
+> and then dead-letter. A long-running step (batch sweep, cursor walk) that legitimately exceeds
+> the global 60s would time out on every attempt, churn the retry tiers, and get **DLT'd while
+> healthy**. Give long steps their own budget — per-flow for a slow flow, `@Step(timeoutSeconds=…)`
+> for one slow step, `0` for open-ended work that checkpoints its own progress.
+
+---
+
+## Execution Lanes (Compute Isolation)
+
+The default executor is **one consumer group and one listener container** across all flow topics.
+A consumer thread chewing a long batch step cannot serve the other partitions assigned to it — a
+batch lane can starve interactive traffic. Lanes fix this with **dedicated listener containers**:
+
+```yaml
+orchestrator:
+  flows:
+    payment:
+      topic: payments.commands
+    nightly-sweep:
+      topic: sweep.commands
+  lanes:
+    interactive:
+      topics: [payments.commands]
+      concurrency: 4          # 4 consumer threads just for this lane
+    batch:
+      topics: [sweep.commands]
+      concurrency: 1          # sweeps get their own container — can never block payments
+```
+
+What each lane gets:
+
+- **Its own consumer group**: `{spring.application.name}-executor-{lane}` — independent offsets,
+  independent rebalancing.
+- **Its own container + concurrency** — threads are physically isolated per lane.
+- **Its own full retry-topic chain** (`…-executor-{lane}-retry-0..N` groups) and DLT handling —
+  identical retry/DLT semantics to the default listener.
+- **Failover for free**: in PREFIXED multi-DC mode lane topics get dc-prefixed variants
+  automatically, and DC switches stop/start lane containers like any other.
+
+Topics claimed by a lane are removed from the default listener. If lanes claim *every* command
+topic, the default listener is not registered at all. A topic may belong to only one lane
+(startup fails fast otherwise).
+
+> **Migration note:** moving a live topic into a lane changes its consumer group, and the new
+> group starts from `auto.offset.reset` — it does not inherit the old group's offsets. Enable
+> lanes during a drain window, or rely on the stale-flow recovery scanner to re-drive any
+> in-flight flows stranded by the cutover.
 
 ---
 

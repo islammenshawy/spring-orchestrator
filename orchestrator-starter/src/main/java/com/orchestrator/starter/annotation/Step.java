@@ -37,4 +37,11 @@ public @interface Step {
     /** Execution order. Steps run in ascending order. */
     int order();
 
+    /** Per-step timeout override in seconds. -1 (default) = inherit the flow-level
+     *  (orchestrator.flows.{name}.step-timeout-seconds) or global (orchestrator.step.timeout-seconds)
+     *  timeout. 0 = no timeout for this step. Use for long-running steps (batch sweeps, cursor
+     *  walks) that legitimately exceed the global budget — with bounded retry topics a too-short
+     *  timeout churns retry tiers and dead-letters a healthy step before it finishes. */
+    int timeoutSeconds() default -1;
+
 }
